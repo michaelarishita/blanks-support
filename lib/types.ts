@@ -1,0 +1,100 @@
+export type TicketStatus = "new" | "open" | "pending" | "resolved" | "closed";
+export type TicketChannel = "web_form" | "email" | "instagram" | "messenger";
+export type TicketPriority = "low" | "normal" | "high" | "urgent";
+
+export interface Agent {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "agent";
+  avatar_url: string | null;
+  is_active: boolean;
+}
+
+export interface Customer {
+  id: string;
+  email: string | null;
+  name: string | null;
+  phone: string | null;
+  notes: string | null;
+}
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+  is_topic: boolean;
+}
+
+export interface Ticket {
+  id: string;
+  number: number;
+  customer_id: string;
+  channel: TicketChannel;
+  topic: string | null;
+  subject: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  assignee_id: string | null;
+  order_number: string | null;
+  first_response_at: string | null;
+  resolved_at: string | null;
+  last_message_at: string;
+  created_at: string;
+  customer?: Customer;
+  assignee?: Agent | null;
+  ticket_tags?: { tag: Tag }[];
+}
+
+export interface Message {
+  id: string;
+  ticket_id: string;
+  direction: "inbound" | "outbound";
+  type: "public" | "internal_note";
+  agent_id: string | null;
+  body_text: string;
+  delivery_status: string;
+  created_at: string;
+  agent?: Agent | null;
+}
+
+export interface TicketEvent {
+  id: string;
+  ticket_id: string;
+  agent_id: string | null;
+  event_type: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+  agent?: Agent | null;
+}
+
+export const TOPICS = [
+  "Order questions",
+  "Product questions",
+  "Shipping & returns",
+  "Subscription",
+  "Wholesale / retailer",
+  "Sponsorship inquiry",
+  "Event questions",
+  "Ambassador / athlete",
+  "Feedback",
+  "Other",
+] as const;
+
+export const STATUS_META: Record<
+  TicketStatus,
+  { label: string; classes: string }
+> = {
+  new: { label: "New", classes: "bg-sky-100 text-sky-700" },
+  open: { label: "Open", classes: "bg-amber-100 text-amber-700" },
+  pending: { label: "Pending", classes: "bg-orange-100 text-orange-700" },
+  resolved: { label: "Resolved", classes: "bg-emerald-100 text-emerald-700" },
+  closed: { label: "Closed", classes: "bg-gray-200 text-gray-600" },
+};
+
+export const CHANNEL_META: Record<TicketChannel, { label: string; icon: string }> = {
+  web_form: { label: "Website", icon: "🌐" },
+  email: { label: "Email", icon: "📧" },
+  instagram: { label: "Instagram", icon: "📸" },
+  messenger: { label: "Messenger", icon: "💬" },
+};
