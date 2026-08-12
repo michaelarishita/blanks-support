@@ -8,6 +8,7 @@ export interface Agent {
   name: string;
   role: "admin" | "agent";
   avatar_url: string | null;
+  gmail_connected: boolean;
   is_active: boolean;
 }
 

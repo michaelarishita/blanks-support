@@ -101,6 +101,22 @@ export default function Sidebar({
       </nav>
 
       <div className="border-t border-gray-100 px-4 py-3">
+        <Link
+          href="/settings"
+          className={`mb-2 flex items-center gap-2 rounded-lg px-1.5 py-1.5 text-sm ${
+            pathname === "/settings"
+              ? "bg-amber-50 font-semibold text-amber-800"
+              : "text-gray-700 hover:bg-gray-50"
+          }`}
+        >
+          ⚙️ Settings
+          {me && !me.gmail_connected && (
+            <span
+              title="Gmail not connected"
+              className="ml-auto inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
+            />
+          )}
+        </Link>
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-semibold">{me?.name ?? "…"}</div>
