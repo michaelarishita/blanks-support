@@ -1,32 +1,36 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const supabase = createClient();
+  const router = useRouter();
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function signInWithGoogle() {
-    setError(null);
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    });
-    if (error) setError(error.message);
-  }
-
-  async function sendMagicLink(e: React.FormEvent) {
+  async function signIn(e: React.FormEvent) {
     e.preventDefault();
+    setPending(true);
     setError(null);
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
     });
-    if (error) setError(error.message);
-    else setSent(true);
+    setPending(false);
+    if (error) {
+      setError(
+        error.message === "Invalid login credentials"
+          ? "Wrong email or password."
+          : error.message
+      );
+      return;
+    }
+    router.push("/inbox");
+    router.refresh();
   }
 
   return (
@@ -39,41 +43,39 @@ export default function LoginPage() {
           <h1 className="mt-1 text-2xl font-bold">Support Dashboard</h1>
         </div>
 
-        <button
-          onClick={signInWithGoogle}
-          className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-700"
-        >
-          Continue with Google
-        </button>
-
-        <div className="my-5 flex items-center gap-3 text-xs text-gray-400">
-          <div className="h-px flex-1 bg-gray-200" /> or <div className="h-px flex-1 bg-gray-200" />
-        </div>
-
-        {sent ? (
-          <p className="text-center text-sm text-emerald-600">
-            Check your email for a sign-in link.
-          </p>
-        ) : (
-          <form onSubmit={sendMagicLink} className="space-y-3">
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@blankssportsnutrition.com"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
-            />
-            <button
-              type="submit"
-              className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold hover:bg-gray-50"
-            >
-              Email me a sign-in link
-            </button>
-          </form>
-        )}
+        <form onSubmit={signIn} className="space-y-3">
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@blankssportsnutrition.com"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+          />
+          <input
+            type="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={pending}
+            className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-50"
+          >
+            {pending ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
 
         {error && <p className="mt-4 text-center text-sm text-red-600">{error}</p>}
+
+        <p className="mt-6 text-center text-xs text-gray-400">
+          Team accounts are created by an admin.
+        </p>
       </div>
     </div>
   );
