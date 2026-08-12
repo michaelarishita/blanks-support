@@ -8,14 +8,15 @@ export const dynamic = "force-dynamic";
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: { view?: string; channel?: string };
+  searchParams: Promise<{ view?: string; channel?: string }>;
 }) {
-  const supabase = createClient();
+  const params = await searchParams;
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const view = searchParams.view ?? "open";
+  const view = params.view ?? "open";
 
   let query = supabase
     .from("tickets")
@@ -35,7 +36,7 @@ export default async function InboxPage({
       .is("assignee_id", null)
       .not("status", "in", "(resolved,closed)");
   if (view === "resolved") query = query.in("status", ["resolved", "closed"]);
-  if (searchParams.channel) query = query.eq("channel", searchParams.channel);
+  if (params.channel) query = query.eq("channel", params.channel);
 
   const { data: tickets } = await query;
 
@@ -52,9 +53,9 @@ export default async function InboxPage({
       <RealtimeRefresher />
       <h1 className="mb-4 text-xl font-bold">
         {titles[view] ?? "Tickets"}
-        {searchParams.channel && (
+        {params.channel && (
           <span className="ml-2 text-sm font-normal text-gray-400">
-            · {searchParams.channel.replace("_", " ")}
+            · {params.channel.replace("_", " ")}
           </span>
         )}
       </h1>

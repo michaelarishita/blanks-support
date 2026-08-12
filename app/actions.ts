@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { TicketStatus } from "@/lib/types";
 
 async function requireAgent() {
-  const supabase = createClient();
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -14,7 +14,7 @@ async function requireAgent() {
 }
 
 async function logEvent(
-  supabase: ReturnType<typeof createClient>,
+  supabase: Awaited<ReturnType<typeof createClient>>,
   ticketId: string,
   agentId: string,
   eventType: string,

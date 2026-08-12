@@ -13,9 +13,10 @@ export const dynamic = "force-dynamic";
 export default async function TicketPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const supabase = createClient();
+  const { id } = await params;
+  const supabase = await createClient();
 
   const [{ data: ticket }, { data: messages }, { data: agents }, { data: tags }, { data: macros }] =
     await Promise.all([
@@ -24,12 +25,12 @@ export default async function TicketPage({
         .select(
           "*, customer:customers(*), assignee:agents(*), ticket_tags(tag:tags(*))"
         )
-        .eq("id", params.id)
+        .eq("id", id)
         .single(),
       supabase
         .from("messages")
         .select("*, agent:agents(*)")
-        .eq("ticket_id", params.id)
+        .eq("ticket_id", id)
         .order("created_at", { ascending: true }),
       supabase.from("agents").select("*").eq("is_active", true).order("name"),
       supabase.from("tags").select("*").order("name"),
