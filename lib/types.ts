@@ -57,6 +57,15 @@ export interface Ticket {
   ticket_tags?: { tag: Tag }[];
 }
 
+export interface Attachment {
+  id: string;
+  message_id: string;
+  filename: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  storage_path: string;
+}
+
 export interface Message {
   id: string;
   ticket_id: string;
@@ -68,6 +77,7 @@ export interface Message {
   delivery_status: string;
   created_at: string;
   agent?: Agent | null;
+  attachments?: Attachment[];
 }
 
 export interface TicketEvent {

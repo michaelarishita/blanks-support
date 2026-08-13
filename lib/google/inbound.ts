@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  getGmailAttachment,
   getGmailMessage,
   getGmailProfile,
   listGmailHistory,
@@ -176,8 +177,84 @@ async function upsertCustomer(parsed: ParsedEmail): Promise<string | null> {
   return created?.id ?? null;
 }
 
+/** Anything larger is left in Gmail rather than copied into storage. */
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/** Strips path separators so a crafted filename can't escape its folder. */
+function safeFilename(filename: string): string {
+  const base = filename.split(/[/\\]/).pop() ?? "file";
+  return base.replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "file";
+}
+
+/**
+ * Copies attachments into private storage and records them.
+ *
+ * Inline images (referenced by cid: in the HTML body) are skipped for now —
+ * they're signature logos and tracking artefacts far more often than content,
+ * and we render inbound mail as text anyway, so nothing would reference them.
+ */
+async function storeAttachments(
+  accessToken: string,
+  parsed: ParsedEmail,
+  ticketId: string,
+  messageId: string,
+  result: SyncResult
+): Promise<void> {
+  const admin = createAdminClient();
+
+  for (const attachment of parsed.attachments) {
+    if (attachment.inline) {
+      countSkip(result, "inline image");
+      continue;
+    }
+    if (attachment.sizeBytes > MAX_ATTACHMENT_BYTES) {
+      countSkip(result, "attachment too large");
+      continue;
+    }
+
+    try {
+      const data = await getGmailAttachment(
+        accessToken,
+        parsed.gmailMessageId,
+        attachment.attachmentId
+      );
+      const bytes = Buffer.from(data.data, "base64url");
+      if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+        countSkip(result, "attachment too large");
+        continue;
+      }
+
+      const path = `${ticketId}/${messageId}/${safeFilename(attachment.filename)}`;
+      const { error: uploadError } = await admin.storage
+        .from("attachments")
+        .upload(path, bytes, {
+          contentType: attachment.mimeType,
+          upsert: true,
+        });
+      if (uploadError) {
+        countSkip(result, `attachment upload failed (${uploadError.message})`);
+        continue;
+      }
+
+      await admin.from("attachments").insert({
+        message_id: messageId,
+        filename: attachment.filename.slice(0, 200),
+        mime_type: attachment.mimeType,
+        size_bytes: bytes.byteLength,
+        storage_path: path,
+      });
+    } catch (e) {
+      countSkip(
+        result,
+        `attachment failed (${e instanceof Error ? e.message : "unknown"})`
+      );
+    }
+  }
+}
+
 /** Stores one parsed email, creating or appending to a ticket. */
 async function ingestMessage(
+  accessToken: string,
   parsed: ParsedEmail,
   result: SyncResult
 ): Promise<{ ticketId: string; path: MatchPath } | null> {
@@ -232,17 +309,21 @@ async function ingestMessage(
       .is("gmail_thread_id", null);
   }
 
-  const { error: insertError } = await admin.from("messages").insert({
-    ticket_id: ticketId,
-    direction: "inbound",
-    type: "public",
-    // Stored whole; the thread view collapses quoted history at render time.
-    body_text: parsed.bodyText,
-    gmail_message_id: parsed.gmailMessageId,
-    rfc822_message_id: parsed.rfc822MessageId,
-    delivery_status: "stored",
-    created_at: parsed.date.toISOString(),
-  });
+  const { data: inserted, error: insertError } = await admin
+    .from("messages")
+    .insert({
+      ticket_id: ticketId,
+      direction: "inbound",
+      type: "public",
+      // Stored whole; the thread view collapses quoted history at render time.
+      body_text: parsed.bodyText,
+      gmail_message_id: parsed.gmailMessageId,
+      rfc822_message_id: parsed.rfc822MessageId,
+      delivery_status: "stored",
+      created_at: parsed.date.toISOString(),
+    })
+    .select("id")
+    .single();
 
   if (insertError) {
     // A unique violation means Pub/Sub redelivered a message we already have.
@@ -254,9 +335,13 @@ async function ingestMessage(
     return null;
   }
 
-  if (!ticketId) {
+  if (!ticketId || !inserted) {
     countSkip(result, "could not resolve ticket");
     return null;
+  }
+
+  if (parsed.attachments.length) {
+    await storeAttachments(accessToken, parsed, ticketId, inserted.id, result);
   }
 
   // Recorded so we can see whether the [BLK-n] token is actually doing the
@@ -382,7 +467,7 @@ export async function syncSupportMailbox(
         continue;
       }
 
-      await ingestMessage(parsed, result);
+      await ingestMessage(accessToken, parsed, result);
     } catch (e) {
       countSkip(result, e instanceof Error ? e.message : "fetch failed");
     }

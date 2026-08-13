@@ -33,7 +33,7 @@ export default async function TicketPage({
         .single(),
       supabase
         .from("messages")
-        .select("*, agent:agents(*)")
+        .select("*, agent:agents(*), attachments(*)")
         .eq("ticket_id", id)
         .order("created_at", { ascending: true }),
       supabase.from("agents").select("*").eq("is_active", true).order("name"),

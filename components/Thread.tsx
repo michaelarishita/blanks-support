@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { dayLabel } from "@/lib/format";
 import { sanitizeRichText } from "@/lib/html";
+import { splitQuotedText } from "@/lib/email/parse";
+import Attachments from "@/components/Attachments";
 import { retryDelivery } from "@/app/actions";
 import type { Message } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
@@ -87,6 +89,47 @@ function DeliveryStatus({
     <span className={cn("inline-flex items-center gap-1 text-caption", meta.className)}>
       {body}
     </span>
+  );
+}
+
+/** Inbound replies carry the whole thread quoted underneath; hide it. */
+function MessageBody({ text, onDark }: { text: string; onDark: boolean }) {
+  const [showQuoted, setShowQuoted] = useState(false);
+  const { visible, quoted } = splitQuotedText(text);
+
+  return (
+    <>
+      <div className="whitespace-pre-wrap break-words">{visible}</div>
+      {quoted && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowQuoted((v) => !v)}
+            aria-expanded={showQuoted}
+            className={cn(
+              "mt-1.5 rounded-sm px-1.5 py-0.5 text-caption leading-none",
+              "transition-colors duration-micro ease-out",
+              onDark
+                ? "bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white"
+                : "bg-gray-100 text-tertiary hover:bg-gray-200 hover:text-secondary"
+            )}
+            title={showQuoted ? "Hide quoted text" : "Show quoted text"}
+          >
+            •••
+          </button>
+          {showQuoted && (
+            <div
+              className={cn(
+                "mt-2 whitespace-pre-wrap break-words border-l-2 pl-2.5 text-caption",
+                onDark ? "border-white/20 text-gray-400" : "border-gray-200 text-tertiary"
+              )}
+            >
+              {quoted}
+            </div>
+          )}
+        </>
+      )}
+    </>
   );
 }
 
@@ -234,9 +277,16 @@ export default function Thread({
                       }}
                     />
                   ) : (
-                    <div className="whitespace-pre-wrap break-words">
-                      {m.body_text}
-                    </div>
+                    <MessageBody
+                      text={m.body_text}
+                      onDark={isAgent && !isNote}
+                    />
+                  )}
+                  {m.attachments && m.attachments.length > 0 && (
+                    <Attachments
+                      attachments={m.attachments}
+                      onDark={isAgent && !isNote}
+                    />
                   )}
                 </div>
 
