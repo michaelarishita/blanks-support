@@ -1,17 +1,12 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { corsHeaders, isOriginAllowed } from "@/lib/cors";
 
 // ------------------------------------------------------------
 // Public intake endpoint for the website support widget.
 // POST { name, email, topic, subject?, message, order_number?, website? }
 // `website` is a honeypot field — real users never fill it.
 // ------------------------------------------------------------
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*", // tighten to https://blankssportsnutrition.com in prod
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
 
 // naive in-memory rate limit (per serverless instance) — good enough for spam bursts
 const hits = new Map<string, { count: number; ts: number }>();
@@ -26,11 +21,22 @@ function rateLimited(ip: string): boolean {
   return rec.count > 5;
 }
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+export async function OPTIONS(request: Request) {
+  const origin = request.headers.get("origin");
+  return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
 }
 
 export async function POST(request: Request) {
+  const origin = request.headers.get("origin");
+  const CORS_HEADERS = corsHeaders(origin);
+
+  if (!isOriginAllowed(origin)) {
+    return NextResponse.json(
+      { error: "Origin not allowed" },
+      { status: 403, headers: CORS_HEADERS }
+    );
+  }
+
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown";
   if (rateLimited(ip)) {
     return NextResponse.json(
