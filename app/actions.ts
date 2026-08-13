@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { TicketStatus } from "@/lib/types";
+import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -33,17 +34,49 @@ export async function sendReply(ticketId: string, body: string, isNote: boolean)
   const text = body.trim();
   if (!text) return { error: "Empty message" };
 
-  const { error } = await supabase.from("messages").insert({
-    ticket_id: ticketId,
-    direction: "outbound",
-    type: isNote ? "internal_note" : "public",
-    agent_id: userId,
-    body_text: text,
-    // Phase 1: replies are stored + shown in-thread. Phase 2 wires Gmail
-    // sending and flips this to queued → sent.
-    delivery_status: isNote ? "stored" : "queued",
-  });
+  // Decide up front whether this reply goes out as email, and bail before
+  // storing anything if it can't — otherwise a missing Gmail connection would
+  // swallow the agent's draft into a thread as an undeliverable message.
+  let willEmail = false;
+  if (!isNote) {
+    const { data: ticket } = await supabase
+      .from("tickets")
+      .select("channel, customer:customers(email)")
+      .eq("id", ticketId)
+      .single();
+    const customer = Array.isArray(ticket?.customer)
+      ? ticket.customer[0]
+      : ticket?.customer;
+    willEmail = canEmail(ticket?.channel ?? "", customer?.email);
+    if (willEmail && !(await resolveSender(userId))) {
+      return {
+        error:
+          "Connect your Gmail in Settings before replying to email tickets.",
+      };
+    }
+  }
+
+  const { data: inserted, error } = await supabase
+    .from("messages")
+    .insert({
+      ticket_id: ticketId,
+      direction: "outbound",
+      type: isNote ? "internal_note" : "public",
+      agent_id: userId,
+      body_text: text,
+      delivery_status: isNote ? "stored" : willEmail ? "queued" : "stored",
+    })
+    .select("id")
+    .single();
   if (error) return { error: error.message };
+
+  // Send inline: an agent needs to know immediately whether their reply
+  // actually left the building.
+  let deliveryError: string | null = null;
+  if (willEmail && inserted) {
+    const result = await deliverMessage(inserted.id);
+    if (!result.ok) deliveryError = result.error;
+  }
 
   if (!isNote) {
     // A public reply usually means we're waiting on the customer.
@@ -58,6 +91,12 @@ export async function sendReply(ticketId: string, body: string, isNote: boolean)
 
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
+  // The reply is saved and visible either way, so this is a warning rather
+  // than an error — the draft must be cleared to avoid a duplicate send, but
+  // the agent still needs to know the customer hasn't received it.
+  if (deliveryError) {
+    return { ok: true, warning: `Saved, but the email didn't send: ${deliveryError}` };
+  }
   return { ok: true };
 }
 

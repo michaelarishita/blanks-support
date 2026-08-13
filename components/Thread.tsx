@@ -4,6 +4,15 @@ import { useEffect, useRef } from "react";
 import { format } from "date-fns";
 import type { Message } from "@/lib/types";
 
+// Delivery state of an outbound public reply, as shown on the agent's bubble
+// (dark background, so these are light-on-dark tones).
+const DELIVERY_META: Record<string, { label: string; classes: string }> = {
+  queued: { label: "Sending…", classes: "text-gray-400" },
+  sent: { label: "✓ Sent", classes: "text-emerald-300" },
+  failed: { label: "⚠ Not delivered", classes: "text-red-300" },
+  stored: { label: "Not emailed", classes: "text-gray-500" },
+};
+
 export default function Thread({
   messages,
   customerName,
@@ -52,8 +61,17 @@ export default function Thread({
                 </span>
                 <span>{format(new Date(m.created_at), "MMM d, h:mm a")}</span>
                 {!isNote && isAgent && (
-                  <span className="uppercase tracking-wide">
-                    {m.delivery_status}
+                  <span
+                    className={
+                      DELIVERY_META[m.delivery_status]?.classes ?? "text-gray-400"
+                    }
+                    title={
+                      m.delivery_status === "failed"
+                        ? "The reply is saved here but the email did not send — see the ticket history for the reason."
+                        : undefined
+                    }
+                  >
+                    {DELIVERY_META[m.delivery_status]?.label ?? m.delivery_status}
                   </span>
                 )}
               </div>

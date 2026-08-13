@@ -22,6 +22,7 @@ export default function ReplyBox({
   const [mode, setMode] = useState<"reply" | "note">("reply");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   function applyMacro(id: string) {
     const macro = macros.find((m) => m.id === id);
@@ -36,10 +37,17 @@ export default function ReplyBox({
   function submit() {
     if (!body.trim()) return;
     setError(null);
+    setWarning(null);
     startTransition(async () => {
       const res = await sendReply(ticketId, body, mode === "note");
-      if (res?.error) setError(res.error);
-      else setBody("");
+      if (res?.error) {
+        setError(res.error);
+        return;
+      }
+      // Stored successfully — clear the draft even if delivery failed, since
+      // resending the same text would post a duplicate to the thread.
+      setBody("");
+      if (res?.warning) setWarning(res.warning);
     });
   }
 
@@ -107,8 +115,11 @@ export default function ReplyBox({
               : "border-gray-300 focus:border-gray-500"
           }`}
         />
-        <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-red-500">{error}</span>
+        <div className="mt-2 flex items-center justify-between gap-4">
+          <span className="text-xs text-red-500">
+            {error}
+            {warning && <span className="text-amber-600">⚠️ {warning}</span>}
+          </span>
           <button
             onClick={submit}
             disabled={pending || !body.trim()}

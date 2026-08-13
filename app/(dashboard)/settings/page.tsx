@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import GmailConnect from "@/components/GmailConnect";
+import QueuedReplies from "@/components/QueuedReplies";
 import {
   getConnectionForAgent,
   getSupportInboxConnection,
@@ -33,6 +34,13 @@ export default async function SettingsPage({
   const connection = await getConnectionForAgent(user.id);
   const supportInbox = me?.role === "admin" ? await getSupportInboxConnection() : null;
 
+  const { count: pendingCount } = await supabase
+    .from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("direction", "outbound")
+    .eq("type", "public")
+    .in("delivery_status", ["queued", "failed"]);
+
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
       <h1 className="text-2xl font-bold">Settings</h1>
@@ -64,6 +72,19 @@ export default async function SettingsPage({
           configured={configured}
         />
       </section>
+
+      {me?.role === "admin" && (
+        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+            Pending replies
+          </h2>
+          <p className="mb-4 mt-1 text-sm text-gray-600">
+            Replies written before Gmail was connected, plus any that failed to
+            send. Retrying is safe — anything already sent is skipped.
+          </p>
+          <QueuedReplies pendingCount={pendingCount ?? 0} />
+        </section>
+      )}
 
       {me?.role === "admin" && (
         <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
