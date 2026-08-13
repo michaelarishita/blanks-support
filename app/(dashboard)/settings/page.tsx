@@ -4,6 +4,7 @@ import GmailConnect from "@/components/GmailConnect";
 import QueuedReplies from "@/components/QueuedReplies";
 import SignatureEditor from "@/components/SignatureEditor";
 import CompanyBrandEditor from "@/components/CompanyBrandEditor";
+import CheckMailNow from "@/components/CheckMailNow";
 import { getCompanySettings } from "@/lib/settings";
 import {
   getConnectionForAgent,
@@ -167,6 +168,10 @@ export default async function SettingsPage({
               </a>
             </div>
           )}
+
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <CheckMailNow connected={Boolean(supportInbox)} />
+          </div>
         </section>
       )}
     </div>

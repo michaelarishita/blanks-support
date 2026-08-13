@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { disconnectAgent } from "@/lib/google/tokens";
 import { deliverPendingMessages } from "@/lib/google/outbound";
+import { syncSupportMailbox } from "@/lib/google/inbound";
 import { updateCompanySettings } from "@/lib/settings";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { FIELD_LIMITS, absoluteUrl, hexColor, plainField } from "@/lib/fields";
@@ -254,4 +255,17 @@ export async function removeBrandLogo(): Promise<ActionResult> {
 
   revalidatePath("/settings");
   return { ok: true };
+}
+
+/** Runs an inbound sync on demand. Used by "Check mail now" in Settings. */
+export async function checkMailNow() {
+  const me = await requireAgent();
+  if (!me) {
+    return { checked: 0, created: 0, appended: 0, skipped: {}, error: "Not authenticated" };
+  }
+
+  const result = await syncSupportMailbox();
+  revalidatePath("/settings");
+  revalidatePath("/inbox");
+  return result;
 }

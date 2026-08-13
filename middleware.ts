@@ -18,7 +18,10 @@ export function middleware(request: NextRequest) {
     path.startsWith("/login") ||
     path.startsWith("/auth") ||
     path.startsWith("/widget") ||
-    path.startsWith("/api/tickets/intake");
+    path.startsWith("/api/tickets/intake") ||
+    // Pub/Sub pushes carry no session cookie; the route authenticates itself
+    // with GMAIL_WEBHOOK_TOKEN instead.
+    path.startsWith("/api/webhooks/");
 
   if (!isPublic && !hasSupabaseAuthCookie(request)) {
     const url = request.nextUrl.clone();
