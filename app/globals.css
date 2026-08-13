@@ -2,26 +2,138 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   Design tokens
+   Single source of truth for colour, elevation and motion.
+   Consume these through the Tailwind config (bg-surface,
+   text-secondary, border-subtle, shadow-md, ease-out …) rather
+   than writing raw values in components.
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* ---- Neutral ramp ---- */
+  --gray-50: #fafafa;
+  --gray-100: #f4f4f5;
+  --gray-200: #e9e9ec;
+  --gray-300: #d7d7dc;
+  --gray-400: #a2a2ab;
+  --gray-500: #71717a;
+  --gray-600: #52525b;
+  --gray-700: #3f3f46;
+  --gray-800: #27272a;
+  --gray-900: #18181b;
+  --gray-950: #0c0c0e;
+
+  /* ---- Roles ---- */
+  --surface: var(--gray-50);
+  --panel: #ffffff;
+  --border-subtle: var(--gray-200);
+  --border-strong: var(--gray-300);
+  --text-primary: var(--gray-900);
+  --text-secondary: var(--gray-600);
+  --text-tertiary: var(--gray-400);
+
+  /* ---- Brand ---- */
+  --brand-50: #fefbe8;
+  --brand-100: #fff8c2;
+  --brand-200: #ffee88;
+  --brand-300: #ffdf44;
+  --brand-400: #fdcc11;
+  --brand-500: #f5c518;
+  --brand-600: #d99e04;
+  --brand-700: #ac7107;
+  --brand-800: #8a570e;
+  --brand-900: #764812;
+  --brand-950: #452506;
+
+  /* ---- Semantic ---- */
+  --success-bg: #ecfdf3;
+  --success-border: #a9e6c2;
+  --success-text: #05683b;
+  --warning-bg: #fff8ea;
+  --warning-border: #f5d9a3;
+  --warning-text: #8a5209;
+  --danger-bg: #fef2f2;
+  --danger-border: #f5b5b5;
+  --danger-text: #a81f1f;
+  --info-bg: #eff6ff;
+  --info-border: #b4d3fb;
+  --info-text: #17509e;
+
+  /* ---- Elevation: soft and low-opacity; never pair lg with a border ---- */
+  --shadow-sm: 0 1px 2px 0 rgb(24 24 27 / 0.04), 0 1px 3px 0 rgb(24 24 27 / 0.06);
+  --shadow-md: 0 4px 8px -2px rgb(24 24 27 / 0.08), 0 2px 4px -2px rgb(24 24 27 / 0.06);
+  --shadow-lg: 0 12px 24px -6px rgb(24 24 27 / 0.12), 0 4px 8px -4px rgb(24 24 27 / 0.08);
+
+  /* ---- Motion ---- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-micro: 120ms;
+  --duration-panel: 200ms;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* This is a light-only product (see CLAUDE.md design conventions). No
+   prefers-color-scheme block — an inherited dark palette would fight the
+   explicit surface tokens above and wash out the amber accent. */
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--surface);
+  color: var(--text-primary);
+  /* System stack — deliberately not next/font/google (see CLAUDE.md). */
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Ticket numbers, counts and timestamps must not jitter as digits change. */
+.tnum,
+time,
+[data-tnum] {
+  font-variant-numeric: tabular-nums;
+}
+
+@layer base {
+  /* One consistent focus ring everywhere, keyboard-only. */
+  :focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--panel),
+      0 0 0 4px rgb(253 204 17 / 0.6);
+    border-radius: 4px;
+  }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+  /* Thin scrollbars for the inbox and thread panes. */
+  .scrollbar-slim {
+    scrollbar-width: thin;
+    scrollbar-color: var(--gray-300) transparent;
+  }
+  .scrollbar-slim::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scrollbar-slim::-webkit-scrollbar-thumb {
+    background-color: var(--gray-300);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
+}
+
+/* Honour the OS setting — motion is decoration, never the only signal. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

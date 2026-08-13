@@ -11,9 +11,8 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 font-sans text-gray-900 antialiased">
-        {children}
-      </body>
+      {/* Colours, type and font stack come from the tokens in globals.css. */}
+      <body>{children}</body>
     </html>
   );
 }
