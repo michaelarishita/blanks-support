@@ -42,6 +42,31 @@ The plan when the owner wants to go live again:
    NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY.
 4. Domain support.blankssportsnutrition.com — GoDaddy CNAME already exists.
 5. Supabase Auth → URL Configuration: set Site URL to the production domain.
+6. Env vars added since Phase 2: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+   TOKEN_ENCRYPTION_KEY, SUPPORT_EMAIL, NEXT_PUBLIC_SITE_URL,
+   GMAIL_WEBHOOK_TOKEN. Do NOT set NEXT_PUBLIC_MAIL_POLL_SECONDS in
+   production — Pub/Sub replaces polling there.
+   TOKEN_ENCRYPTION_KEY must be the SAME value as local, or every stored
+   OAuth token becomes undecryptable and all agents must reconnect.
+7. Add the production callback to the Google OAuth client:
+   https://support.blankssportsnutrition.com/api/google/callback
+8. Run migrations 0002–0005 against the production Supabase project.
+
+### Turning on inbound push (production only)
+
+Inbound works locally by polling. Push needs Google Cloud wiring:
+
+1. Google Cloud console → Pub/Sub → Create topic, e.g. `gmail-inbound`.
+2. Grant `gmail-api-push@system.gserviceaccount.com` the **Pub/Sub Publisher**
+   role on that topic — without it Gmail silently can't publish.
+3. Create a **push** subscription targeting
+   `https://support.blankssportsnutrition.com/api/webhooks/gmail?token=<GMAIL_WEBHOOK_TOKEN>`.
+4. Set GMAIL_PUBSUB_TOPIC to `projects/<project>/topics/gmail-inbound`.
+5. Call `users.watch` for the support mailbox (watchGmailMailbox in
+   lib/google/gmail.ts) to start push delivery.
+6. **The watch expires every 7 days.** Add a Vercel cron (daily) that renews
+   it. If it lapses, inbound stops silently — the mailbox keeps receiving,
+   nothing errors, tickets just stop appearing.
 
 ## Hard-won gotchas (do not re-learn these)
 
@@ -70,26 +95,30 @@ The plan when the owner wants to go live again:
 
 ## Roadmap (build in order; schema already supports all of it)
 
-### Phase 2 — Gmail (NEXT UP)
-Goal: replies actually send as email from the responding agent's own Gmail,
-and emails to support@blankssportsnutrition.com become tickets.
+### Phase 2 — Gmail (DONE, local only)
+Replies send as real email from the responding agent's own Gmail, and mail to
+support@ becomes tickets.
 
-- Per-agent Google OAuth (scope: gmail.send). Store refresh tokens
-  encrypted in `oauth_tokens` (provider='google'). Settings page for agents
-  to connect their Gmail; flip `agents.gmail_connected`.
-- Sending: on public reply to an email-channel ticket (or web_form ticket
-  with customer email), build RFC 2822 message, thread with
-  In-Reply-To/References using messages.gmail_message_id, send via Gmail
-  API as the agent, update messages.delivery_status queued→sent|failed.
-  Subject: `Re: <ticket.subject> [BLK-<number>]` — the [BLK-n] token routes
-  replies back to the ticket.
-- Receiving: support@ account watch via users.watch → Google Cloud Pub/Sub
-  → `/api/webhooks/gmail`. history.list to fetch new messages; create
-  ticket (or append via References/[BLK-n]); store gmail ids. Daily cron to
-  renew the watch (expires every 7 days) — use Vercel cron once deployed.
-- Web_form confirmation email can also send via support@'s connection.
-- Google Cloud project needed: Gmail API enabled, OAuth consent screen
-  internal to blankssportsnutrition.com, Pub/Sub topic + push subscription.
+- Per-agent OAuth at Settings → Your Gmail. Refresh tokens are AES-256-GCM
+  encrypted in `oauth_tokens` (admin-only under RLS; every read/write goes
+  through the service-role client, so token material never reaches a browser).
+- Outbound: multipart/alternative branded email, threaded via
+  In-Reply-To/References plus a `[BLK-n]` subject token, `Reply-To: support@`
+  so customer replies reach the shared inbox rather than one agent's mailbox.
+  delivery_status goes queued → sent | failed, and failures are retryable from
+  the thread and from Settings.
+- Inbound: `lib/google/inbound.ts` syncs the support mailbox. Routing
+  precedence is token → References → thread id → sender+subject+recency, and
+  the matched path is recorded in ticket_events. Loop protection drops
+  automated mail and anything from our own addresses; the unique index on
+  gmail_message_id absorbs Pub/Sub redelivery.
+- Dev vs prod: locally the dashboard polls (NEXT_PUBLIC_MAIL_POLL_SECONDS) and
+  Settings has "Check mail now". Production uses Pub/Sub push to
+  `/api/webhooks/gmail`. Same sync either way.
+
+**Still to do before inbound works in production** (see Deployment):
+Google Cloud Pub/Sub topic + push subscription, calling users.watch, and a
+daily cron to renew it.
 
 ### Phase 3 — Instagram + Messenger
 One Meta app; webhooks → `/api/webhooks/meta` (verify X-Hub-Signature-256,

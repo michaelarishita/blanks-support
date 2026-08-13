@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
 import ShortcutsOverlay from "@/components/ShortcutsOverlay";
+import MailPoller from "@/components/MailPoller";
 import { ToastProvider } from "@/components/ui";
 
 export default async function DashboardLayout({
@@ -43,6 +44,10 @@ export default async function DashboardLayout({
         <main className="scrollbar-slim flex-1 overflow-y-auto">{children}</main>
       </div>
       <ShortcutsOverlay />
+      {/* Off unless NEXT_PUBLIC_MAIL_POLL_SECONDS is set — see MailPoller. */}
+      <MailPoller
+        intervalSeconds={Number(process.env.NEXT_PUBLIC_MAIL_POLL_SECONDS) || 0}
+      />
     </ToastProvider>
   );
 }
