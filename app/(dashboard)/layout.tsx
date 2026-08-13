@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
 import ShortcutsOverlay from "@/components/ShortcutsOverlay";
 import MailPoller from "@/components/MailPoller";
+import HealthBanner from "@/components/HealthBanner";
 import { ToastProvider } from "@/components/ui";
 
 export default async function DashboardLayout({
@@ -41,7 +42,10 @@ export default async function DashboardLayout({
     <ToastProvider>
       <div className="flex h-screen bg-surface">
         <Sidebar me={me} counts={{ open, mine, unassigned }} />
-        <main className="scrollbar-slim flex-1 overflow-y-auto">{children}</main>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <HealthBanner />
+          <main className="scrollbar-slim flex-1 overflow-y-auto">{children}</main>
+        </div>
       </div>
       <ShortcutsOverlay />
       {/* Off unless NEXT_PUBLIC_MAIL_POLL_SECONDS is set — see MailPoller. */}

@@ -21,7 +21,9 @@ export function proxy(request: NextRequest) {
     path.startsWith("/api/tickets/intake") ||
     // Pub/Sub pushes carry no session cookie; the route authenticates itself
     // with GMAIL_WEBHOOK_TOKEN instead.
-    path.startsWith("/api/webhooks/");
+    path.startsWith("/api/webhooks/") ||
+    // Same for Vercel cron invocations, which authenticate with CRON_SECRET.
+    path.startsWith("/api/cron/");
 
   if (!isPublic && !hasSupabaseAuthCookie(request)) {
     const url = request.nextUrl.clone();
