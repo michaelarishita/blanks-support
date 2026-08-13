@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { TicketStatus } from "@/lib/types";
 import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
+import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -29,10 +30,19 @@ async function logEvent(
   });
 }
 
-export async function sendReply(ticketId: string, body: string, isNote: boolean) {
+export async function sendReply(
+  ticketId: string,
+  /** HTML from the composer — never trusted, sanitized here before storage. */
+  bodyHtml: string,
+  isNote: boolean
+) {
   const { supabase, userId } = await requireAgent();
-  const text = body.trim();
-  if (!text) return { error: "Empty message" };
+
+  const html = sanitizeRichText(bodyHtml);
+  // The plain-text rendering is the canonical body: it's what the thread
+  // falls back to, what search will index, and the text/plain email part.
+  const text = htmlToPlainText(html);
+  if (!text.trim()) return { error: "Empty message" };
 
   // Decide up front whether this reply goes out as email, and bail before
   // storing anything if it can't — otherwise a missing Gmail connection would
@@ -64,6 +74,7 @@ export async function sendReply(ticketId: string, body: string, isNote: boolean)
       type: isNote ? "internal_note" : "public",
       agent_id: userId,
       body_text: text,
+      body_html: html,
       delivery_status: isNote ? "stored" : willEmail ? "queued" : "stored",
     })
     .select("id")

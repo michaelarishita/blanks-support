@@ -3,7 +3,11 @@
 import { useCallback, useRef, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { sendReply } from "@/app/actions";
+import { isEmptyHtml } from "@/lib/html";
 import { useHotkey } from "@/lib/shortcuts";
+import RichTextEditor, {
+  type RichTextEditorHandle,
+} from "@/components/RichTextEditor";
 import Button from "@/components/ui/Button";
 import Tooltip from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
@@ -27,19 +31,22 @@ export default function ReplyBox({
   /** False for tickets with no customer email — replies are stored only. */
   emailCapable: boolean;
 }) {
+  // Holds HTML from the editor; the server sanitizes it and derives the
+  // canonical plain text.
   const [body, setBody] = useState("");
   const [mode, setMode] = useState<Mode>("reply");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<RichTextEditorHandle>(null);
   const toast = useToast();
 
   const isNote = mode === "note";
+  const empty = isEmptyHtml(body);
 
   const focusComposer = useCallback((next: Mode) => {
     setMode(next);
-    // Defer so the textarea has re-rendered into the new mode first.
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    // Defer so the editor has re-rendered into the new mode first.
+    requestAnimationFrame(() => editorRef.current?.focus());
   }, []);
 
   useHotkey("r", useCallback(() => focusComposer("reply"), [focusComposer]));
@@ -50,12 +57,18 @@ export default function ReplyBox({
       "{{customer.first_name}}",
       customerFirstName || "there"
     );
-    setBody((prev) => (prev ? `${prev}\n\n${text}` : text));
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    // Macros are stored as plain text — escape it and convert newlines
+    // before it enters an HTML editor.
+    const html = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br />");
+    editorRef.current?.append(html);
   }
 
   function submit() {
-    if (!body.trim() || pending) return;
+    if (empty || pending) return;
     setError(null);
     startTransition(async () => {
       const res = await sendReply(ticketId, body, isNote);
@@ -65,7 +78,7 @@ export default function ReplyBox({
       }
       // Stored successfully — clear the draft even if delivery failed, since
       // resending the same text would post a duplicate to the thread.
-      setBody("");
+      editorRef.current?.clear();
       if (res?.warning) toast(res.warning, { tone: "error" });
       else if (isNote) toast("Note added", { tone: "success" });
       else
@@ -130,30 +143,17 @@ export default function ReplyBox({
           </Tooltip>
         </div>
 
-        <textarea
-          ref={textareaRef}
+        <RichTextEditor
+          ref={editorRef}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-              e.preventDefault();
-              submit();
-            }
-            if (e.key === "Escape") e.currentTarget.blur();
-          }}
-          rows={3}
+          onChange={setBody}
+          onSubmit={submit}
+          tone={isNote ? "note" : "default"}
           placeholder={
             isNote
               ? "Internal note — only the team sees this…"
               : "Write a reply…"
           }
-          className={cn(
-            "w-full resize-y rounded-md border px-3.5 py-2.5 text-body text-primary",
-            "placeholder:text-tertiary transition-colors duration-micro ease-out",
-            isNote
-              ? "border-warning-border bg-panel focus:border-warning-text/40"
-              : "border-subtle bg-panel hover:border-strong focus:border-brand-400"
-          )}
         />
 
         <div className="mt-2 flex items-center gap-3">
@@ -186,7 +186,7 @@ export default function ReplyBox({
             size="md"
             onClick={submit}
             loading={pending}
-            disabled={!body.trim()}
+            disabled={empty}
           >
             {isNote ? "Add note" : "Send reply"}
           </Button>

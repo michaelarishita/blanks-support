@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { dayLabel } from "@/lib/format";
+import { sanitizeRichText } from "@/lib/html";
 import { retryDelivery } from "@/app/actions";
 import type { Message } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
@@ -217,7 +218,26 @@ export default function Thread({
                         : "rounded-bubble rounded-bl-[4px] border border-subtle bg-panel text-primary shadow-sm"
                   )}
                 >
-                  <div className="whitespace-pre-wrap break-words">{m.body_text}</div>
+                  {m.body_html ? (
+                    // Sanitized on write; sanitized again here because this
+                    // renders as markup and defence in depth is cheap.
+                    <div
+                      className={cn(
+                        "break-words",
+                        "[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5",
+                        "[&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5",
+                        "[&_a]:underline",
+                        isAgent && !isNote ? "[&_a]:text-brand-300" : "[&_a]:text-brand-800"
+                      )}
+                      dangerouslySetInnerHTML={{
+                        __html: sanitizeRichText(m.body_html),
+                      }}
+                    />
+                  ) : (
+                    <div className="whitespace-pre-wrap break-words">
+                      {m.body_text}
+                    </div>
+                  )}
                 </div>
 
                 {isAgent && !isNote && (
