@@ -5,6 +5,8 @@ import Thread from "@/components/Thread";
 import ReplyBox from "@/components/ReplyBox";
 import TicketSidePanel from "@/components/TicketSidePanel";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
+import Badge from "@/components/ui/Badge";
+import ChannelIcon from "@/components/ui/ChannelIcon";
 import { CHANNEL_META, STATUS_META } from "@/lib/types";
 import type { Ticket, Message, Agent, Tag } from "@/lib/types";
 
@@ -52,7 +54,9 @@ export default async function TicketPage({
           <Link href="/inbox" className="text-gray-400 hover:text-gray-700">
             ←
           </Link>
-          <span className="text-lg">{channel.icon}</span>
+          <span className="text-tertiary">
+            <ChannelIcon channel={t.channel} />
+          </span>
           <div className="min-w-0 flex-1">
             <div className="truncate font-bold">{t.subject}</div>
             <div className="text-xs text-gray-400">
@@ -60,11 +64,7 @@ export default async function TicketPage({
               {t.topic ? ` · ${t.topic}` : ""}
             </div>
           </div>
-          <span
-            className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${status.classes}`}
-          >
-            {status.label}
-          </span>
+          <Badge tone={status.tone}>{status.label}</Badge>
         </div>
 
         {/* thread */}

@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import Link from "next/link";
 import { cn } from "@/lib/cn";
 
 // Click-outside + Escape + focus return. Rendered inline (not portalled) —
@@ -86,33 +87,59 @@ export function Dropdown({
   );
 }
 
+const ITEM_CLASSES =
+  "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-label " +
+  "transition-colors duration-micro ease-out " +
+  "disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * Renders an anchor when `href` is set and a button otherwise — a nav item
+ * must stay a real link so middle-click and open-in-new-tab work, and a
+ * button nested inside an anchor would be invalid markup.
+ */
 export function DropdownItem({
   icon,
   danger = false,
+  href,
   className,
   children,
   ...props
 }: {
   icon?: ReactNode;
   danger?: boolean;
+  href?: string;
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const tone = danger
+    ? "text-danger-text hover:bg-danger-bg"
+    : "text-primary hover:bg-gray-100";
+  const body = (
+    <>
+      {icon && <span className="flex-none text-tertiary">{icon}</span>}
+      {children}
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        role="menuitem"
+        className={cn(ITEM_CLASSES, tone, className)}
+        onClick={props.onClick as unknown as React.MouseEventHandler<HTMLAnchorElement>}
+      >
+        {body}
+      </Link>
+    );
+  }
+
   return (
     <button
       type="button"
       role="menuitem"
-      className={cn(
-        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-label",
-        "transition-colors duration-micro ease-out",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        danger
-          ? "text-danger-text hover:bg-danger-bg"
-          : "text-primary hover:bg-gray-100",
-        className
-      )}
+      className={cn(ITEM_CLASSES, tone, className)}
       {...props}
     >
-      {icon && <span className="flex-none text-tertiary">{icon}</span>}
-      {children}
+      {body}
     </button>
   );
 }

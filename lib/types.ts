@@ -82,20 +82,34 @@ export const TOPICS = [
   "Other",
 ] as const;
 
+// Tones map onto the semantic tokens in globals.css via <Badge>. Status
+// chips must never hand-roll their own colours.
 export const STATUS_META: Record<
   TicketStatus,
-  { label: string; classes: string }
+  { label: string; tone: "neutral" | "brand" | "success" | "warning" | "info" }
 > = {
-  new: { label: "New", classes: "bg-sky-100 text-sky-700" },
-  open: { label: "Open", classes: "bg-amber-100 text-amber-700" },
-  pending: { label: "Pending", classes: "bg-orange-100 text-orange-700" },
-  resolved: { label: "Resolved", classes: "bg-emerald-100 text-emerald-700" },
-  closed: { label: "Closed", classes: "bg-gray-200 text-gray-600" },
+  new: { label: "New", tone: "info" },
+  open: { label: "Open", tone: "brand" },
+  pending: { label: "Pending", tone: "warning" },
+  resolved: { label: "Resolved", tone: "success" },
+  closed: { label: "Closed", tone: "neutral" },
 };
 
-export const CHANNEL_META: Record<TicketChannel, { label: string; icon: string }> = {
-  web_form: { label: "Website", icon: "🌐" },
-  email: { label: "Email", icon: "📧" },
-  instagram: { label: "Instagram", icon: "📸" },
-  messenger: { label: "Messenger", icon: "💬" },
+// Icons live in components/ui/ChannelIcon so this stays a types-only module
+// that server components can import freely.
+export const CHANNEL_META: Record<TicketChannel, { label: string }> = {
+  web_form: { label: "Website" },
+  email: { label: "Email" },
+  instagram: { label: "Instagram" },
+  messenger: { label: "Messenger" },
+};
+
+export const PRIORITY_META: Record<
+  TicketPriority,
+  { label: string; tone: "neutral" | "warning" | "danger" }
+> = {
+  low: { label: "Low", tone: "neutral" },
+  normal: { label: "Normal", tone: "neutral" },
+  high: { label: "High", tone: "warning" },
+  urgent: { label: "Urgent", tone: "danger" },
 };
