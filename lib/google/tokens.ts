@@ -155,6 +155,26 @@ export async function getAccessToken(connectionId: string): Promise<string> {
   return fresh.access_token;
 }
 
+/** Advances the incremental-sync cursor for a mailbox. */
+export async function setLastHistoryId(connectionId: string, historyId: string) {
+  const admin = createAdminClient();
+  await admin
+    .from("oauth_tokens")
+    .update({ last_history_id: historyId, updated_at: new Date().toISOString() })
+    .eq("id", connectionId);
+}
+
+export async function setWatchExpiry(
+  connectionId: string,
+  expiresAt: string | null
+) {
+  const admin = createAdminClient();
+  await admin
+    .from("oauth_tokens")
+    .update({ watch_expires_at: expiresAt, updated_at: new Date().toISOString() })
+    .eq("id", connectionId);
+}
+
 export async function disconnectAgent(agentId: string) {
   const admin = createAdminClient();
   const { data } = await admin

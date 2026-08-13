@@ -7,7 +7,12 @@ import {
   fetchGoogleEmail,
   redirectUri,
 } from "@/lib/google/oauth";
-import { saveConnection } from "@/lib/google/tokens";
+import {
+  getSupportInboxConnection,
+  saveConnection,
+  setLastHistoryId,
+} from "@/lib/google/tokens";
+import { getGmailProfile } from "@/lib/google/gmail";
 import { STATE_COOKIE } from "../connect/route";
 
 function back(request: NextRequest, params: Record<string, string>) {
@@ -92,6 +97,19 @@ export async function GET(request: NextRequest) {
       scopes: grantedScopes,
       isSupportInbox: state.s,
     });
+
+    if (state.s) {
+      // Anchor incremental sync at "now". Without this the first sync has no
+      // cursor and would have to scan the whole mailbox, turning years of
+      // archived mail into tickets.
+      try {
+        const profile = await getGmailProfile(tokens.access_token);
+        const connection = await getSupportInboxConnection();
+        if (connection) await setLastHistoryId(connection.id, profile.historyId);
+      } catch {
+        // Non-fatal: the first sync falls back to a recent-messages scan.
+      }
+    }
 
     return back(request, { connected: accountRef });
   } catch (e) {
