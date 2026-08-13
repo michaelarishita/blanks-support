@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { assignTicket, setStatus } from "@/app/actions";
+import { useHotkey } from "@/lib/shortcuts";
 import { CHANNEL_META, STATUS_META } from "@/lib/types";
-import type { Agent, Ticket, TicketStatus } from "@/lib/types";
+import type { ActionResult, Agent, Ticket, TicketStatus } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -36,23 +37,53 @@ export default function TicketHeader({
   currentAgentId: string | null;
 }) {
   const [pending, startTransition] = useTransition();
+  const [assignOpen, setAssignOpen] = useState(false);
   const toast = useToast();
   const status = STATUS_META[ticket.status];
+  const isOpenStatus = ticket.status !== "resolved" && ticket.status !== "closed";
 
-  function run(fn: () => Promise<{ error?: string } | void>, success: string) {
+  function run(fn: () => Promise<ActionResult | void>, success: string) {
     startTransition(async () => {
       const res = await fn();
-      if (res && "error" in res && res.error) toast(res.error, { tone: "error" });
+      if (res?.error) toast(res.error, { tone: "error" });
       else toast(success, { tone: "success" });
     });
   }
 
   function changeStatus(next: TicketStatus) {
-    const previous = ticket.status;
-    run(() => setStatus(ticket.id, next), `Ticket ${STATUS_META[next].label.toLowerCase()}`);
-    // Undo is cheap here — it's the same mutation in reverse.
-    return previous;
+    run(
+      () => setStatus(ticket.id, next),
+      `Ticket ${STATUS_META[next].label.toLowerCase()}`
+    );
   }
+
+  /** Resolve, with Undo back to whatever the status was before. */
+  const resolve = useCallback(() => {
+    const previous = ticket.status;
+    startTransition(async () => {
+      const res = await setStatus(ticket.id, "resolved");
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast("Ticket resolved", {
+        tone: "success",
+        action: {
+          label: "Undo",
+          onClick: () =>
+            startTransition(async () => {
+              await setStatus(ticket.id, previous);
+            }),
+        },
+      });
+    });
+  }, [ticket.id, ticket.status, toast]);
+
+  useHotkey("e", resolve, { enabled: isOpenStatus });
+  useHotkey(
+    "a",
+    useCallback(() => setAssignOpen((v) => !v), [])
+  );
 
   return (
     <header className="flex flex-none items-center gap-3 border-b border-subtle bg-panel px-5 py-2.5">
@@ -90,9 +121,11 @@ export default function TicketHeader({
       <div className="flex flex-none items-center gap-2">
         <Badge tone={status.tone}>{status.label}</Badge>
 
-        {/* Assign */}
+        {/* Assign — controlled so the `a` shortcut can open it. */}
         <Dropdown
           align="end"
+          open={assignOpen}
+          onOpenChange={setAssignOpen}
           menuClassName="w-[220px] max-h-72 overflow-y-auto"
           trigger={(open) => (
             <span
@@ -184,31 +217,8 @@ export default function TicketHeader({
           </Button>
         </Tooltip>
 
-        {ticket.status !== "resolved" && ticket.status !== "closed" ? (
-          <Button
-            variant="primary"
-            size="md"
-            disabled={pending}
-            onClick={() => {
-              const previous = ticket.status;
-              startTransition(async () => {
-                const res = await setStatus(ticket.id, "resolved");
-                if (res?.error) toast(res.error, { tone: "error" });
-                else
-                  toast("Ticket resolved", {
-                    tone: "success",
-                    action: {
-                      label: "Undo",
-                      onClick: () => {
-                        startTransition(async () => {
-                          await setStatus(ticket.id, previous);
-                        });
-                      },
-                    },
-                  });
-              });
-            }}
-          >
+        {isOpenStatus ? (
+          <Button variant="primary" size="md" disabled={pending} onClick={resolve}>
             <CheckIcon size={14} />
             Resolve
           </Button>

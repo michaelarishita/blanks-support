@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { shortAgo } from "@/lib/format";
+import { useHotkey } from "@/lib/shortcuts";
 import type { Ticket } from "@/lib/types";
 import { STATUS_META } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
@@ -45,6 +48,40 @@ export default function TicketList({
   tickets: Ticket[];
   view?: string;
 }) {
+  const router = useRouter();
+  // -1 = nothing focused, so `j` starts at the top rather than the second row.
+  const [cursor, setCursor] = useState(-1);
+  const rowRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+
+  const move = useCallback(
+    (delta: number) => {
+      setCursor((current) => {
+        const next = Math.min(
+          Math.max(current + delta, 0),
+          Math.max(tickets.length - 1, 0)
+        );
+        rowRefs.current[next]?.scrollIntoView({ block: "nearest" });
+        return next;
+      });
+    },
+    [tickets.length]
+  );
+
+  useHotkey("j", useCallback(() => move(1), [move]));
+  useHotkey("k", useCallback(() => move(-1), [move]));
+  useHotkey(
+    "enter",
+    useCallback(() => {
+      const target = tickets[cursor];
+      if (target) router.push(`/tickets/${target.id}`);
+    }, [cursor, tickets, router])
+  );
+
+  // A shorter list after a filter change must not leave the cursor dangling.
+  useEffect(() => {
+    setCursor((c) => (c >= tickets.length ? tickets.length - 1 : c));
+  }, [tickets.length]);
+
   if (tickets.length === 0) {
     const copy = EMPTY_COPY[view] ?? EMPTY_COPY.all;
     return (
@@ -60,25 +97,34 @@ export default function TicketList({
 
   return (
     <div className="overflow-hidden rounded-lg border border-subtle bg-panel shadow-sm">
-      {tickets.map((t) => {
+      {tickets.map((t, index) => {
         const status = STATUS_META[t.status];
         // "New" means nobody has picked it up yet — worth pulling the eye.
         const isNew = t.status === "new";
         const customerName =
           t.customer?.name || t.customer?.email || "Unknown customer";
+        const focused = index === cursor;
 
         return (
           <Link
             key={t.id}
+            ref={(el) => {
+              rowRefs.current[index] = el;
+            }}
             href={`/tickets/${t.id}`}
+            onMouseEnter={() => setCursor(index)}
             className={cn(
               "group relative flex items-center gap-3 border-b border-subtle px-4 py-2.5 last:border-b-0",
               "transition-[background-color,box-shadow] duration-micro ease-out",
               // A raise rather than a grey wash, so the row reads as
               // liftable rather than disabled.
-              "hover:z-10 hover:bg-panel hover:shadow-md"
+              "hover:z-10 hover:bg-panel hover:shadow-md",
+              focused && "z-10 bg-panel shadow-md"
             )}
           >
+            {focused && (
+              <span className="absolute inset-y-0 left-0 w-0.5 bg-brand-500" />
+            )}
             <span className="flex w-2 flex-none justify-center">
               {isNew && (
                 <span

@@ -17,7 +17,12 @@ const TITLES: Record<string, string> = {
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; channel?: string; sort?: string }>;
+  searchParams: Promise<{
+    view?: string;
+    channel?: string;
+    sort?: string;
+    customer?: string;
+  }>;
 }) {
   const params = await searchParams;
   const supabase = await createClient();
@@ -57,6 +62,8 @@ export default async function InboxPage({
       .not("status", "in", "(resolved,closed)");
   if (view === "resolved") query = query.in("status", ["resolved", "closed"]);
   if (params.channel) query = query.eq("channel", params.channel);
+  // Backs the "N previous tickets" link in the ticket side panel.
+  if (params.customer) query = query.eq("customer_id", params.customer);
 
   const { data: tickets } = await query;
   const rows = (tickets as Ticket[]) ?? [];
@@ -65,11 +72,15 @@ export default async function InboxPage({
     ? (CHANNEL_META[params.channel as TicketChannel]?.label ?? params.channel)
     : null;
 
+  const customerName = params.customer
+    ? (rows[0]?.customer?.name ?? rows[0]?.customer?.email ?? "this customer")
+    : null;
+
   return (
     <div className="mx-auto max-w-4xl px-6 pb-10">
       <RealtimeRefresher />
       <InboxHeader
-        title={TITLES[view] ?? "Tickets"}
+        title={customerName ? `Tickets from ${customerName}` : (TITLES[view] ?? "Tickets")}
         count={rows.length}
         channelLabel={channelLabel}
         sort={sort}

@@ -1,3 +1,11 @@
+/** What every server action in app/actions.ts resolves to. */
+export interface ActionResult {
+  ok?: boolean;
+  error?: string;
+  /** Succeeded, but with something the agent needs to know (e.g. send failed). */
+  warning?: string;
+}
+
 export type TicketStatus = "new" | "open" | "pending" | "resolved" | "closed";
 export type TicketChannel = "web_form" | "email" | "instagram" | "messenger";
 export type TicketPriority = "low" | "normal" | "high" | "urgent";
@@ -17,6 +25,8 @@ export interface Customer {
   email: string | null;
   name: string | null;
   phone: string | null;
+  ig_user_id: string | null;
+  fb_psid: string | null;
   notes: string | null;
 }
 

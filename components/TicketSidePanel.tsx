@@ -1,157 +1,272 @@
 "use client";
 
-import { useTransition } from "react";
-import { assignTicket, setStatus, toggleTag, setPriority } from "@/app/actions";
-import type { Ticket, Agent, Tag, TicketStatus } from "@/lib/types";
+import Link from "next/link";
+import { useState, useTransition, type ReactNode } from "react";
+import { cn } from "@/lib/cn";
+import { setPriority, setStatus, toggleTag } from "@/app/actions";
+import { PRIORITY_META, STATUS_META } from "@/lib/types";
+import type {
+  ActionResult,
+  Tag,
+  Ticket,
+  TicketPriority,
+  TicketStatus,
+} from "@/lib/types";
+import Avatar from "@/components/ui/Avatar";
+import { Input, Select } from "@/components/ui/Field";
+import Tooltip from "@/components/ui/Tooltip";
+import { useToast } from "@/components/ui/Toast";
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  InstagramIcon,
+  MailIcon,
+  MessengerIcon,
+} from "@/components/ui/icons";
+
+/** Tag cloud gains a filter box past this many tags. */
+const TAG_SEARCH_THRESHOLD = 12;
+
+function Section({
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="border-b border-subtle px-4 py-3 last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="mb-2 flex w-full items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-tertiary transition-colors duration-micro ease-out hover:text-secondary"
+      >
+        <ChevronRightIcon
+          size={12}
+          className={cn(
+            "transition-transform duration-micro ease-out",
+            open && "rotate-90"
+          )}
+        />
+        {title}
+      </button>
+      {open && <div className="animate-fade-in">{children}</div>}
+    </section>
+  );
+}
+
+function CopyableEmail({ email }: { email: string }) {
+  const [copied, setCopied] = useState(false);
+  const toast = useToast();
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard
+          ?.writeText(email)
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+          .catch(() => toast("Could not copy", { tone: "error" }));
+      }}
+      className="group flex w-full items-center gap-1.5 rounded-sm text-left text-body text-secondary transition-colors duration-micro ease-out hover:text-primary"
+    >
+      <span className="truncate">{email}</span>
+      <span className="flex-none text-tertiary opacity-0 transition-opacity duration-micro ease-out group-hover:opacity-100">
+        {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+      </span>
+    </button>
+  );
+}
 
 export default function TicketSidePanel({
   ticket,
-  agents,
   allTags,
+  previousTicketCount,
 }: {
   ticket: Ticket;
-  agents: Agent[];
   allTags: Tag[];
+  /** Other tickets from this customer, excluding the one on screen. */
+  previousTicketCount: number;
 }) {
   const [pending, startTransition] = useTransition();
-  const activeTagIds = new Set(
-    (ticket.ticket_tags ?? []).map((tt) => tt.tag.id)
-  );
+  const [tagQuery, setTagQuery] = useState("");
+  const toast = useToast();
+
+  const activeTagIds = new Set((ticket.ticket_tags ?? []).map((tt) => tt.tag.id));
+  const customer = ticket.customer;
+  const customerName = customer?.name || customer?.email || "Unknown customer";
+
+  const visibleTags =
+    allTags.length > TAG_SEARCH_THRESHOLD && tagQuery.trim()
+      ? allTags.filter((t) =>
+          t.name.toLowerCase().includes(tagQuery.trim().toLowerCase())
+        )
+      : allTags;
+
+  function run(fn: () => Promise<ActionResult | void>, success: string) {
+    startTransition(async () => {
+      const res = await fn();
+      if (res?.error) toast(res.error, { tone: "error" });
+      else toast(success, { tone: "success" });
+    });
+  }
 
   return (
-    <aside className="w-72 flex-none overflow-y-auto border-l border-gray-200 bg-white px-5 py-5">
-      {/* customer */}
-      <div className="mb-6">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-          Customer
+    <aside className="scrollbar-slim w-[280px] flex-none overflow-y-auto border-l border-subtle bg-panel">
+      <Section title="Customer">
+        <div className="flex items-start gap-2.5">
+          <Avatar name={customerName} seed={customer?.id} size="lg" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-body font-semibold text-primary">
+              {customerName}
+            </div>
+            {customer?.email && <CopyableEmail email={customer.email} />}
+          </div>
         </div>
-        <div className="font-semibold">
-          {ticket.customer?.name ?? "Unknown"}
+
+        {/* Which channels we can reach this person on. */}
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {customer?.email && (
+            <Tooltip content="Reachable by email">
+              <span className="inline-flex items-center gap-1 rounded-full border border-subtle px-2 py-0.5 text-caption text-secondary">
+                <MailIcon size={11} /> Email
+              </span>
+            </Tooltip>
+          )}
+          {customer?.ig_user_id && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-subtle px-2 py-0.5 text-caption text-secondary">
+              <InstagramIcon size={11} /> Instagram
+            </span>
+          )}
+          {customer?.fb_psid && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-subtle px-2 py-0.5 text-caption text-secondary">
+              <MessengerIcon size={11} /> Messenger
+            </span>
+          )}
         </div>
-        {ticket.customer?.email && (
-          <div className="text-sm text-gray-500">{ticket.customer.email}</div>
-        )}
+
         {ticket.order_number && (
-          <div className="mt-1 text-sm text-gray-500">
-            Order: <span className="font-mono">{ticket.order_number}</span>
+          <div className="mt-2.5 text-caption text-tertiary">
+            Order{" "}
+            <span className="font-mono text-mono text-secondary">
+              {ticket.order_number}
+            </span>
           </div>
         )}
-        <div className="mt-2 rounded-lg border border-dashed border-gray-200 p-2.5 text-xs text-gray-400">
+
+        {previousTicketCount > 0 && customer?.id && (
+          <Link
+            href={`/inbox?view=all&customer=${customer.id}`}
+            className="mt-2.5 inline-flex items-center gap-1 text-caption font-medium text-brand-800 transition-colors duration-micro ease-out hover:text-brand-900 hover:underline"
+          >
+            {previousTicketCount} previous{" "}
+            {previousTicketCount === 1 ? "ticket" : "tickets"}
+            <ChevronRightIcon size={12} />
+          </Link>
+        )}
+
+        <div className="mt-3 rounded-md border border-dashed border-subtle p-2.5 text-caption text-tertiary">
           Shopify order history lands here in Phase 4.
         </div>
-      </div>
+      </Section>
 
-      {/* status */}
-      <div className="mb-6">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-          Status
-        </div>
+      <Section title="Status">
         <div className="grid grid-cols-2 gap-1.5">
-          {(["open", "pending", "resolved", "closed"] as TicketStatus[]).map(
-            (s) => (
+          {(["open", "pending", "resolved", "closed"] as TicketStatus[]).map((s) => {
+            const active = ticket.status === s;
+            return (
               <button
                 key={s}
                 disabled={pending}
-                onClick={() => startTransition(() => setStatus(ticket.id, s) as unknown as void)}
-                className={`rounded-lg border px-2 py-1.5 text-xs font-semibold capitalize ${
-                  ticket.status === s
+                onClick={() =>
+                  run(
+                    () => setStatus(ticket.id, s),
+                    `Marked ${STATUS_META[s].label.toLowerCase()}`
+                  )
+                }
+                className={cn(
+                  "rounded-sm border px-2 py-1.5 text-caption font-medium",
+                  "transition-colors duration-micro ease-out disabled:opacity-60",
+                  active
                     ? "border-gray-900 bg-gray-900 text-white"
-                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                }`}
+                    : "border-subtle text-secondary hover:border-strong hover:text-primary"
+                )}
               >
-                {s}
+                {STATUS_META[s].label}
               </button>
-            )
-          )}
+            );
+          })}
         </div>
-        {ticket.status !== "resolved" && (
-          <button
-            disabled={pending}
-            onClick={() =>
-              startTransition(() => setStatus(ticket.id, "resolved") as unknown as void)
-            }
-            className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            ✓ Mark resolved
-          </button>
-        )}
-      </div>
+      </Section>
 
-      {/* assignee */}
-      <div className="mb-6">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-          Assigned to
-        </div>
-        <select
-          value={ticket.assignee_id ?? ""}
-          disabled={pending}
-          onChange={(e) =>
-            startTransition(
-              () => assignTicket(ticket.id, e.target.value || null) as unknown as void
-            )
-          }
-          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-        >
-          <option value="">Unassigned</option>
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* priority */}
-      <div className="mb-6">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-          Priority
-        </div>
-        <select
+      <Section title="Priority">
+        <Select
           value={ticket.priority}
           disabled={pending}
           onChange={(e) =>
-            startTransition(() => setPriority(ticket.id, e.target.value) as unknown as void)
+            run(
+              () => setPriority(ticket.id, e.target.value),
+              `Priority set to ${PRIORITY_META[e.target.value as TicketPriority].label.toLowerCase()}`
+            )
           }
-          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm capitalize"
         >
-          {["low", "normal", "high", "urgent"].map((p) => (
+          {(Object.keys(PRIORITY_META) as TicketPriority[]).map((p) => (
             <option key={p} value={p}>
-              {p}
+              {PRIORITY_META[p].label}
             </option>
           ))}
-        </select>
-      </div>
+        </Select>
+      </Section>
 
-      {/* tags */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-          Tags
-        </div>
+      <Section title="Tags">
+        {allTags.length > TAG_SEARCH_THRESHOLD && (
+          <Input
+            value={tagQuery}
+            onChange={(e) => setTagQuery(e.target.value)}
+            placeholder="Filter tags…"
+            className="mb-2 h-8 text-caption"
+          />
+        )}
         <div className="flex flex-wrap gap-1.5">
-          {allTags.map((tag) => {
+          {visibleTags.map((tag) => {
             const on = activeTagIds.has(tag.id);
             return (
               <button
                 key={tag.id}
                 disabled={pending}
                 onClick={() =>
-                  startTransition(
-                    () => toggleTag(ticket.id, tag.id, !on) as unknown as void
+                  run(
+                    () => toggleTag(ticket.id, tag.id, !on),
+                    on ? `Removed “${tag.name}”` : `Tagged “${tag.name}”`
                   )
                 }
-                className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-caption font-medium",
+                  "transition-colors duration-micro ease-out disabled:opacity-60",
                   on
                     ? "border-transparent text-white"
-                    : "border-gray-200 text-gray-500 hover:bg-gray-50"
-                }`}
+                    : // Legible at rest rather than greyed almost to nothing.
+                      "border-subtle text-secondary hover:border-strong hover:bg-gray-50 hover:text-primary"
+                )}
                 style={on ? { backgroundColor: tag.color } : undefined}
               >
                 {tag.name}
               </button>
             );
           })}
+          {visibleTags.length === 0 && (
+            <p className="py-2 text-caption text-tertiary">No tags match.</p>
+          )}
         </div>
-      </div>
+      </Section>
     </aside>
   );
 }

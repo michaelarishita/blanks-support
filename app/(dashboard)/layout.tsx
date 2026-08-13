@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
+import ShortcutsOverlay from "@/components/ShortcutsOverlay";
 import { ToastProvider } from "@/components/ui";
 
 export default async function DashboardLayout({
@@ -41,6 +42,7 @@ export default async function DashboardLayout({
         <Sidebar me={me} counts={{ open, mine, unassigned }} />
         <main className="scrollbar-slim flex-1 overflow-y-auto">{children}</main>
       </div>
+      <ShortcutsOverlay />
     </ToastProvider>
   );
 }

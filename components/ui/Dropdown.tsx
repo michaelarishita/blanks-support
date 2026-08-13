@@ -19,6 +19,8 @@ export function Dropdown({
   side = "bottom",
   className,
   menuClassName,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   /** Receives the open state so the trigger can show its own affordance. */
   trigger: (open: boolean) => ReactNode;
@@ -27,8 +29,19 @@ export function Dropdown({
   side?: "top" | "bottom";
   className?: string;
   menuClassName?: string;
+  /** Controlled mode — pass both to drive the menu from outside (shortcuts). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+
+  const setOpen = (next: boolean) => {
+    if (!isControlled) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
+
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -63,7 +76,7 @@ export function Dropdown({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!open)}
         className="block w-full text-left"
       >
         {trigger(open)}

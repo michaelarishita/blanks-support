@@ -5,6 +5,7 @@ import ReplyBox from "@/components/ReplyBox";
 import TicketHeader from "@/components/TicketHeader";
 import TicketSidePanel from "@/components/TicketSidePanel";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
+import { canEmail, resolveSender } from "@/lib/google/outbound";
 import type { Ticket, Message, Agent, Tag } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +45,18 @@ export default async function TicketPage({
 
   const t = ticket as Ticket;
 
+  // Which Gmail this agent's replies would leave from, and how many other
+  // tickets this customer has — both drive UI copy, so resolve them here
+  // rather than round-tripping from the client.
+  const [connection, { count: customerTicketCount }] = await Promise.all([
+    user ? resolveSender(user.id) : Promise.resolve(null),
+    supabase
+      .from("tickets")
+      .select("id", { count: "exact", head: true })
+      .eq("customer_id", t.customer_id)
+      .neq("id", t.id),
+  ]);
+
   return (
     <div className="flex h-full">
       <RealtimeRefresher />
@@ -66,13 +79,15 @@ export default async function TicketPage({
           ticketId={t.id}
           macros={macros ?? []}
           customerFirstName={(t.customer?.name ?? "").split(" ")[0]}
+          sendingAs={connection?.account_ref ?? null}
+          emailCapable={canEmail(t.channel, t.customer?.email)}
         />
       </div>
 
       <TicketSidePanel
         ticket={t}
-        agents={(agents as Agent[]) ?? []}
         allTags={(tags as Tag[]) ?? []}
+        previousTicketCount={customerTicketCount ?? 0}
       />
     </div>
   );
