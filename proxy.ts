@@ -11,7 +11,7 @@ function hasSupabaseAuthCookie(request: NextRequest): boolean {
     .some((c) => c.name.startsWith("sb-") && c.name.includes("-auth-token"));
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
   const isPublic =

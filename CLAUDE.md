@@ -32,10 +32,10 @@ apps (blanks-crm, blanks-athletes-portal): Next.js 16 + React 19 + Supabase.
 NOT currently deployed. Local-only by choice, after a painful Vercel saga.
 The plan when the owner wants to go live again:
 
-1. Migrate `middleware.ts` → the new `proxy.ts` convention first
-   (`npx @next/codemod@canary middleware-to-proxy .`) — Next 16 deprecated
-   middleware.ts, and the middleware bundle is exactly what kept crashing
-   on Vercel (`__dirname is not defined` / MIDDLEWARE_INVOCATION_FAILED).
+1. DONE — `middleware.ts` is now `proxy.ts` (Next 16 convention). The
+   compiled proxy chunk was verified to contain no Supabase import and no
+   executable `__dirname`, which is what kept crashing Vercel before
+   (`__dirname is not defined` / MIDDLEWARE_INVOCATION_FAILED).
 2. Delete the old `blanks-support` Vercel project entirely (its build cache
    is poisoned) and re-import fresh from GitHub.
 3. Env vars on Vercel: NEXT_PUBLIC_SUPABASE_URL,
@@ -72,7 +72,7 @@ Inbound works locally by polling. Push needs Google Cloud wiring:
 
 - NEVER import @supabase/ssr (or anything Supabase) in middleware/proxy —
   it bundles code that references `__dirname` and crashes Vercel's edge
-  runtime. Current middleware.ts does a cookie-presence check only; real
+  runtime. Current proxy.ts does a cookie-presence check only; real
   auth verification lives in `app/(dashboard)/layout.tsx` via
   `supabase.auth.getUser()`.
 - Keep the dependency tree resolvable WITHOUT --legacy-peer-deps. Vercel
