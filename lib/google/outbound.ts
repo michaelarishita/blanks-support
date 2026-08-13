@@ -4,6 +4,9 @@ import {
   buildReplySubject,
   generateMessageId,
 } from "@/lib/email/mime";
+import { renderEmailHtml, renderEmailText } from "@/lib/email/template";
+import { getCompanySettings } from "@/lib/settings";
+import { sanitizeRichText } from "@/lib/html";
 import { sendGmailMessage } from "./gmail";
 import {
   getAccessToken,
@@ -52,8 +55,10 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
 
   const { data: message, error: loadError } = await admin
     .from("messages")
+    // Must stay a single string literal — Supabase parses the select at the
+    // type level, and concatenation collapses the result to a generic error.
     .select(
-      "id, ticket_id, direction, type, agent_id, body_text, delivery_status, agent:agents(id, name, email)"
+      "id, ticket_id, direction, type, agent_id, body_text, body_html, delivery_status, agent:agents(id, name, email, title, phone, signature_enabled)"
     )
     .eq("id", messageId)
     .single();
@@ -78,7 +83,14 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
     ? ticket.customer[0]
     : ticket.customer) as { email: string | null; name: string | null } | null;
   const agent = (Array.isArray(message.agent) ? message.agent[0] : message.agent) as
-    | { id: string; name: string; email: string }
+    | {
+        id: string;
+        name: string;
+        email: string;
+        title: string | null;
+        phone: string | null;
+        signature_enabled: boolean;
+      }
     | null;
 
   if (!canEmail(ticket.channel, customer?.email)) {
@@ -123,13 +135,40 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
   const fromEmail = connection.account_ref;
   const rfcMessageId = generateMessageId(fromEmail);
 
+  // Re-sanitize rather than trusting what's in the database: this markup is
+  // about to be sent to a customer's mail client.
+  const bodyHtml = message.body_html
+    ? sanitizeRichText(message.body_html)
+    : `<p style="margin:0 0 12px 0;">${message.body_text
+        .split(/\n{2,}/)
+        .map((block: string) =>
+          sanitizeRichText(block).replace(/\n/g, "<br />")
+        )
+        .join('</p><p style="margin:0 0 12px 0;">')}</p>`;
+
+  const company = await getCompanySettings();
+  // The signature is applied at send time and never stored on the message, so
+  // edits apply to future mail without rewriting thread history.
+  const signatureAgent =
+    agent && agent.signature_enabled !== false
+      ? { name: agent.name, title: agent.title, phone: agent.phone }
+      : null;
+
+  const htmlEmail = renderEmailHtml({ bodyHtml, agent: signatureAgent, company });
+  const textEmail = renderEmailText({ bodyHtml, agent: signatureAgent, company });
+
   const raw = buildRawEmail({
     fromEmail,
     fromName: agent?.name ?? "Blanks Support",
     to: customer!.email!,
     replyTo: await resolveReplyTo(),
-    subject: buildReplySubject(ticket.subject, ticket.number),
-    bodyText: message.body_text,
+    subject: buildReplySubject(ticket.subject, ticket.number, {
+      // No gmail_thread_id means this send opens the thread rather than
+      // continuing one — so it must not be prefixed "Re:".
+      newThread: !ticket.gmail_thread_id,
+    }),
+    bodyText: textEmail,
+    bodyHtml: htmlEmail,
     messageId: rfcMessageId,
     inReplyTo,
     references,

@@ -44,16 +44,20 @@ const DROP_WITH_CONTENT = new Set([
   "title",
 ]);
 
-function escapeText(text: string): string {
+/** Escapes text for insertion between tags. */
+export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
 
-function escapeAttribute(value: string): string {
-  return escapeText(value).replace(/"/g, "&quot;");
+/** Escapes text for insertion inside a double-quoted attribute. */
+export function escapeAttribute(value: string): string {
+  return escapeHtml(value).replace(/"/g, "&quot;");
 }
+
+const escapeText = escapeHtml;
 
 /**
  * Only http(s) and mailto survive. This is the check that stops

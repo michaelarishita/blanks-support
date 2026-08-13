@@ -34,16 +34,26 @@ export function generateMessageId(fromEmail: string): string {
 }
 
 /**
- * `Re: <subject> [BLK-1001]`
+ * `Re: <subject> [BLK-1001]`, or `<subject> [BLK-1001]` when this send opens
+ * a brand-new email thread.
+ *
  * The [BLK-n] token is what routes a customer's reply back to its ticket, so
  * it must survive round-trips: strip any existing copy before re-appending,
  * and don't stack up `Re: Re: Re:`.
+ *
+ * `Re:` on a message that replies to nothing is wrong and looks it — a
+ * website-form ticket's first email is the start of the conversation, not a
+ * reply to one.
  */
-export function buildReplySubject(subject: string, ticketNumber: number): string {
+export function buildReplySubject(
+  subject: string,
+  ticketNumber: number,
+  { newThread = false }: { newThread?: boolean } = {}
+): string {
   let base = subject.replace(/\s*\[BLK-\d+\]\s*/gi, " ").trim();
   base = base.replace(/^((re|fwd?)\s*:\s*)+/i, "").trim();
   if (!base) base = "Your support request";
-  return `Re: ${base} [BLK-${ticketNumber}]`;
+  return newThread ? `${base} [BLK-${ticketNumber}]` : `Re: ${base} [BLK-${ticketNumber}]`;
 }
 
 export interface EmailParts {
@@ -53,9 +63,21 @@ export interface EmailParts {
   replyTo?: string | null;
   subject: string;
   bodyText: string;
+  /** When set, the message is sent multipart/alternative (text + HTML). */
+  bodyHtml?: string | null;
   messageId: string;
   inReplyTo?: string | null;
   references?: string[];
+}
+
+/** Base64 with the 76-character line wrapping RFC 2045 requires. */
+function base64Body(content: string): string {
+  return (
+    Buffer.from(content, "utf8")
+      .toString("base64")
+      .match(/.{1,76}/g)
+      ?.join(CRLF) ?? ""
+  );
 }
 
 /** Builds the message and base64url-encodes it for the Gmail API's `raw` field. */
@@ -66,8 +88,6 @@ export function buildRawEmail(parts: EmailParts): string {
     `Subject: ${encodeHeader(sanitizeHeader(parts.subject))}`,
     `Message-ID: ${parts.messageId}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
   ];
 
   if (parts.replyTo) headers.splice(1, 0, `Reply-To: ${sanitizeHeader(parts.replyTo)}`);
@@ -78,13 +98,40 @@ export function buildRawEmail(parts: EmailParts): string {
     headers.push(`References: ${parts.references.join(CRLF + " ")}`);
   }
 
-  // Base64 body must be wrapped at 76 chars per line.
-  const body =
-    Buffer.from(parts.bodyText, "utf8")
-      .toString("base64")
-      .match(/.{1,76}/g)
-      ?.join(CRLF) ?? "";
+  let message: string;
 
-  const message = headers.join(CRLF) + CRLF + CRLF + body;
+  if (parts.bodyHtml) {
+    // Random boundary so it can't collide with content. Base64 bodies can
+    // only contain the base64 alphabet, so a hex boundary is unambiguous.
+    const boundary = `=_blk_${crypto.randomBytes(16).toString("hex")}`;
+    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+
+    // Least-capable part first: clients pick the last part they can render,
+    // so text/plain must precede text/html.
+    const parts_ = [
+      [
+        `--${boundary}`,
+        'Content-Type: text/plain; charset="UTF-8"',
+        "Content-Transfer-Encoding: base64",
+        "",
+        base64Body(parts.bodyText),
+      ].join(CRLF),
+      [
+        `--${boundary}`,
+        'Content-Type: text/html; charset="UTF-8"',
+        "Content-Transfer-Encoding: base64",
+        "",
+        base64Body(parts.bodyHtml),
+      ].join(CRLF),
+      `--${boundary}--`,
+    ];
+
+    message = headers.join(CRLF) + CRLF + CRLF + parts_.join(CRLF) + CRLF;
+  } else {
+    headers.push('Content-Type: text/plain; charset="UTF-8"');
+    headers.push("Content-Transfer-Encoding: base64");
+    message = headers.join(CRLF) + CRLF + CRLF + base64Body(parts.bodyText);
+  }
+
   return Buffer.from(message, "utf8").toString("base64url");
 }
