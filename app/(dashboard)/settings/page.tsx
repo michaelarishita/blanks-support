@@ -2,6 +2,9 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import GmailConnect from "@/components/GmailConnect";
 import QueuedReplies from "@/components/QueuedReplies";
+import SignatureEditor from "@/components/SignatureEditor";
+import CompanyBrandEditor from "@/components/CompanyBrandEditor";
+import { getCompanySettings } from "@/lib/settings";
 import {
   getConnectionForAgent,
   getSupportInboxConnection,
@@ -21,7 +24,7 @@ export default async function SettingsPage({
 
   const { data: me } = await supabase
     .from("agents")
-    .select("id, name, email, role, gmail_connected")
+    .select("id, name, email, role, gmail_connected, title, phone, signature_enabled")
     .eq("id", user.id)
     .single();
 
@@ -31,6 +34,7 @@ export default async function SettingsPage({
 
   // Token rows are admin-only under RLS, so these go through the service-role
   // client on the server. Only the account address ever reaches the browser.
+  const company = await getCompanySettings();
   const connection = await getConnectionForAgent(user.id);
   const supportInbox = me?.role === "admin" ? await getSupportInboxConnection() : null;
 
@@ -72,6 +76,40 @@ export default async function SettingsPage({
           configured={configured}
         />
       </section>
+
+      <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+          Signature
+        </h2>
+        <p className="mb-4 mt-1 text-sm text-gray-600">
+          Appended to your outbound email when it&apos;s sent, so edits apply to
+          future mail without changing what&apos;s already in a thread.
+        </p>
+        {me && (
+          <SignatureEditor
+            agent={{
+              name: me.name,
+              title: me.title ?? null,
+              phone: me.phone ?? null,
+              signature_enabled: me.signature_enabled ?? true,
+            }}
+            company={company}
+          />
+        )}
+      </section>
+
+      {me?.role === "admin" && (
+        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+            Company branding
+          </h2>
+          <p className="mb-4 mt-1 text-sm text-gray-600">
+            Shared across everyone&apos;s signature. Admin-only, so one agent
+            can&apos;t break brand consistency for the team.
+          </p>
+          <CompanyBrandEditor company={company} />
+        </section>
+      )}
 
       {me?.role === "admin" && (
         <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
