@@ -54,6 +54,7 @@ export interface Message {
   type: "public" | "internal_note";
   agent_id: string | null;
   body_text: string;
+  body_html: string | null;
   delivery_status: string;
   created_at: string;
   agent?: Agent | null;

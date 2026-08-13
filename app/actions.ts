@@ -100,6 +100,27 @@ export async function sendReply(ticketId: string, body: string, isNote: boolean)
   return { ok: true };
 }
 
+/** Re-attempts delivery of a reply that failed to send. */
+export async function retryDelivery(messageId: string) {
+  const { supabase } = await requireAgent();
+
+  // Read through the agent's own client so RLS decides visibility before we
+  // hand the id to the service-role delivery path.
+  const { data: message } = await supabase
+    .from("messages")
+    .select("id, ticket_id")
+    .eq("id", messageId)
+    .single();
+  if (!message) return { error: "Message not found" };
+
+  const result = await deliverMessage(messageId);
+  revalidatePath(`/tickets/${message.ticket_id}`);
+  revalidatePath("/inbox");
+
+  if (!result.ok) return { error: result.error };
+  return { ok: true };
+}
+
 export async function setStatus(ticketId: string, status: TicketStatus) {
   const { supabase, userId } = await requireAgent();
   const { error } = await supabase

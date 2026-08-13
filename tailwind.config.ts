@@ -3,6 +3,20 @@ import type { Config } from "tailwindcss";
 // Every value here points at a token in app/globals.css. Adding a raw hex or
 // px value to this file (or to a component) means the token layer has a gap —
 // fill the gap instead.
+//
+// Tokens are RGB channels, referenced as `rgb(var(--x) / <alpha-value>)` so
+// Tailwind's opacity modifiers (bg-gray-900/96, ring-brand-400/60) compile
+// correctly. A bare `var(--x)` would silently drop the alpha.
+const channel = (name: string) => `rgb(var(--${name}) / <alpha-value>)`;
+
+const ramp = (prefix: string) =>
+  Object.fromEntries(
+    [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map((step) => [
+      step,
+      channel(`${prefix}-${step}`),
+    ])
+  );
+
 const config: Config = {
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
@@ -13,80 +27,45 @@ const config: Config = {
     extend: {
       colors: {
         // Replaces Tailwind's default neutral so there is exactly one ramp.
-        gray: {
-          50: "var(--gray-50)",
-          100: "var(--gray-100)",
-          200: "var(--gray-200)",
-          300: "var(--gray-300)",
-          400: "var(--gray-400)",
-          500: "var(--gray-500)",
-          600: "var(--gray-600)",
-          700: "var(--gray-700)",
-          800: "var(--gray-800)",
-          900: "var(--gray-900)",
-          950: "var(--gray-950)",
-        },
-        // The brand accent. Also aliased as `amber` so pre-existing amber-*
-        // classes pick up the real brand yellow rather than Tailwind's orange.
-        brand: {
-          50: "var(--brand-50)",
-          100: "var(--brand-100)",
-          200: "var(--brand-200)",
-          300: "var(--brand-300)",
-          400: "var(--brand-400)",
-          500: "var(--brand-500)",
-          600: "var(--brand-600)",
-          700: "var(--brand-700)",
-          800: "var(--brand-800)",
-          900: "var(--brand-900)",
-          950: "var(--brand-950)",
-        },
-        amber: {
-          50: "var(--brand-50)",
-          100: "var(--brand-100)",
-          200: "var(--brand-200)",
-          300: "var(--brand-300)",
-          400: "var(--brand-400)",
-          500: "var(--brand-500)",
-          600: "var(--brand-600)",
-          700: "var(--brand-700)",
-          800: "var(--brand-800)",
-          900: "var(--brand-900)",
-          950: "var(--brand-950)",
-        },
+        gray: ramp("gray"),
+        brand: ramp("brand"),
+        // Aliased so pre-existing amber-* classes pick up the real brand
+        // yellow rather than Tailwind's orange.
+        amber: ramp("brand"),
+        panel: channel("panel"),
         success: {
-          bg: "var(--success-bg)",
-          border: "var(--success-border)",
-          text: "var(--success-text)",
+          bg: channel("success-bg"),
+          border: channel("success-border"),
+          text: channel("success-text"),
         },
         warning: {
-          bg: "var(--warning-bg)",
-          border: "var(--warning-border)",
-          text: "var(--warning-text)",
+          bg: channel("warning-bg"),
+          border: channel("warning-border"),
+          text: channel("warning-text"),
         },
         danger: {
-          bg: "var(--danger-bg)",
-          border: "var(--danger-border)",
-          text: "var(--danger-text)",
+          bg: channel("danger-bg"),
+          border: channel("danger-border"),
+          text: channel("danger-text"),
         },
         info: {
-          bg: "var(--info-bg)",
-          border: "var(--info-border)",
-          text: "var(--info-text)",
+          bg: channel("info-bg"),
+          border: channel("info-border"),
+          text: channel("info-text"),
         },
       },
       backgroundColor: {
-        surface: "var(--surface)",
-        panel: "var(--panel)",
+        surface: channel("surface"),
+        panel: channel("panel"),
       },
       borderColor: {
-        subtle: "var(--border-subtle)",
-        strong: "var(--border-strong)",
+        subtle: channel("border-subtle"),
+        strong: channel("border-strong"),
       },
       textColor: {
-        primary: "var(--text-primary)",
-        secondary: "var(--text-secondary)",
-        tertiary: "var(--text-tertiary)",
+        primary: channel("text-primary"),
+        secondary: channel("text-secondary"),
+        tertiary: channel("text-tertiary"),
       },
       fontSize: {
         display: ["24px", { lineHeight: "1.2", letterSpacing: "-0.02em" }],
@@ -100,6 +79,7 @@ const config: Config = {
         sm: "6px",
         md: "8px",
         lg: "12px",
+        bubble: "14px",
       },
       boxShadow: {
         sm: "var(--shadow-sm)",

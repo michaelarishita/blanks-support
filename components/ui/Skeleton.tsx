@@ -9,7 +9,8 @@ export default function Skeleton({ className }: { className?: string }) {
         "rounded-sm bg-gray-200",
         // Shimmer rather than pulse — it reads as "loading" instead of
         // "disabled". The reduced-motion rule in globals.css stops it.
-        "bg-[linear-gradient(90deg,var(--gray-200)_25%,var(--gray-100)_37%,var(--gray-200)_63%)]",
+        // Tokens are RGB channels, so they need wrapping in rgb() here.
+        "bg-[linear-gradient(90deg,rgb(var(--gray-200))_25%,rgb(var(--gray-100))_37%,rgb(var(--gray-200))_63%)]",
         "bg-[length:200%_100%] animate-shimmer",
         className
       )}
