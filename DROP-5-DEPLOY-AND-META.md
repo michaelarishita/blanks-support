@@ -51,7 +51,10 @@ Then: Add New → Project → import `michaelarishita/blanks-support`.
 | `NEXT_PUBLIC_MAIL_POLL_SECONDS` | unset in production (Pub/Sub takes over) |
 | `CRON_SECRET` | new random value; guards the cron endpoints |
 | `IGNORED_SENDER_EMAILS` | `support@blankssportsnutrition.com` — senders dropped rather than ticketed, for the Gorgias parallel run |
-| `GOOGLE_PUBSUB_TOPIC` | set in A3 |
+| `GMAIL_PUBSUB_TOPIC` | set in A3. NOTE: `GMAIL_`, not `GOOGLE_` — an earlier draft of this table had it wrong, and the wrong name fails silently as "GMAIL_PUBSUB_TOPIC is not set" from the watch-renewal cron |
+| `GMAIL_WEBHOOK_TOKEN` | new random value. REQUIRED in production: the Pub/Sub endpoint accepts any caller when it is unset |
+| `ALERT_EMAIL` | michael@blankssportsnutrition.com — where inbound-down alerts go |
+| `WIDGET_ALLOWED_ORIGINS` | `https://blankssportsnutrition.com,https://www.blankssportsnutrition.com` plus the Shopify storefront domain if the site is served from one |
 
 Deploy. Confirm green, then Settings → Domains → add
 `support.blankssportsnutrition.com` (the GoDaddy CNAME already exists from

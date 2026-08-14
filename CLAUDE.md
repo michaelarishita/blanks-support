@@ -69,8 +69,8 @@ The plan when the owner wants to go live again:
    (`__dirname is not defined` / MIDDLEWARE_INVOCATION_FAILED).
 2. Delete the old `blanks-support` Vercel project entirely (its build cache
    is poisoned) and re-import fresh from GitHub.
-3. Env vars on Vercel: NEXT_PUBLIC_SUPABASE_URL,
-   NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY.
+3. Env vars on Vercel — the authoritative list is the table in
+   DROP-5-DEPLOY-AND-META.md A1; `.env.example` documents every one.
 4. Domain support.blankssportsnutrition.com — GoDaddy CNAME already exists.
 5. Supabase Auth → URL Configuration: set Site URL to the production domain.
 6. Env vars added since Phase 2: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
@@ -81,7 +81,8 @@ The plan when the owner wants to go live again:
    OAuth token becomes undecryptable and all agents must reconnect.
 7. Add the production callback to the Google OAuth client:
    https://support.blankssportsnutrition.com/api/google/callback
-8. Run migrations 0002–0005 against the production Supabase project.
+8. Run migrations 0002–0006 against the production Supabase project. The
+   dashboard shows a banner listing any that are missing.
 
 ### Turning on inbound push (production only)
 
