@@ -4,10 +4,41 @@ Natively hosted help desk for Blanks Sports Nutrition (replaces Gorgias).
 Will live at support.blankssportsnutrition.com. Built like the other Blanks
 apps (blanks-crm, blanks-athletes-portal): Next.js 16 + React 19 + Supabase.
 
+## Hard rules (non-negotiable)
+
+**1. The pre-commit gate is a single `&&` chain.**
+
+```
+npm run build && npm test && git commit ...
+```
+
+Never `npm run build; npm test && git commit`. With `;` the build's exit
+status is discarded and a failing typecheck commits anyway — that has already
+happened once. The same applies to piping the build through `grep` to read its
+output: `grep`'s exit status replaces the build's, so the chain succeeds even
+when the build failed. If you need to filter build output, run the gate first
+and inspect afterwards.
+
+**2. Test globs must cover every extension the suite uses.**
+
+`vitest.config.mts` `include` is `tests/**/*.test.{ts,tsx}`. It was
+`*.test.ts`, which silently skipped a whole `.tsx` file — the run reported
+green having executed none of it. A green run that executed zero of the new
+tests is worse than a red one, because it is trusted.
+
+When adding a file type, verify the glob picks it up before trusting the
+count: note the test count before and after, and confirm it moved by the
+number of tests actually added.
+
+**Corollary for both:** a test that has never failed has not been shown to
+work. When adding a regression test, reintroduce the bug, watch it fail, then
+revert — as done for the orphaned-author hydration fix.
+
 ## Commands
 
 - `npm run dev` — dev server on localhost:3000 (Turbopack)
 - `npm run build` — production build; must pass before any commit is pushed
+- `npm test` — vitest; must pass before any commit is pushed
 - Node 22+ preferred (`nvm use 22`); Node 20 works but Supabase libs warn
 
 ## Current state (Phase 1 — DONE, working locally)
