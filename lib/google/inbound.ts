@@ -73,6 +73,25 @@ async function ourOwnAddresses(supportAddress: string): Promise<Set<string>> {
 }
 
 /**
+ * Additional senders to ignore, from IGNORED_SENDER_EMAILS.
+ *
+ * Exists for the Gorgias parallel run: support@ still routes to the old
+ * help desk, and a reply an agent sends from there can land in the watched
+ * mailbox. Without this it would be read as a customer message and open a
+ * ticket answering ourselves.
+ *
+ * Exported and pure so the parsing is testable without a mailbox.
+ */
+export function parseIgnoredSenders(raw: string | undefined): Set<string> {
+  return new Set(
+    (raw ?? "")
+      .split(",")
+      .map((address) => address.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+/**
  * Finds the ticket an incoming message belongs to.
  *
  * Precedence matters: the [BLK-n] token is checked first because it survives
@@ -438,6 +457,7 @@ export async function syncSupportMailbox(
 
   const admin = createAdminClient();
   const ourAddresses = await ourOwnAddresses(connection.account_ref);
+  const ignoredSenders = parseIgnoredSenders(process.env.IGNORED_SENDER_EMAILS);
 
   // Drop ids we've already stored before spending a fetch on each one.
   const uniqueIds = [...new Set(collected.ids)];
@@ -462,8 +482,19 @@ export async function syncSupportMailbox(
         countSkip(result, `automated (${parsed.autoReplyReason})`);
         continue;
       }
-      if (!parsed.fromEmail || ourAddresses.has(parsed.fromEmail)) {
+      if (!parsed.fromEmail) {
+        countSkip(result, "no sender address");
+        continue;
+      }
+      if (ourAddresses.has(parsed.fromEmail)) {
         countSkip(result, "our own address");
+        continue;
+      }
+      // parsed.fromEmail is already lowercased by parseAddress, and the
+      // configured list is lowercased on parse, so this match is
+      // case-insensitive on both sides.
+      if (ignoredSenders.has(parsed.fromEmail)) {
+        countSkip(result, `ignored sender (${parsed.fromEmail})`);
         continue;
       }
 

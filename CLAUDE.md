@@ -115,8 +115,11 @@ connected, watched, or otherwise touched by this app.
 - Inbound: `lib/google/inbound.ts` syncs the support mailbox. Routing
   precedence is token → References → thread id → sender+subject+recency, and
   the matched path is recorded in ticket_events. Loop protection drops
-  automated mail and anything from our own addresses; the unique index on
-  gmail_message_id absorbs Pub/Sub redelivery.
+  automated mail, anything from our own addresses (agents, SUPPORT_EMAIL, the
+  connected mailbox), and any address listed in `IGNORED_SENDER_EMAILS`
+  (comma-separated, case-insensitive — seeded with support@ for the Gorgias
+  parallel run). The unique index on gmail_message_id absorbs Pub/Sub
+  redelivery. Every skip is counted and shown by "Check mail now".
 - Dev vs prod: locally the dashboard polls (NEXT_PUBLIC_MAIL_POLL_SECONDS) and
   Settings has "Check mail now". Production uses Pub/Sub push to
   `/api/webhooks/gmail`. Same sync either way.

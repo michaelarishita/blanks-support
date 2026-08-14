@@ -50,6 +50,7 @@ Then: Add New → Project → import `michaelarishita/blanks-support`.
 | `NEXT_PUBLIC_SITE_URL` | `https://support.blankssportsnutrition.com` — pins OAuth redirect + the absolute logo URL in email |
 | `NEXT_PUBLIC_MAIL_POLL_SECONDS` | unset in production (Pub/Sub takes over) |
 | `CRON_SECRET` | new random value; guards the cron endpoints |
+| `IGNORED_SENDER_EMAILS` | `support@blankssportsnutrition.com` — senders dropped rather than ticketed, for the Gorgias parallel run |
 | `GOOGLE_PUBSUB_TOPIC` | set in A3 |
 
 Deploy. Confirm green, then Settings → Domains → add
