@@ -13,7 +13,7 @@ export const STATE_COOKIE = "blanks_g_oauth";
 /**
  * Kicks off the Google consent flow.
  *   /api/google/connect                → connect the signed-in agent's own Gmail
- *   /api/google/connect?mode=support   → connect the shared support@ mailbox (admins)
+ *   /api/google/connect?mode=support   → connect the shared support mailbox (admins)
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();

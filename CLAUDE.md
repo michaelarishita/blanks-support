@@ -97,14 +97,19 @@ Inbound works locally by polling. Push needs Google Cloud wiring:
 
 ### Phase 2 — Gmail (DONE, local only)
 Replies send as real email from the responding agent's own Gmail, and mail to
-support@ becomes tickets.
+hello@blankssportsnutrition.com becomes tickets.
+
+**The watched mailbox is hello@, not support@.** support@ still routes to
+Melissa's existing setup for the duration of the parallel run and must not be
+connected, watched, or otherwise touched by this app.
 
 - Per-agent OAuth at Settings → Your Gmail. Refresh tokens are AES-256-GCM
   encrypted in `oauth_tokens` (admin-only under RLS; every read/write goes
   through the service-role client, so token material never reaches a browser).
 - Outbound: multipart/alternative branded email, threaded via
-  In-Reply-To/References plus a `[BLK-n]` subject token, `Reply-To: support@`
-  so customer replies reach the shared inbox rather than one agent's mailbox.
+  In-Reply-To/References plus a `[BLK-n]` subject token, `Reply-To: hello@`
+  (SUPPORT_EMAIL) so customer replies reach the shared inbox rather than one
+  agent's mailbox.
   delivery_status goes queued → sent | failed, and failures are retryable from
   the thread and from Settings.
 - Inbound: `lib/google/inbound.ts` syncs the support mailbox. Routing

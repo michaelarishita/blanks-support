@@ -46,7 +46,7 @@ Then: Add New → Project → import `michaelarishita/blanks-support`.
 | `GOOGLE_CLIENT_ID` | Google Cloud → Credentials |
 | `GOOGLE_CLIENT_SECRET` | same |
 | `TOKEN_ENCRYPTION_KEY` | **COPY the local value verbatim. Do not regenerate.** Regenerating makes every stored Gmail token undecryptable and forces all agents (and the support mailbox) to reconnect. |
-| `SUPPORT_EMAIL` | support@blankssportsnutrition.com |
+| `SUPPORT_EMAIL` | hello@blankssportsnutrition.com — NOT support@, which still routes to Melissa's existing setup during the parallel run |
 | `NEXT_PUBLIC_SITE_URL` | `https://support.blankssportsnutrition.com` — pins OAuth redirect + the absolute logo URL in email |
 | `NEXT_PUBLIC_MAIL_POLL_SECONDS` | unset in production (Pub/Sub takes over) |
 | `CRON_SECRET` | new random value; guards the cron endpoints |
@@ -110,7 +110,7 @@ Local polling doesn't exist in production; Gmail pushes instead.
 1. Sign in at the real domain.
 2. Submit through `/widget` → ticket appears.
 3. Reply → branded email arrives; check desktop + mobile.
-4. Email support@ from a personal address → ticket appears **without**
+4. Email hello@ from a personal address → ticket appears **without**
    clicking anything (this proves Pub/Sub, not polling).
 5. Customer replies → threads into the same ticket.
 6. Reconnect each agent's Gmail on the production domain (tokens are

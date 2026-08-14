@@ -32,6 +32,9 @@ export default async function SettingsPage({
   const configured = Boolean(
     process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
   );
+  // Read from config rather than hardcoded: which mailbox is "the support
+  // mailbox" is a deployment decision, and it has already changed once.
+  const supportAddress = process.env.SUPPORT_EMAIL ?? "the support mailbox";
 
   // Token rows are admin-only under RLS, so these go through the service-role
   // client on the server. Only the account address ever reaches the browser.
@@ -131,8 +134,9 @@ export default async function SettingsPage({
             Support mailbox
           </h2>
           <p className="mb-4 mt-1 text-sm text-gray-600">
-            The shared inbox that incoming customer email is pulled from. Connect
-            it once, as an admin.
+            The shared inbox that incoming customer email is pulled from —
+            currently <span className="font-medium">{supportAddress}</span>.
+            Connect it once, as an admin.
           </p>
           {supportInbox ? (
             <div className="flex items-center justify-between gap-4">
@@ -164,7 +168,7 @@ export default async function SettingsPage({
                     : "pointer-events-none bg-gray-200 text-gray-400"
                 }`}
               >
-                Connect support@
+                Connect {supportAddress}
               </a>
             </div>
           )}

@@ -95,7 +95,7 @@ public/widget.js          # embeddable loader for the marketing site
 
 ## Roadmap (from the schematic)
 
-- **Phase 2 — Gmail:** per-agent OAuth, replies sent from the agent's own Gmail, support@ inbox watch (Pub/Sub) → tickets. `delivery_status` on messages is already `queued` for public replies, ready for the send worker.
+- **Phase 2 — Gmail:** per-agent OAuth, replies sent from the agent's own Gmail, hello@ inbox watch (Pub/Sub) → tickets. `delivery_status` on messages is already `queued` for public replies, ready for the send worker.
 - **Phase 3 — Instagram + Messenger:** Meta app webhooks → tickets, reply + mark-as-read, 24h window handling. `meta_conversation_id` / `meta_message_id` columns are in place.
 - **Phase 4 — Shopify sidebar:** order history + macro variables (`{{order.tracking_url}}`). The side panel has a placeholder slot.
 - **Phase 5 — CSAT, reporting, Ike export:** `csat_surveys`-style additions, analytics, JSONL export with PII scrubbing (`exports` table exists).

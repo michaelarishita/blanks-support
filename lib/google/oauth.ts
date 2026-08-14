@@ -16,7 +16,7 @@ export const AGENT_SCOPES = [
 ];
 
 /**
- * Scopes for the shared support@ mailbox. gmail.modify covers reading history,
+ * Scopes for the shared support mailbox. gmail.modify covers reading history,
  * fetching messages, and marking them read; it is also the minimum scope that
  * users.watch accepts.
  */

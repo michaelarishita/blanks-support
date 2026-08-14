@@ -96,14 +96,14 @@ describe("buildRawEmail headers", () => {
     const message = decode(
       buildRawEmail({
         ...base,
-        replyTo: "support@blankssportsnutrition.com",
+        replyTo: "hello@blankssportsnutrition.com",
         inReplyTo: "<prev@example.com>",
         references: ["<first@example.com>", "<prev@example.com>"],
       })
     );
     expect(message).toMatch(/^In-Reply-To: <prev@example\.com>$/m);
     expect(message).toContain("References: <first@example.com>\r\n <prev@example.com>");
-    expect(message).toMatch(/^Reply-To: support@blankssportsnutrition\.com$/m);
+    expect(message).toMatch(/^Reply-To: hello@blankssportsnutrition\.com$/m);
   });
 });
 
