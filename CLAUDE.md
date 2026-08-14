@@ -139,11 +139,26 @@ connected, watched, or otherwise touched by this app.
   encrypted in `oauth_tokens` (admin-only under RLS; every read/write goes
   through the service-role client, so token material never reaches a browser).
 - Outbound: multipart/alternative branded email, threaded via
-  In-Reply-To/References plus a `[BLK-n]` subject token, `Reply-To: hello@`
-  (SUPPORT_EMAIL) so customer replies reach the shared inbox rather than one
-  agent's mailbox.
-  delivery_status goes queued → sent | failed, and failures are retryable from
-  the thread and from Settings.
+  In-Reply-To/References plus a `[BLK-n]` subject token. delivery_status goes
+  queued → sent | failed, and failures are retryable from the thread and from
+  Settings. Below the reply and signature, the previous message is quoted in
+  the standard `On <date>, <name> wrote:` + blockquote form (and with `>`
+  prefixes in the plain-text part).
+
+**From / Reply-To — deliberate, do not "fix" this:**
+
+| Header | Value | Why |
+|---|---|---|
+| `From` | the replying agent's own Gmail | The customer gets a reply from a person, not a shared alias. It also means the send is authorised as that agent, so it lands in their Sent folder. |
+| `Reply-To` | SUPPORT_EMAIL (hello@) | Without it, a customer's reply goes back to one agent's personal mailbox — which the inbound watch does not read — and would never become a ticket. |
+
+The two must stay different. Setting `From` to hello@ would lose the personal
+sender; dropping `Reply-To` would silently break inbound threading, and it
+would break it only for replies, which is the hardest kind of gap to notice.
+
+Consequence worth knowing: because `From` is per-agent, a Gmail thread
+belongs to whichever mailbox created it — hence `tickets.gmail_account_ref`
+and the 404-retry fallback in `deliverMessage`.
 - Inbound: `lib/google/inbound.ts` syncs the support mailbox. Routing
   precedence is token → References → thread id → sender+subject+recency, and
   the matched path is recorded in ticket_events. Loop protection drops

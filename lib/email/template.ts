@@ -26,6 +26,55 @@ export interface SignatureAgent {
   phone: string | null;
 }
 
+/** The message being replied to, quoted beneath the reply for context. */
+export interface QuotedHistory {
+  authorName: string;
+  authorEmail: string | null;
+  date: Date;
+  /** Already-sanitized HTML of the quoted message, when it had any. */
+  html: string | null;
+  /** Plain text of the quoted message. */
+  text: string;
+}
+
+/** Quoted history is capped so a long thread can't grow without bound. */
+const MAX_QUOTED_CHARS = 5000;
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * `On Thu, 14 Aug 2026 at 10:04, Ike <ike@x.com> wrote:`
+ *
+ * Two hard constraints, both from our own inbound parser:
+ * - it must be ONE line ending in `wrote:`, because splitQuotedText matches
+ *   /^\s*On .*wrote\s*:\s*$/ and a wrapped attribution would not be
+ *   recognised as the start of quoted history;
+ * - it is built from UTC parts rather than toLocaleString so the output is
+ *   deterministic across machines and test runs.
+ */
+export function formatQuoteAttribution(quoted: QuotedHistory): string {
+  const d = quoted.date;
+  const stamp =
+    `${WEEKDAYS[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ` +
+    `${d.getUTCFullYear()} at ${String(d.getUTCHours()).padStart(2, "0")}:` +
+    `${String(d.getUTCMinutes()).padStart(2, "0")}`;
+
+  // Strip CR/LF from the name: it lands in a single-line attribution, and a
+  // newline there would break the marker the parser looks for.
+  const name = quoted.authorName.replace(/[\r\n]+/g, " ").trim();
+  const who = quoted.authorEmail ? `${name} <${quoted.authorEmail}>` : name;
+  return `On ${stamp}, ${who} wrote:`;
+}
+
+function clampQuoted(text: string): string {
+  if (text.length <= MAX_QUOTED_CHARS) return text;
+  return `${text.slice(0, MAX_QUOTED_CHARS)}\n[… earlier messages trimmed]`;
+}
+
 export const DEFAULT_COMPANY: CompanySettings = {
   company_name: "Blank's Sports Nutrition",
   website: "https://blankssportsnutrition.com",
@@ -155,17 +204,39 @@ function renderSignature(agent: SignatureAgent, company: CompanySettings): strin
  * Full HTML email. `bodyHtml` must already be sanitized — this function
  * escapes the signature fields but treats the reply body as trusted markup.
  */
+function renderQuoted(quoted: QuotedHistory): string {
+  const attribution = escapeHtml(formatQuoteAttribution(quoted));
+  // Prefer the original markup; fall back to escaped text with line breaks.
+  const inner = quoted.html
+    ? clampQuoted(quoted.html)
+    : escapeHtml(clampQuoted(quoted.text)).replace(/\n/g, "<br />");
+
+  return `
+      <tr>
+        <td style="padding:20px 0 0 0;background-color:#ffffff;color:${MUTED};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;">
+          ${attribution}
+          <blockquote style="margin:8px 0 0 0;padding:0 0 0 12px;border-left:2px solid ${RULE};background-color:#ffffff;color:${MUTED};font-size:13px;line-height:1.5;">
+${inner}
+          </blockquote>
+        </td>
+      </tr>`;
+}
+
 export function renderEmailHtml({
   bodyHtml,
   agent,
   company,
+  quoted,
 }: {
   bodyHtml: string;
   /** Null to send without a signature. */
   agent: SignatureAgent | null;
   company: CompanySettings;
+  /** Prior message quoted beneath the reply; omit on a first contact. */
+  quoted?: QuotedHistory | null;
 }): string {
   const signature = agent ? renderSignature(agent, company) : "";
+  const history = quoted ? renderQuoted(quoted) : "";
 
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -188,7 +259,7 @@ export function renderEmailHtml({
                 <td style="padding:0;background-color:#ffffff;color:${TEXT};font-size:15px;line-height:1.6;">
 ${bodyHtml}
                 </td>
-              </tr>${signature}
+              </tr>${signature}${history}
             </table>
           </td>
         </tr>
@@ -208,10 +279,12 @@ export function renderEmailText({
   bodyHtml,
   agent,
   company,
+  quoted,
 }: {
   bodyHtml: string;
   agent: SignatureAgent | null;
   company: CompanySettings;
+  quoted?: QuotedHistory | null;
 }): string {
   const lines = [htmlToPlainText(bodyHtml)];
 
@@ -224,6 +297,19 @@ export function renderEmailText({
       block.push(company.website_label || company.website);
     }
     lines.push("--", block.join("\n"));
+  }
+
+  if (quoted) {
+    const quotedText = clampQuoted(
+      quoted.html ? htmlToPlainText(quoted.html) : quoted.text
+    );
+    // "> " on every line, including blanks, is what mail clients emit and
+    // what our own inbound stripping recognises.
+    const body = quotedText
+      .split("\n")
+      .map((line) => (line.trim() ? `> ${line}` : ">"))
+      .join("\n");
+    lines.push(`${formatQuoteAttribution(quoted)}\n${body}`);
   }
 
   return lines.join("\n\n").trim();

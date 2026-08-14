@@ -4,10 +4,14 @@ import {
   buildReplySubject,
   generateMessageId,
 } from "@/lib/email/mime";
-import { renderEmailHtml, renderEmailText } from "@/lib/email/template";
+import {
+  renderEmailHtml,
+  renderEmailText,
+  type QuotedHistory,
+} from "@/lib/email/template";
 import { getCompanySettings } from "@/lib/settings";
 import { sanitizeRichText } from "@/lib/html";
-import { AUTHOR_FALLBACK } from "@/lib/display";
+import { AUTHOR_FALLBACK, customerDisplayName } from "@/lib/display";
 import { sendGmailMessage } from "./gmail";
 import {
   getAccessToken,
@@ -24,10 +28,14 @@ export type DeliveryResult =
   | { ok: false; error: string };
 
 /**
- * Where customer replies should land. The agent sends from their own address,
- * but replying to that would drop the conversation into one person's personal
- * mailbox — which the inbound watch doesn't read. Reply-To routes it back to
- * the shared inbox instead.
+ * Where customer replies should land.
+ *
+ * DELIBERATE ASYMMETRY, documented in CLAUDE.md: `From` is the replying
+ * agent's own address so the customer hears from a person, while `Reply-To`
+ * is the shared mailbox. Without the split, a reply would go back to one
+ * agent's personal inbox — which the inbound watch does not read — and would
+ * never become a ticket. Making them the same address breaks one half or the
+ * other, and the Reply-To half fails silently.
  */
 async function resolveReplyTo(): Promise<string | null> {
   if (process.env.SUPPORT_EMAIL) return process.env.SUPPORT_EMAIL;
@@ -104,7 +112,7 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
     // Must stay a single string literal — Supabase parses the select at the
     // type level, and concatenation collapses the result to a generic error.
     .select(
-      "id, ticket_id, direction, type, agent_id, body_text, body_html, delivery_status, agent:agents(id, name, email, title, phone, signature_enabled)"
+      "id, ticket_id, direction, type, agent_id, body_text, body_html, delivery_status, created_at, agent:agents(id, name, email, title, phone, signature_enabled)"
     )
     .eq("id", messageId)
     .single();
@@ -149,6 +157,7 @@ type LoadedMessage = {
   agent_id: string | null;
   body_text: string;
   body_html: string | null;
+  created_at: string;
   agent: unknown;
 };
 
@@ -240,6 +249,37 @@ async function deliverLoadedMessage(message: LoadedMessage): Promise<DeliveryRes
         )
         .join('</p><p style="margin:0 0 12px 0;">')}</p>`;
 
+  // The message immediately before this one, quoted beneath the reply so the
+  // customer sees what is being answered.
+  const { data: previous } = await admin
+    .from("messages")
+    .select("direction, type, body_text, body_html, created_at, agent:agents(name)")
+    .eq("ticket_id", ticket.id)
+    .eq("type", "public")
+    .lt("created_at", message.created_at)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let quoted: QuotedHistory | null = null;
+  if (previous) {
+    const previousAgent = (
+      Array.isArray(previous.agent) ? previous.agent[0] : previous.agent
+    ) as { name: string } | null;
+    const wasOutbound = previous.direction === "outbound";
+    quoted = {
+      authorName: wasOutbound
+        ? (previousAgent?.name ?? AUTHOR_FALLBACK)
+        : customerDisplayName(customer),
+      // Our own side is quoted without an address; the customer's own address
+      // back at them is what a mail client would show.
+      authorEmail: wasOutbound ? null : (customer?.email ?? null),
+      date: new Date(previous.created_at),
+      html: previous.body_html ? sanitizeRichText(previous.body_html) : null,
+      text: previous.body_text,
+    };
+  }
+
   const company = await getCompanySettings();
   // The signature is applied at send time and never stored on the message, so
   // edits apply to future mail without rewriting thread history.
@@ -248,8 +288,18 @@ async function deliverLoadedMessage(message: LoadedMessage): Promise<DeliveryRes
       ? { name: agent.name, title: agent.title, phone: agent.phone }
       : null;
 
-  const htmlEmail = renderEmailHtml({ bodyHtml, agent: signatureAgent, company });
-  const textEmail = renderEmailText({ bodyHtml, agent: signatureAgent, company });
+  const htmlEmail = renderEmailHtml({
+    bodyHtml,
+    agent: signatureAgent,
+    company,
+    quoted,
+  });
+  const textEmail = renderEmailText({
+    bodyHtml,
+    agent: signatureAgent,
+    company,
+    quoted,
+  });
 
   // Only reuse the Gmail thread when it belongs to the mailbox now sending.
   // Null ownership means the row predates the column: attempt it, and let the
