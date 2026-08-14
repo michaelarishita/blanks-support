@@ -5,7 +5,11 @@ import ReplyBox from "@/components/ReplyBox";
 import TicketHeader from "@/components/TicketHeader";
 import TicketSidePanel from "@/components/TicketSidePanel";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
-import { canEmail, resolveSender } from "@/lib/google/outbound";
+import {
+  canEmail,
+  reconcileStuckSends,
+  resolveSender,
+} from "@/lib/google/outbound";
 import type { Ticket, Message, Agent, Tag } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +21,10 @@ export default async function TicketPage({
 }) {
   const { id } = await params;
   const supabase = await createClient();
+
+  // Sweep abandoned sends before reading the thread, so a reply whose send
+  // never completed shows "Failed — retry" rather than "Sending" forever.
+  await reconcileStuckSends(id);
 
   const {
     data: { user },

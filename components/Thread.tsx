@@ -168,7 +168,11 @@ export default function Thread({
         const previous = i > 0 ? messages[i - 1] : null;
         const isNote = m.type === "internal_note";
         const isAgent = m.direction === "outbound";
-        const author = isAgent ? (m.agent?.name ?? "Agent") : customerName;
+        // An outbound message can lose its agent: agents.id is ON DELETE SET
+        // NULL, so removing a teammate's account orphans their replies. Fall
+        // back to the same name the customer saw in the From line rather than
+        // the bare word "Agent".
+        const author = isAgent ? (m.agent?.name ?? "Blanks Support") : customerName;
 
         const showDivider =
           !previous || dayLabel(previous.created_at) !== dayLabel(m.created_at);

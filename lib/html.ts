@@ -44,7 +44,11 @@ const DROP_WITH_CONTENT = new Set([
   "title",
 ]);
 
-/** Escapes text for insertion between tags. */
+/**
+ * Escapes PLAIN TEXT for insertion between tags. Every `&` becomes `&amp;`,
+ * which is correct for a value that was never HTML — a signature field, a
+ * company name — where a literal ampersand must survive as one.
+ */
 export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -52,12 +56,39 @@ export function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
-/** Escapes text for insertion inside a double-quoted attribute. */
+/** Escapes plain text for insertion inside a double-quoted attribute. */
 export function escapeAttribute(value: string): string {
   return escapeHtml(value).replace(/"/g, "&quot;");
 }
 
-const escapeText = escapeHtml;
+// A complete character reference: named, decimal, or hexadecimal.
+const ENTITY = /&(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#\d{1,7}|#[xX][0-9a-fA-F]{1,6});/;
+const BARE_AMPERSAND = new RegExp(`&(?!${ENTITY.source.slice(1)})`, "g");
+
+/**
+ * Escapes a text node while re-serializing EXISTING HTML.
+ *
+ * The distinction from escapeHtml matters: the sanitizer's input is already
+ * HTML, so `&nbsp;` in it is one non-breaking space, not the four characters
+ * "&nbsp". Escaping it again produced `&amp;nbsp;`, and because the sanitizer
+ * runs on write and again on render, a reply typed as "hey Ike " displayed as
+ * "hey Ike&amp;nbsp;". Only a bare ampersand — one not already starting a
+ * character reference — needs escaping here, which also makes the sanitizer
+ * idempotent.
+ */
+function escapeTextNode(text: string): string {
+  return text
+    .replace(BARE_AMPERSAND, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Attribute-value equivalent, for re-serializing an existing href. */
+function escapeExistingAttribute(value: string): string {
+  return escapeTextNode(value).replace(/"/g, "&quot;");
+}
+
+const escapeText = escapeTextNode;
 
 /**
  * Only http(s) and mailto survive. This is the check that stops
@@ -192,9 +223,9 @@ export function sanitizeRichText(input: string): string {
           const href = safeHref(value);
           if (!href) continue;
           hasHref = true;
-          attributesOut += ` href="${escapeAttribute(href)}"`;
+          attributesOut += ` href="${escapeExistingAttribute(href)}"`;
         } else {
-          attributesOut += ` ${attribute}="${escapeAttribute(value)}"`;
+          attributesOut += ` ${attribute}="${escapeExistingAttribute(value)}"`;
         }
       }
     }

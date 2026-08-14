@@ -7,6 +7,21 @@ export interface GmailSendResult {
   threadId: string;
 }
 
+/** Carries the full Gmail error payload, not just its message. */
+export class GmailApiError extends Error {
+  readonly status: number;
+  readonly body: string;
+  readonly reason: string | null;
+
+  constructor(status: number, body: string, message: string, reason: string | null) {
+    super(message);
+    this.name = "GmailApiError";
+    this.status = status;
+    this.body = body;
+    this.reason = reason;
+  }
+}
+
 async function gmailFetch(
   accessToken: string,
   path: string,
@@ -25,10 +40,23 @@ async function gmailFetch(
   const json = text ? JSON.parse(text) : {};
 
   if (!res.ok) {
-    const message =
-      (json as { error?: { message?: string } })?.error?.message ??
-      `Gmail API error ${res.status}`;
-    throw new Error(message);
+    const error = (json as {
+      error?: { message?: string; errors?: { reason?: string }[] };
+    })?.error;
+    const detail = error?.message ?? `Gmail API error ${res.status}`;
+    const reason = error?.errors?.[0]?.reason ?? null;
+
+    // Log the whole body: Gmail's `message` alone routinely fails to say
+    // which entity was not found, and truncating it has already sent one
+    // debugging session in the wrong direction.
+    console.error(
+      `[gmail] ${init?.method ?? "GET"} ${path} -> ${res.status}${
+        reason ? ` (${reason})` : ""
+      }\n${text}`
+    );
+
+    // Status is kept in the message so callers matching on text still work.
+    throw new GmailApiError(res.status, text, `${detail} (HTTP ${res.status})`, reason);
   }
   return json;
 }

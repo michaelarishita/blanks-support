@@ -34,6 +34,21 @@ async function resolveReplyTo(): Promise<string | null> {
   return support?.account_ref ?? null;
 }
 
+/**
+ * Gmail answers 404 when a threadId doesn't exist in the authorised mailbox.
+ * Matched on status text and message because the REST error body gives no
+ * machine-readable reason code for this case.
+ */
+export function isMissingThreadError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes("requested entity was not found") ||
+    message.includes("not found") ||
+    message.includes("404") ||
+    message.includes("invalid thread")
+  );
+}
+
 /** True when the ticket can be answered by email at all. */
 export function canEmail(channel: string, customerEmail: string | null | undefined) {
   return Boolean(customerEmail) && (channel === "email" || channel === "web_form");
@@ -50,6 +65,36 @@ export async function resolveSender(agentId: string | null) {
   return await getSupportInboxConnection();
 }
 
+/**
+ * Marks a message failed and records why.
+ *
+ * Every failure path must go through this. Previously several early returns
+ * reported an error without touching delivery_status, which left the reply
+ * showing "Sending" in the thread forever with no retry affordance.
+ */
+async function failDelivery(
+  messageId: string,
+  ticketId: string | null,
+  agentId: string | null,
+  error: string
+): Promise<DeliveryResult> {
+  const admin = createAdminClient();
+  await admin
+    .from("messages")
+    .update({ delivery_status: "failed" })
+    .eq("id", messageId);
+
+  if (ticketId) {
+    await admin.from("ticket_events").insert({
+      ticket_id: ticketId,
+      agent_id: agentId,
+      event_type: "reply_send_failed",
+      detail: { message_id: messageId, error },
+    });
+  }
+  return { ok: false, error };
+}
+
 export async function deliverMessage(messageId: string): Promise<DeliveryResult> {
   const admin = createAdminClient();
 
@@ -62,7 +107,18 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
     )
     .eq("id", messageId)
     .single();
-  if (loadError || !message) return { ok: false, error: "Message not found" };
+  if (loadError || !message) {
+    // Report what actually went wrong. This used to collapse every load
+    // failure — including schema errors like a missing column — into
+    // "Message not found", which sent debugging in entirely the wrong
+    // direction. The row can't be marked failed here; we couldn't read it.
+    return {
+      ok: false,
+      error: loadError
+        ? `Could not load the message: ${loadError.message}`
+        : "Message not found",
+    };
+  }
 
   if (message.direction !== "outbound" || message.type !== "public") {
     return { ok: true, skipped: "not a public reply" };
@@ -71,12 +127,21 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
     return { ok: true, skipped: "already sent" };
   }
 
-  const { data: ticket } = await admin
+  const { data: ticket, error: ticketError } = await admin
     .from("tickets")
-    .select("id, number, subject, channel, gmail_thread_id, customer:customers(email, name)")
+    .select(
+      "id, number, subject, channel, gmail_thread_id, gmail_account_ref, customer:customers(email, name)"
+    )
     .eq("id", message.ticket_id)
     .single();
-  if (!ticket) return { ok: false, error: "Ticket not found" };
+  if (ticketError || !ticket) {
+    return failDelivery(
+      message.id,
+      message.ticket_id,
+      message.agent_id,
+      ticketError ? `Could not load the ticket: ${ticketError.message}` : "Ticket not found"
+    );
+  }
 
   // Supabase types embedded relations as arrays; these are to-one joins.
   const customer = (Array.isArray(ticket.customer)
@@ -99,11 +164,12 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
 
   const connection = await resolveSender(message.agent_id);
   if (!connection) {
-    return {
-      ok: false,
-      error:
-        "No Gmail connected. Connect your Gmail in Settings, or ask an admin to connect the support mailbox.",
-    };
+    return failDelivery(
+      message.id,
+      ticket.id,
+      message.agent_id,
+      "No Gmail connected. Connect your Gmail in Settings, or ask an admin to connect the support mailbox."
+    );
   }
 
   // Build the References chain from every message on the ticket that has a
@@ -157,15 +223,28 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
   const htmlEmail = renderEmailHtml({ bodyHtml, agent: signatureAgent, company });
   const textEmail = renderEmailText({ bodyHtml, agent: signatureAgent, company });
 
+  // Only reuse the Gmail thread when it belongs to the mailbox now sending.
+  // Null ownership means the row predates the column: attempt it, and let the
+  // 404 fallback below sort it out rather than needlessly breaking threading.
+  const threadBelongsToSender =
+    !ticket.gmail_account_ref || ticket.gmail_account_ref === connection.account_ref;
+  const threadId = threadBelongsToSender ? ticket.gmail_thread_id : null;
+
+  if (ticket.gmail_thread_id && !threadBelongsToSender) {
+    console.warn(
+      `[outbound] ticket ${ticket.number}: thread owned by ${ticket.gmail_account_ref}, sending from ${connection.account_ref} — starting a new thread`
+    );
+  }
+
   const raw = buildRawEmail({
     fromEmail,
     fromName: agent?.name ?? "Blanks Support",
     to: customer!.email!,
     replyTo: await resolveReplyTo(),
     subject: buildReplySubject(ticket.subject, ticket.number, {
-      // No gmail_thread_id means this send opens the thread rather than
-      // continuing one — so it must not be prefixed "Re:".
-      newThread: !ticket.gmail_thread_id,
+      // No usable thread means this send opens one rather than continuing
+      // it — so it must not be prefixed "Re:".
+      newThread: !threadId,
     }),
     bodyText: textEmail,
     bodyHtml: htmlEmail,
@@ -176,10 +255,34 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
 
   try {
     const accessToken = await getAccessToken(connection.id);
-    const sent = await sendGmailMessage(accessToken, {
-      raw,
-      threadId: ticket.gmail_thread_id,
-    });
+
+    let sent;
+    if (threadId) {
+      try {
+        sent = await sendGmailMessage(accessToken, { raw, threadId });
+      } catch (e) {
+        // A threadId from another mailbox 404s. Rather than losing the reply,
+        // resend it as a new thread — the [BLK-n] token and the References
+        // chain still route the customer's answer back to this ticket.
+        if (!isMissingThreadError(e)) throw e;
+        console.warn(
+          `[outbound] thread ${threadId} rejected for ${connection.account_ref}; resending as a new thread`
+        );
+        sent = await sendGmailMessage(accessToken, { raw });
+        await admin.from("ticket_events").insert({
+          ticket_id: ticket.id,
+          agent_id: message.agent_id,
+          event_type: "thread_reset",
+          detail: {
+            message_id: message.id,
+            previous_thread_id: threadId,
+            account_ref: connection.account_ref,
+          },
+        });
+      }
+    } else {
+      sent = await sendGmailMessage(accessToken, { raw });
+    }
 
     await admin
       .from("messages")
@@ -190,11 +293,21 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
       })
       .eq("id", message.id);
 
-    // Remember the Gmail thread so later replies land in the same conversation.
-    if (!ticket.gmail_thread_id && sent.threadId) {
+    // Record the thread AND the account that owns it, so a later send from a
+    // different mailbox knows not to reuse it.
+    if (sent.threadId && sent.threadId !== ticket.gmail_thread_id) {
       await admin
         .from("tickets")
-        .update({ gmail_thread_id: sent.threadId })
+        .update({
+          gmail_thread_id: sent.threadId,
+          gmail_account_ref: connection.account_ref,
+        })
+        .eq("id", ticket.id);
+    } else if (sent.threadId && !ticket.gmail_account_ref) {
+      // Backfill ownership for a thread stored before this column existed.
+      await admin
+        .from("tickets")
+        .update({ gmail_account_ref: connection.account_ref })
         .eq("id", ticket.id);
     }
 
@@ -222,6 +335,57 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
 
     return { ok: false, error };
   }
+}
+
+/**
+ * A send is inline and takes about a second, so anything still "queued" after
+ * this long did not merely take a while — the process died, the action threw,
+ * or an early return left the row behind.
+ */
+export const STUCK_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * Moves abandoned sends from queued to failed so the thread offers a retry
+ * instead of showing "Sending" forever. Cheap enough to call on page load:
+ * it is a single conditional UPDATE that matches nothing in the normal case.
+ */
+export async function reconcileStuckSends(ticketId?: string): Promise<number> {
+  const admin = createAdminClient();
+  const cutoff = new Date(Date.now() - STUCK_AFTER_MS).toISOString();
+
+  let query = admin
+    .from("messages")
+    .select("id, ticket_id, agent_id")
+    .eq("direction", "outbound")
+    .eq("type", "public")
+    .eq("delivery_status", "queued")
+    .lt("created_at", cutoff);
+  if (ticketId) query = query.eq("ticket_id", ticketId);
+
+  const { data: stuck } = await query;
+  if (!stuck?.length) return 0;
+
+  await admin
+    .from("messages")
+    .update({ delivery_status: "failed" })
+    .in(
+      "id",
+      stuck.map((m) => m.id)
+    );
+
+  await admin.from("ticket_events").insert(
+    stuck.map((m) => ({
+      ticket_id: m.ticket_id,
+      agent_id: m.agent_id,
+      event_type: "reply_send_failed",
+      detail: {
+        message_id: m.id,
+        error: "Send never completed — marked failed by reconciliation.",
+      },
+    }))
+  );
+
+  return stuck.length;
 }
 
 /** Retries every reply left in queued/failed state. Used by the Settings backfill. */
