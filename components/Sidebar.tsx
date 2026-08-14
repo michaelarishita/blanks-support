@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/cn";
 import type { Agent, TicketChannel } from "@/lib/types";
+import { AGENT_PLACEHOLDER } from "@/lib/display";
 import { CHANNEL_META } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
@@ -187,7 +188,7 @@ export default function Sidebar({
               <span className="min-w-0 flex-1 text-left">
                 <span className="flex items-center gap-1.5">
                   <span className="truncate text-label text-primary">
-                    {me?.name ?? "…"}
+                    {me?.name ?? AGENT_PLACEHOLDER}
                   </span>
                   {me && !me.gmail_connected && (
                     <Tooltip content="Gmail not connected — email replies won't send">

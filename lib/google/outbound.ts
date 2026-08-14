@@ -7,6 +7,7 @@ import {
 import { renderEmailHtml, renderEmailText } from "@/lib/email/template";
 import { getCompanySettings } from "@/lib/settings";
 import { sanitizeRichText } from "@/lib/html";
+import { AUTHOR_FALLBACK } from "@/lib/display";
 import { sendGmailMessage } from "./gmail";
 import {
   getAccessToken,
@@ -265,7 +266,9 @@ async function deliverLoadedMessage(message: LoadedMessage): Promise<DeliveryRes
 
   const raw = buildRawEmail({
     fromEmail,
-    fromName: agent?.name ?? "Blanks Support",
+    // Same constant the thread renders, so an orphaned reply is called the
+    // same thing in the app and in the customer's inbox.
+    fromName: agent?.name ?? AUTHOR_FALLBACK,
     to: customer!.email!,
     replyTo: await resolveReplyTo(),
     subject: buildReplySubject(ticket.subject, ticket.number, {

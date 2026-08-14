@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState, useTransition, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { setPriority, setStatus, toggleTag } from "@/app/actions";
+import { customerDisplayName } from "@/lib/display";
 import { PRIORITY_META, STATUS_META } from "@/lib/types";
 import type {
   ActionResult,
@@ -102,7 +103,7 @@ export default function TicketSidePanel({
 
   const activeTagIds = new Set((ticket.ticket_tags ?? []).map((tt) => tt.tag.id));
   const customer = ticket.customer;
-  const customerName = customer?.name || customer?.email || "Unknown customer";
+  const customerName = customerDisplayName(customer);
 
   const visibleTags =
     allTags.length > TAG_SEARCH_THRESHOLD && tagQuery.trim()

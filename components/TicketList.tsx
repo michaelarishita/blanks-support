@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { shortAgo } from "@/lib/format";
+import { customerDisplayName } from "@/lib/display";
 import { useHotkey } from "@/lib/shortcuts";
 import type { Ticket } from "@/lib/types";
 import { STATUS_META } from "@/lib/types";
@@ -101,8 +102,7 @@ export default function TicketList({
         const status = STATUS_META[t.status];
         // "New" means nobody has picked it up yet — worth pulling the eye.
         const isNew = t.status === "new";
-        const customerName =
-          t.customer?.name || t.customer?.email || "Unknown customer";
+        const customerName = customerDisplayName(t.customer);
         const focused = index === cursor;
 
         return (

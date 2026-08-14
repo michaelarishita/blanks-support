@@ -10,6 +10,7 @@ import {
   reconcileStuckSends,
   resolveSender,
 } from "@/lib/google/outbound";
+import { customerDisplayName, customerFirstName } from "@/lib/display";
 import type { Ticket, Message, Agent, Tag } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -78,7 +79,7 @@ export default async function TicketPage({
         <div className="scrollbar-slim flex-1 overflow-y-auto bg-surface px-6 py-4">
           <Thread
             messages={(messages as Message[]) ?? []}
-            customerName={t.customer?.name ?? t.customer?.email ?? "Customer"}
+            customerName={customerDisplayName(t.customer)}
             customerId={t.customer?.id}
           />
         </div>
@@ -86,7 +87,7 @@ export default async function TicketPage({
         <ReplyBox
           ticketId={t.id}
           macros={macros ?? []}
-          customerFirstName={(t.customer?.name ?? "").split(" ")[0]}
+          customerFirstName={customerFirstName(t.customer)}
           sendingAs={connection?.account_ref ?? null}
           emailCapable={canEmail(t.channel, t.customer?.email)}
         />

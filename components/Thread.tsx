@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { dayLabel } from "@/lib/format";
 import { sanitizeRichText } from "@/lib/html";
 import { splitQuotedText } from "@/lib/email/parse";
+import { messageAuthorName } from "@/lib/display";
 import Attachments from "@/components/Attachments";
 import { retryDelivery } from "@/app/actions";
 import type { Message } from "@/lib/types";
@@ -168,11 +169,13 @@ export default function Thread({
         const previous = i > 0 ? messages[i - 1] : null;
         const isNote = m.type === "internal_note";
         const isAgent = m.direction === "outbound";
-        // An outbound message can lose its agent: agents.id is ON DELETE SET
-        // NULL, so removing a teammate's account orphans their replies. Fall
-        // back to the same name the customer saw in the From line rather than
-        // the bare word "Agent".
-        const author = isAgent ? (m.agent?.name ?? "Blanks Support") : customerName;
+        // Resolved through the shared helper so the server render and the
+        // client render cannot produce different strings.
+        const author = messageAuthorName({
+          isOutbound: isAgent,
+          agentName: m.agent?.name,
+          customerName,
+        });
 
         const showDivider =
           !previous || dayLabel(previous.created_at) !== dayLabel(m.created_at);
@@ -233,6 +236,7 @@ export default function Thread({
                     )}
                   >
                     <span
+                      data-testid="message-author"
                       className={cn(
                         "font-medium",
                         isNote ? "text-warning-text" : "text-secondary"
