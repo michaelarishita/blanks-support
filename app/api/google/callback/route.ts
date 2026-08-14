@@ -106,8 +106,11 @@ export async function GET(request: NextRequest) {
         const profile = await getGmailProfile(tokens.access_token);
         const connection = await getSupportInboxConnection();
         if (connection) await setLastHistoryId(connection.id, profile.historyId);
-      } catch {
-        // Non-fatal: the first sync falls back to a recent-messages scan.
+      } catch (e) {
+        // Non-fatal — the first sync falls back to a recent-messages scan —
+        // but log it, because a silent failure here shows up much later as
+        // an unexplained full mailbox scan.
+        console.error("[google callback] could not anchor history cursor:", e);
       }
     }
 

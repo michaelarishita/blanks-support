@@ -99,6 +99,10 @@ export async function POST(request: Request) {
       .select("id")
       .single();
     if (custErr) {
+      // Public endpoint: the caller gets a generic message (never leak schema
+      // detail to the internet), but the real cause is logged so a failure
+      // here is diagnosable without reproducing it.
+      console.error("[intake] customer insert failed:", custErr);
       return NextResponse.json(
         { error: "Could not create customer" },
         { status: 500, headers: CORS_HEADERS }
@@ -124,6 +128,7 @@ export async function POST(request: Request) {
     .single();
 
   if (ticketErr || !ticket) {
+    console.error("[intake] ticket insert failed:", ticketErr);
     return NextResponse.json(
       { error: "Could not create ticket" },
       { status: 500, headers: CORS_HEADERS }

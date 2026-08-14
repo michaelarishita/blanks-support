@@ -45,7 +45,16 @@ const EMPTY_HEALTH: InboundHealth = {
 };
 
 export async function readInboundHealth(): Promise<InboundHealth> {
-  const blob = await getSettingsBlob();
+  // Read-only and rendered in the dashboard chrome, so a failure here must
+  // not blank the whole app. The cause isn't swallowed: SchemaBanner reports
+  // a missing settings table directly, and the cron surfaces it too.
+  let blob: Record<string, unknown>;
+  try {
+    blob = await getSettingsBlob();
+  } catch (e) {
+    console.error("[monitoring] could not read health state:", e);
+    return { ...EMPTY_HEALTH };
+  }
   const stored = (blob[HEALTH_KEY] ?? {}) as Partial<InboundHealth>;
   return { ...EMPTY_HEALTH, ...stored };
 }

@@ -7,7 +7,13 @@ import { DEFAULT_COMPANY, type CompanySettings } from "@/lib/email/template";
 /** The whole settings blob. Company branding and ops state share this row. */
 export async function getSettingsBlob(): Promise<Record<string, unknown>> {
   const admin = createAdminClient();
-  const { data } = await admin.from("settings").select("data").eq("id", true).maybeSingle();
+  const { data, error } = await admin
+    .from("settings")
+    .select("data")
+    .eq("id", true)
+    .maybeSingle();
+  // Discarding this hid an unrun migration behind silently-default branding.
+  if (error) throw new Error(`Could not read settings: ${error.message}`);
   return (data?.data ?? {}) as Record<string, unknown>;
 }
 

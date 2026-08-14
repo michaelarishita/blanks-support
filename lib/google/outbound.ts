@@ -127,6 +127,33 @@ export async function deliverMessage(messageId: string): Promise<DeliveryResult>
     return { ok: true, skipped: "already sent" };
   }
 
+  // Everything past this point can mark the row failed, so it runs inside a
+  // guard: an unexpected throw (a missing table, a bad settings row) must not
+  // leave the reply showing "Sending" forever.
+  try {
+    return await deliverLoadedMessage(message);
+  } catch (e) {
+    return failDelivery(
+      message.id,
+      message.ticket_id,
+      message.agent_id,
+      e instanceof Error ? e.message : String(e)
+    );
+  }
+}
+
+type LoadedMessage = {
+  id: string;
+  ticket_id: string;
+  agent_id: string | null;
+  body_text: string;
+  body_html: string | null;
+  agent: unknown;
+};
+
+async function deliverLoadedMessage(message: LoadedMessage): Promise<DeliveryResult> {
+  const admin = createAdminClient();
+
   const { data: ticket, error: ticketError } = await admin
     .from("tickets")
     .select(

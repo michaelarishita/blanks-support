@@ -62,7 +62,13 @@ export async function POST(request: NextRequest) {
     return acknowledge({ ok: true, ...result });
   } catch (e) {
     console.error("[gmail webhook] unhandled:", e);
-    return acknowledge({ ok: false, error: "sync failed" });
+    // Still a 200 so Pub/Sub doesn't retry-storm, but the body carries the
+    // real reason — this endpoint is also the manual dev trigger, and
+    // "sync failed" told whoever hit it nothing.
+    return acknowledge({
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 

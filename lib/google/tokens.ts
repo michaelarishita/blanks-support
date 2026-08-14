@@ -84,23 +84,30 @@ export async function getConnectionForAgent(
   agentId: string
 ): Promise<StoredConnection | null> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("oauth_tokens")
     .select(PUBLIC_COLUMNS)
     .eq("provider", PROVIDER)
     .eq("agent_id", agentId)
     .maybeSingle();
+  // A failed lookup is not the same as "no connection". Swallowing it here
+  // surfaces downstream as "No Gmail connected", which reads like a settings
+  // problem and hides a schema or permissions one.
+  if (error) throw new Error(`Could not read the Gmail connection: ${error.message}`);
   return (data as StoredConnection) ?? null;
 }
 
 export async function getSupportInboxConnection(): Promise<StoredConnection | null> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("oauth_tokens")
     .select(PUBLIC_COLUMNS)
     .eq("provider", PROVIDER)
     .eq("is_support_inbox", true)
     .maybeSingle();
+  if (error) {
+    throw new Error(`Could not read the support mailbox connection: ${error.message}`);
+  }
   return (data as StoredConnection) ?? null;
 }
 
@@ -118,7 +125,10 @@ export async function getAccessToken(connectionId: string): Promise<string> {
     )
     .eq("id", connectionId)
     .single();
-  if (error || !data) throw new Error("Gmail connection not found");
+  if (error) {
+    throw new Error(`Could not read the Gmail connection: ${error.message}`);
+  }
+  if (!data) throw new Error("Gmail connection not found");
 
   const expiresAt = data.access_token_expires_at
     ? new Date(data.access_token_expires_at).getTime()
@@ -177,12 +187,13 @@ export async function setWatchExpiry(
 
 export async function disconnectAgent(agentId: string) {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("oauth_tokens")
     .select("id, encrypted_refresh_token")
     .eq("provider", PROVIDER)
     .eq("agent_id", agentId)
     .maybeSingle();
+  if (error) throw new Error(`Could not read the Gmail connection: ${error.message}`);
 
   if (data?.encrypted_refresh_token) {
     await revokeToken(decryptSecret(data.encrypted_refresh_token));

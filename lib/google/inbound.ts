@@ -119,20 +119,24 @@ async function routeToTicket(
     (id): id is string => Boolean(id)
   );
   if (candidateIds.length) {
-    const { data } = await admin
+    const { data, error } = await admin
       .from("messages")
       .select("ticket_id")
       .in("rfc822_message_id", candidateIds)
       .limit(1);
+    // A failed routing lookup would fall through to "create a new ticket",
+    // silently splitting a conversation in two. Fail loudly instead.
+    if (error) throw new Error(`Routing lookup failed: ${error.message}`);
     if (data?.length) return { ticketId: data[0].ticket_id, path: "references" };
   }
 
   // 3. Gmail's own thread id.
-  const { data: byThread } = await admin
+  const { data: byThread, error: threadError } = await admin
     .from("tickets")
     .select("id")
     .eq("gmail_thread_id", parsed.gmailThreadId)
     .maybeSingle();
+  if (threadError) throw new Error(`Thread lookup failed: ${threadError.message}`);
   if (byThread) return { ticketId: byThread.id, path: "thread" };
 
   // 4. Same sender, recent, still open, and the same subject once prefixes
