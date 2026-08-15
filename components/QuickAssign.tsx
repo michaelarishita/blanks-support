@@ -54,6 +54,9 @@ export default function QuickAssign({
         toast(res.error, { tone: "error" });
         return;
       }
+      // Assignment worked but the email didn't — say so rather than letting
+      // the success toast imply the teammate has been told.
+      if (res?.warning) toast(res.warning, { tone: "error", duration: 10000 });
 
       // Raised BEFORE navigating. The provider lives in the dashboard layout,
       // so the toast outlives this page — which is the point: once we move on,

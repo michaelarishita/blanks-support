@@ -57,6 +57,9 @@ export default function TicketHeader({
       const res = await fn();
       if (res?.error) toast(res.error, { tone: "error" });
       else toast(success, { tone: "success" });
+      // A notification that didn't send is reported separately, so a green
+      // toast never implies mail was delivered when it wasn't.
+      if (res?.warning) toast(res.warning, { tone: "error", duration: 10000 });
     });
   }
 

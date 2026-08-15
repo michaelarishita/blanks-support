@@ -13,6 +13,7 @@ import {
   type QueueBreakdown,
 } from "./assignment";
 import { summarizeMessage } from "./summary";
+import { decideSendTime, notificationSubject } from "./policy";
 
 // Sends notifications from the shared mailbox to an agent.
 //
@@ -77,24 +78,32 @@ async function gatherQueue(agentId: string): Promise<AssignmentContext["queue"]>
 }
 
 /**
- * The Message-ID that opened this (agent, ticket) conversation, if any.
- * Reminders and escalations reply into it so Gmail groups them.
+ * The root of this (agent, ticket) conversation, if it has one.
+ *
+ * Both halves matter: reminders reply into the root Message-ID, and reuse its
+ * SUBJECT byte-for-byte. The subject now carries priority, so a ticket
+ * escalated from Normal to Urgent mid-thread would otherwise split into two
+ * Gmail conversations.
  */
 async function threadRoot(
   agentId: string,
   ticketId: string
-): Promise<string | null> {
+): Promise<{ messageId: string; subject: string | null } | null> {
   const admin = createAdminClient();
   const { data } = await admin
     .from("notifications")
-    .select("thread_message_id")
+    .select("thread_message_id, subject")
     .eq("agent_id", agentId)
     .eq("ticket_id", ticketId)
     .not("thread_message_id", "is", null)
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
-  return (data?.thread_message_id as string | undefined) ?? null;
+  if (!data?.thread_message_id) return null;
+  return {
+    messageId: data.thread_message_id as string,
+    subject: (data.subject as string | null) ?? null,
+  };
 }
 
 export async function sendAssignmentNotification(
@@ -169,8 +178,32 @@ export async function sendAssignmentNotification(
     siteUrl: siteUrl(),
   };
 
+  const priority = ticket.priority as TicketPriority;
+
+  // EVERY assignment notifies. Priority changes the treatment, never whether
+  // it sends: Urgent ignores quiet hours, everything else defers to the next
+  // window rather than being dropped.
+  const decision = decideSendTime(priority, new Date());
+  if (!decision.sendNow && decision.scheduledFor) {
+    const { error } = await admin.from("notifications").insert({
+      agent_id: agentId,
+      ticket_id: ticketId,
+      kind: "assignment",
+      scheduled_for: decision.scheduledFor.toISOString(),
+      sent_at: null,
+    });
+    if (error) return { sent: false, error: error.message };
+    return {
+      sent: false,
+      skipped: `queued for ${decision.scheduledFor.toISOString()} (quiet hours)`,
+    };
+  }
+
   const messageId = generateMessageId(connection.account_ref);
   const root = await threadRoot(agentId, ticketId);
+  // Follow-ups reuse the root's subject exactly; the first send composes it.
+  const subject =
+    root?.subject ?? notificationSubject(ASSIGNMENT_SUBJECT, priority);
 
   const raw = buildRawEmail({
     fromEmail: connection.account_ref,
@@ -180,12 +213,12 @@ export async function sendAssignmentNotification(
     replyTo: agent.email,
     // Byte-identical across the thread — Gmail needs a stable subject as well
     // as the header chain to group reliably.
-    subject: ASSIGNMENT_SUBJECT,
+    subject,
     bodyText: renderAssignmentText(context),
     bodyHtml: renderAssignmentHtml(context),
     messageId,
-    inReplyTo: root,
-    references: root ? [root] : undefined,
+    inReplyTo: root?.messageId ?? null,
+    references: root ? [root.messageId] : undefined,
     extraHeaders: { ...NOTIFICATION_HEADERS },
   });
 
@@ -203,7 +236,8 @@ export async function sendAssignmentNotification(
     ticket_id: ticketId,
     kind: "assignment",
     // The first notification for this pair becomes the thread root.
-    thread_message_id: root ?? messageId,
+    thread_message_id: root?.messageId ?? messageId,
+    subject,
     sent_at: new Date().toISOString(),
   });
   if (insertError) {

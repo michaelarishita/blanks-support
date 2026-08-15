@@ -39,10 +39,19 @@ async function bucketNames(): Promise<Set<string> | null> {
 }
 
 // Ordered, because they must be run in order.
+//
+// EVERY file in supabase/migrations must appear here. A migration added
+// without an entry is invisible to the banner, which is exactly how 0007–0010
+// went unnoticed while the banner reported all clear. tests/schema-check
+// asserts this list against the directory so the omission can't repeat.
+//
+// `probe: null` means "cannot be checked cheaply" — a deliberate, visible
+// admission rather than a silent gap.
 const MIGRATIONS: {
   file: string;
   title: string;
-  probe: (buckets: Set<string> | null) => Promise<string | null>;
+  probe: ((buckets: Set<string> | null) => Promise<string | null>) | null;
+  unprobeableReason?: string;
 }[] = [
   {
     file: "0001_init.sql",
@@ -94,7 +103,59 @@ const MIGRATIONS: {
         ? null
         : "column `tickets.gmail_account_ref`",
   },
+  {
+    file: "0007_claim_support_inbox.sql",
+    title: "Idempotent support-mailbox connect",
+    // PostgREST answers PGRST202 for both "no such function" and "wrong
+    // argument list", so the only way to probe would be to CALL it — which
+    // would reassign the support inbox. Surfaced at point of use instead:
+    // humanizePostgresError maps PGRST202 to "run the migration".
+    probe: null,
+    unprobeableReason:
+      "function-only migration; a probe would have to invoke it, which reassigns the support inbox",
+  },
+  {
+    file: "0008_blue_brand.sql",
+    title: "Blue accent on outbound email",
+    probe: async () => {
+      const admin = createAdminClient();
+      const { data, error } = await admin
+        .from("settings")
+        .select("data")
+        .eq("id", true)
+        .maybeSingle();
+      // A missing settings table is 0003's problem, already reported above.
+      if (error || !data) return null;
+      const colour = (data.data as { brand_color?: string })?.brand_color;
+      return colour === "#f5c518" ? "the email accent is still the old amber" : null;
+    },
+  },
+  {
+    file: "0009_notifications.sql",
+    title: "Assignment notifications — nothing sends without this",
+    probe: async () => {
+      const missing: string[] = [];
+      if (!(await columnExists("notifications", "kind"))) {
+        missing.push("table `notifications`");
+      }
+      if (!(await columnExists("agents", "notifications_enabled"))) {
+        missing.push("column `agents.notifications_enabled`");
+      }
+      return missing.length ? missing.join(", ") : null;
+    },
+  },
+  {
+    file: "0010_display_names.sql",
+    title: "Internal display names — assignment email fails without this",
+    probe: async () =>
+      (await columnExists("agents", "display_name"))
+        ? null
+        : "column `agents.display_name`",
+  },
 ];
+
+/** Exposed so the coverage test can compare against the migrations directory. */
+export const CHECKED_MIGRATION_FILES = MIGRATIONS.map((m) => m.file);
 
 // Re-checked often while something is missing so the banner clears promptly
 // after the migration is run, and rarely once everything is in place.
@@ -113,7 +174,9 @@ export async function checkSchema(force = false): Promise<SchemaStatus> {
     const buckets = await bucketNames();
     const checks: MigrationCheck[] = [];
     for (const migration of MIGRATIONS) {
-      const missing = await migration.probe(buckets);
+      // Unprobeable migrations are reported as applied rather than as
+      // permanently missing — a banner that never clears gets ignored.
+      const missing = migration.probe ? await migration.probe(buckets) : null;
       checks.push({
         file: migration.file,
         title: migration.title,

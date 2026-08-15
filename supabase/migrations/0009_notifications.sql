@@ -17,6 +17,10 @@ create table notifications (
   ticket_id uuid not null references tickets(id) on delete cascade,
   kind notification_kind not null,
   thread_message_id text,
+  -- The subject the thread ROOT used. Reminders and escalations reuse it
+  -- byte-for-byte: the subject now carries priority, and a ticket whose
+  -- priority changed mid-thread would otherwise split the Gmail conversation.
+  subject text,
   scheduled_for timestamptz,
   sent_at timestamptz,
   escalation_count int not null default 0,

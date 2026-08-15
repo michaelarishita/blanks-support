@@ -204,18 +204,24 @@ export async function assignTicket(ticketId: string, assigneeId: string | null) 
 
   // Self-assignment still notifies: the spec is explicit that assigning
   // yourself a ticket should still produce the record.
+  let notificationWarning: string | undefined;
   if (assigneeId && assigneeId !== previousAssignee) {
     const result = await sendAssignmentNotification(ticketId, assigneeId);
+    // The assignment itself succeeded, so this is a warning rather than an
+    // error — but it is SURFACED. Logging it to the server console was how a
+    // schema failure hid for days: the UI said "Assigned to Melissa" while no
+    // mail had been sent and nothing on screen said so.
     if (result.error) {
-      // The assignment itself succeeded; the email is secondary, so this
-      // reports rather than failing the action.
+      notificationWarning = `Assigned, but the notification email failed: ${result.error}`;
       console.error("[assign] notification failed:", result.error);
+    } else if (result.skipped) {
+      notificationWarning = `Assigned. No email sent — ${result.skipped}.`;
     }
   }
 
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
-  return { ok: true };
+  return notificationWarning ? { ok: true, warning: notificationWarning } : { ok: true };
 }
 
 export async function toggleTag(ticketId: string, tagId: string, on: boolean) {
