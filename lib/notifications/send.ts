@@ -14,6 +14,13 @@ import {
 } from "./assignment";
 import { summarizeMessage } from "./summary";
 import { decideSendTime, notificationSubject } from "./policy";
+import { escalationLead, escalationSubject } from "./escalation";
+import {
+  REMINDER_DELAYS,
+  describeDelay,
+  signReminderToken,
+} from "./reminder-token";
+import { alertRecipient, sendOperationalAlert } from "@/lib/alerts";
 
 // Sends notifications from the shared mailbox to an agent.
 //
@@ -43,6 +50,9 @@ export interface NotificationResult {
 }
 
 const OPEN_STATUSES = ["new", "open", "pending"];
+
+/** Mirrors MAX_ESCALATIONS; imported separately to avoid a cycle. */
+const MAX_ESCALATION_COUNT = 3;
 
 function siteUrl(): string {
   return (
@@ -106,6 +116,15 @@ async function threadRoot(
   };
 }
 
+function reminderLinks(agentId: string, ticketId: string) {
+  const base = siteUrl();
+  return REMINDER_DELAYS.map((hours) => ({
+    hours,
+    label: describeDelay(hours),
+    href: `${base}/remind/${signReminderToken(agentId, ticketId, hours)}`,
+  }));
+}
+
 export async function sendAssignmentNotification(
   ticketId: string,
   agentId: string
@@ -159,6 +178,8 @@ export async function sendAssignmentNotification(
     // Internal email to a teammate, so this is the dashboard label — not the
     // signature name customers see.
     agentName: agentDisplayName(agent),
+    variant: "assignment",
+    reminderLinks: reminderLinks(agentId, ticketId),
     ticket: {
       id: ticket.id,
       number: ticket.number,
@@ -245,6 +266,177 @@ export async function sendAssignmentNotification(
     // later reminders, so it's worth surfacing rather than swallowing.
     console.error("[notifications] could not record the send:", insertError);
   }
+
+  return { sent: true };
+}
+
+
+/**
+ * A reminder the agent asked for. THREADS into the assignment conversation:
+ * they requested it, so the context belongs together and a fresh mail would
+ * just be clutter.
+ */
+export async function sendReminderNotification(
+  ticketId: string,
+  agentId: string
+): Promise<NotificationResult> {
+  return sendFollowUp(ticketId, agentId, "reminder");
+}
+
+/**
+ * An escalation. Deliberately does NOT thread: the whole premise is that the
+ * agent is ignoring the assignment thread, so replying into it would bury the
+ * chase under a collapsed Gmail conversation. New Message-ID, no In-Reply-To,
+ * and a subject that dates itself so it lands unread at the top.
+ */
+export async function sendEscalationNotification(
+  ticketId: string,
+  agentId: string,
+  overdueHours: number,
+  count: number
+): Promise<NotificationResult> {
+  return sendFollowUp(ticketId, agentId, "escalation", { overdueHours, count });
+}
+
+async function sendFollowUp(
+  ticketId: string,
+  agentId: string,
+  kind: "reminder" | "escalation",
+  escalation?: { overdueHours: number; count: number }
+): Promise<NotificationResult> {
+  const admin = createAdminClient();
+
+  const { data: agent, error: agentError } = await admin
+    .from("agents")
+    .select("id, name, display_name, email, is_active, notifications_enabled")
+    .eq("id", agentId)
+    .maybeSingle();
+  if (agentError) return { sent: false, error: agentError.message };
+  if (!agent?.is_active) return { sent: false, skipped: "agent inactive" };
+  if (agent.notifications_enabled === false) {
+    return { sent: false, skipped: "notifications disabled" };
+  }
+
+  const { data: ticket, error: ticketError } = await admin
+    .from("tickets")
+    .select(
+      "id, number, subject, priority, channel, topic, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
+    )
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (ticketError) return { sent: false, error: ticketError.message };
+  if (!ticket) return { sent: false, skipped: "ticket not found" };
+
+  const connection = await getSupportInboxConnection();
+  if (!connection) return { sent: false, skipped: "no support mailbox connected" };
+
+  const priority = ticket.priority as TicketPriority;
+  const agentName = agentDisplayName(agent);
+
+  // Past the cap, stop chasing the agent and tell an admin instead.
+  if (escalation && escalation.count > MAX_ESCALATION_COUNT) {
+    const result = await sendOperationalAlert(
+      `[ESCALATED] Ticket #${ticket.number} unanswered by ${agentName}`,
+      [
+        `Ticket #${ticket.number} — ${ticket.subject}`,
+        `Assigned to: ${agentName} (${agent.email})`,
+        `Priority: ${priority}`,
+        `Unanswered for: ${escalation.overdueHours}h`,
+        "",
+        `${MAX_ESCALATION_COUNT} escalations have been sent with no reply, so this is`,
+        "going to you instead of continuing to chase them.",
+        "",
+        `${siteUrl()}/tickets/${ticket.id}`,
+      ].join("\n")
+    );
+    if (!result.sent) return { sent: false, error: result.error };
+
+    await admin.from("notifications").insert({
+      agent_id: agentId,
+      ticket_id: ticketId,
+      kind: "escalation",
+      escalation_count: escalation.count,
+      sent_at: new Date().toISOString(),
+    });
+    return { sent: true, skipped: `handed to ${alertRecipient()}` };
+  }
+
+  const { data: latest } = await admin
+    .from("messages")
+    .select("body_text, body_html")
+    .eq("ticket_id", ticketId)
+    .eq("direction", "inbound")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const customer = Array.isArray(ticket.customer) ? ticket.customer[0] : ticket.customer;
+  const tags = ((ticket.ticket_tags ?? []) as { tag: { name: string } | { name: string }[] }[])
+    .map((tt) => (Array.isArray(tt.tag) ? tt.tag[0]?.name : tt.tag?.name))
+    .filter((name): name is string => Boolean(name));
+
+  const context: AssignmentContext = {
+    agentName,
+    variant: kind,
+    lead: escalation ? escalationLead(escalation.count, agentName) : undefined,
+    reminderLinks: kind === "reminder" ? reminderLinks(agentId, ticketId) : undefined,
+    ticket: {
+      id: ticket.id,
+      number: ticket.number,
+      subject: ticket.subject,
+      priority,
+      channel: ticket.channel as TicketChannel,
+      topic: ticket.topic,
+      tags,
+      customerName: customerDisplayName(customer),
+      createdAt: ticket.created_at,
+    },
+    summary: summarizeMessage({ bodyText: latest?.body_text, bodyHtml: latest?.body_html }),
+    queue: await gatherQueue(agentId),
+    siteUrl: siteUrl(),
+  };
+
+  const messageId = generateMessageId(connection.account_ref);
+  const root = kind === "reminder" ? await threadRoot(agentId, ticketId) : null;
+
+  const subject = escalation
+    ? escalationSubject(priority, escalation.overdueHours, ticket.number, ticket.subject)
+    : (root?.subject ?? notificationSubject(ASSIGNMENT_SUBJECT, priority));
+
+  const raw = buildRawEmail({
+    fromEmail: connection.account_ref,
+    fromName: `${(await getCompanySettings()).company_name} Support`,
+    to: agent.email,
+    replyTo: agent.email,
+    subject,
+    bodyText: renderAssignmentText(context),
+    bodyHtml: renderAssignmentHtml(context),
+    messageId,
+    // Escalations pass neither, so Gmail cannot file them back into the
+    // thread they exist to escape.
+    inReplyTo: root?.messageId ?? null,
+    references: root ? [root.messageId] : undefined,
+    extraHeaders: { ...NOTIFICATION_HEADERS },
+  });
+
+  try {
+    const accessToken = await getAccessToken(connection.id);
+    await sendGmailMessage(accessToken, { raw });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`[notifications] ${kind} send failed for ${agentId}:`, message);
+    return { sent: false, error: message };
+  }
+
+  await admin.from("notifications").insert({
+    agent_id: agentId,
+    ticket_id: ticketId,
+    kind,
+    thread_message_id: root?.messageId ?? (kind === "reminder" ? messageId : null),
+    subject: root?.subject ?? subject,
+    escalation_count: escalation?.count ?? 0,
+    sent_at: new Date().toISOString(),
+  });
 
   return { sent: true };
 }

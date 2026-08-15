@@ -32,8 +32,22 @@ export interface QueueBreakdown {
   low: number;
 }
 
+export type NotificationVariant = "assignment" | "reminder" | "escalation";
+
+export interface ReminderLink {
+  hours: number;
+  label: string;
+  href: string;
+}
+
 export interface AssignmentContext {
   agentName: string;
+  /** Changes the opening line; the rest of the email is identical. */
+  variant?: NotificationVariant;
+  /** Overrides the opening line entirely (escalation copy firms up). */
+  lead?: string;
+  /** "Remind me later" buttons. Signed links to a confirmation page. */
+  reminderLinks?: ReminderLink[];
   ticket: {
     id: string;
     number: number;
@@ -54,6 +68,17 @@ export interface AssignmentContext {
   };
   siteUrl: string;
   now?: number;
+}
+
+function defaultLead(ctx: AssignmentContext): string {
+  switch (ctx.variant) {
+    case "reminder":
+      return `${ctx.agentName}, you asked to be reminded about this ticket.`;
+    case "escalation":
+      return `${ctx.agentName}, this ticket is still unanswered.`;
+    default:
+      return `Hi ${ctx.agentName}, this ticket is now yours.`;
+  }
 }
 
 const cell = (content: string, style = "") =>
@@ -115,7 +140,7 @@ export function renderAssignmentHtml(ctx: AssignmentContext): string {
 
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
               <tr>${cell(
-                `Hi ${escapeHtml(ctx.agentName)}, this ticket is now yours.`,
+                escapeHtml(ctx.lead ?? defaultLead(ctx)),
                 `padding:0 0 16px 0;color:${TEXT};font-size:15px;`
               )}</tr>
 
@@ -151,6 +176,23 @@ export function renderAssignmentHtml(ctx: AssignmentContext): string {
                 `<a href="${escapeHtml(ticketUrl)}" style="display:inline-block;background-color:${BRAND};color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;padding:11px 22px;border-radius:8px;">Open ticket #${t.number}</a>`,
                 "padding:0 0 20px 0;"
               )}</tr>
+
+              ${
+                ctx.reminderLinks?.length
+                  ? `<tr>${cell(
+                      `<span style="display:block;margin:0 0 6px 0;color:${MUTED};font-size:13px;">Not now? Remind me in</span>` +
+                        ctx.reminderLinks
+                          .map(
+                            (link) =>
+                              `<a href="${escapeHtml(link.href)}" style="display:inline-block;margin:0 6px 6px 0;padding:7px 12px;border:1px solid ${RULE};border-radius:6px;color:${TEXT};font-size:13px;text-decoration:none;">${escapeHtml(
+                                link.label
+                              )}</a>`
+                          )
+                          .join(""),
+                      "padding:0 0 16px 0;"
+                    )}</tr>`
+                  : ""
+              }
 
               <tr>${cell(
                 "",
@@ -222,7 +264,7 @@ export function renderAssignmentText(ctx: AssignmentContext): string {
   const q = ctx.queue.byPriority;
 
   const lines = [
-    `Hi ${ctx.agentName}, this ticket is now yours.`,
+    ctx.lead ?? defaultLead(ctx),
     "",
     `[${(PRIORITY_META[t.priority]?.label ?? t.priority).toUpperCase()}] #${t.number} — ${t.subject}`,
     [t.customerName, CHANNEL_META[t.channel]?.label ?? t.channel, t.topic, ...t.tags]
@@ -253,6 +295,13 @@ export function renderAssignmentText(ctx: AssignmentContext): string {
         now
       )} (${formatStamp(ctx.queue.oldest.createdAt)})`
     );
+  }
+
+  if (ctx.reminderLinks?.length) {
+    lines.push("", "Not now? Remind me in:");
+    for (const link of ctx.reminderLinks) {
+      lines.push(`  ${link.label}: ${link.href}`);
+    }
   }
 
   lines.push("", `All of your tickets: ${base}/inbox?view=mine`);

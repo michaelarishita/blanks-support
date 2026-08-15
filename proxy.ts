@@ -23,7 +23,10 @@ export function proxy(request: NextRequest) {
     // with GMAIL_WEBHOOK_TOKEN instead.
     path.startsWith("/api/webhooks/") ||
     // Same for Vercel cron invocations, which authenticate with CRON_SECRET.
-    path.startsWith("/api/cron/");
+    path.startsWith("/api/cron/") ||
+    // Reminder confirmation pages: the signed token is the authorisation, and
+    // the agent may be reading the email on a device that isn't signed in.
+    path.startsWith("/remind/");
 
   if (!isPublic && !hasSupabaseAuthCookie(request)) {
     const url = request.nextUrl.clone();

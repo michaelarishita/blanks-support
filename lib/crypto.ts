@@ -51,11 +51,16 @@ export function decryptSecret(payload: string): string {
   ]).toString("utf8");
 }
 
-// ---------- OAuth state signing ----------
-// Separate derived key so the state HMAC can never be confused with a
-// token ciphertext even though both come from TOKEN_ENCRYPTION_KEY.
+// ---------- Signed payloads ----------
+// Each purpose derives its own key, so a signature minted for one context can
+// never be replayed in another — an OAuth state can't stand in for a reminder
+// link, even though both come from TOKEN_ENCRYPTION_KEY.
+function purposeKey(purpose: string): Buffer {
+  return crypto.createHmac("sha256", masterKey()).update(purpose).digest();
+}
+
 function stateKey(): Buffer {
-  return crypto.createHmac("sha256", masterKey()).update("oauth-state").digest();
+  return purposeKey("oauth-state");
 }
 
 function b64url(buf: Buffer): string {
@@ -85,4 +90,44 @@ export function verifyState<T = Record<string, unknown>>(state: string): T | nul
 
 export function randomNonce(): string {
   return crypto.randomBytes(16).toString("base64url");
+}
+
+
+/** Signs an arbitrary payload under a named purpose. */
+export function signPayload(
+  purpose: string,
+  payload: Record<string, unknown>
+): string {
+  const body = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
+  const mac = b64url(
+    crypto.createHmac("sha256", purposeKey(purpose)).update(body).digest()
+  );
+  return `${body}.${mac}`;
+}
+
+export function verifyPayload<T = Record<string, unknown>>(
+  purpose: string,
+  token: string
+): T | null {
+  const [body, mac] = token.split(".");
+  if (!body || !mac) return null;
+
+  const expected = crypto
+    .createHmac("sha256", purposeKey(purpose))
+    .update(body)
+    .digest();
+  let given: Buffer;
+  try {
+    given = Buffer.from(mac, "base64url");
+  } catch {
+    return null;
+  }
+  if (given.length !== expected.length) return null;
+  if (!crypto.timingSafeEqual(given, expected)) return null;
+
+  try {
+    return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as T;
+  } catch {
+    return null;
+  }
 }
