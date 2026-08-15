@@ -26,6 +26,37 @@ export interface SignatureAgent {
   phone: string | null;
 }
 
+/**
+ * How the From display name is composed. The address underneath is always the
+ * replying agent's, so the send stays authenticated and lands in their Sent
+ * folder — only the name shown alongside it changes.
+ *
+ * Switching this is a one-line change by design:
+ *   "company"          → Blank's Sports Nutrition
+ *   "agent-at-company" → Michael at Blank's Sports Nutrition
+ *   "agent"            → Michael Arishita        (the pre-6B behaviour)
+ */
+export type FromNameFormat = "company" | "agent-at-company" | "agent";
+
+export const FROM_NAME_FORMAT: FromNameFormat = "company";
+
+export function formatFromName(
+  agentName: string | null | undefined,
+  companyName: string,
+  format: FromNameFormat = FROM_NAME_FORMAT
+): string {
+  const name = agentName?.trim();
+  switch (format) {
+    case "agent":
+      return name || companyName;
+    case "agent-at-company":
+      return name ? `${name} at ${companyName}` : companyName;
+    case "company":
+    default:
+      return companyName;
+  }
+}
+
 /** The message being replied to, quoted beneath the reply for context. */
 export interface QuotedHistory {
   authorName: string;
@@ -146,11 +177,9 @@ function renderSignature(agent: SignatureAgent, company: CompanySettings): strin
     );
   }
 
-  rows.push(
-    `<tr><td style="padding:0;background-color:#ffffff;color:${MUTED};font-size:14px;line-height:1.5;">${escapeHtml(
-      company.company_name
-    )}</td></tr>`
-  );
+  // No standalone company-name row: the logo below carries it, and the
+  // wordmark fallback spells it out. Repeating it only lengthens the block
+  // that Gmail collapses behind "see more" on later replies in a thread.
 
   if (agent.phone) {
     rows.push(
@@ -173,7 +202,7 @@ function renderSignature(agent: SignatureAgent, company: CompanySettings): strin
     // and a real alt so it degrades to the company name when images are
     // blocked (Gmail blocks them by default for unknown senders).
     rows.push(
-      `<tr><td style="padding:16px 0 0 0;background-color:#ffffff;"><img src="${escapeAttribute(
+      `<tr><td style="padding:12px 0 0 0;background-color:#ffffff;"><img src="${escapeAttribute(
         logo
       )}" alt="${escapeAttribute(company.company_name)}" width="${logoWidth}"${
         logoHeight ? ` height="${logoHeight}"` : ""
@@ -191,9 +220,9 @@ function renderSignature(agent: SignatureAgent, company: CompanySettings): strin
 
   return `
       <tr>
-        <td style="padding:24px 0 0 0;background-color:#ffffff;">
+        <td style="padding:18px 0 0 0;background-color:#ffffff;">
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
-            <tr><td style="padding:0 0 16px 0;background-color:#ffffff;border-top:1px solid ${RULE};font-size:0;line-height:0;">&nbsp;</td></tr>
+            <tr><td style="padding:0 0 12px 0;background-color:#ffffff;border-top:1px solid ${RULE};font-size:0;line-height:0;">&nbsp;</td></tr>
             ${rows.join("\n            ")}
           </table>
         </td>
@@ -291,8 +320,9 @@ export function renderEmailText({
   if (agent) {
     const block = [agent.name];
     if (agent.title) block.push(agent.title);
-    block.push(company.company_name);
+    // Company name comes from the From display name now; see formatFromName.
     if (agent.phone) block.push(agent.phone);
+    block.push(company.company_name);
     if (company.website) {
       block.push(company.website_label || company.website);
     }

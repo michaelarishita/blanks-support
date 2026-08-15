@@ -149,12 +149,13 @@ connected, watched, or otherwise touched by this app.
 
 | Header | Value | Why |
 |---|---|---|
-| `From` | the replying agent's own Gmail | The customer gets a reply from a person, not a shared alias. It also means the send is authorised as that agent, so it lands in their Sent folder. |
+| `From` | `"Blank's Sports Nutrition" <agent's own Gmail>` | The company name is the display name; the ADDRESS is still the replying agent's, so the send is authorised as them and lands in their Sent folder. The format is a constant — `FROM_NAME_FORMAT` in lib/email/template.ts, switchable to `agent-at-company` or `agent` in one line. |
 | `Reply-To` | SUPPORT_EMAIL (hello@) | Without it, a customer's reply goes back to one agent's personal mailbox — which the inbound watch does not read — and would never become a ticket. |
 
-The two must stay different. Setting `From` to hello@ would lose the personal
-sender; dropping `Reply-To` would silently break inbound threading, and it
-would break it only for replies, which is the hardest kind of gap to notice.
+The two must stay different. Setting the `From` ADDRESS to hello@ would lose
+the per-agent authentication and the Sent-folder copy; dropping `Reply-To`
+would silently break inbound threading, and it would break it only for
+replies, which is the hardest kind of gap to notice.
 
 Consequence worth knowing: because `From` is per-agent, a Gmail thread
 belongs to whichever mailbox created it — hence `tickets.gmail_account_ref`

@@ -1,10 +1,29 @@
 # Drop 6 — Brand, notifications, and chasing
 
-Five workstreams. 6A is a correctness landmine, read it first.
+Five workstreams.
+
+> **DECISIONS — 2026-08-15, these override the sections below.**
+>
+> 1. **6A is SKIPPED.** `[BLK-n]` stays in the subject. No plus-addressed
+>    routing, no change to the emitter, no change to the parser. The section
+>    is left in place as a record of the option, not as work to do.
+> 2. **6B: no header band.** The logo stays inside the signature block. Gmail
+>    collapsing a repeated signature into "see more" on later replies in a
+>    thread is accepted — the first email of a thread renders it fully, and
+>    that is where it matters. The signature is made compact instead, so
+>    there is less to collapse.
+> 3. **6E: the confirmation-page design for reminder links is CONFIRMED.**
+>    Internal-only recipients do not remove the risk: Gmail and Workspace
+>    prefetch and scan links on delivery, Outlook Safe Links follows them,
+>    and a forwarded email does it again. A GET that schedules a reminder can
+>    therefore fire with no human involved. One extra click removes the class.
 
 ---
 
 ## 6A. Remove `[BLK-n]` from the subject — WITHOUT losing routing
+
+> **SKIPPED — not built.** Kept as a record of what the option would require
+> if the token is ever removed. Nothing below is implemented.
 
 Michael wants the ticket token invisible to customers. Fine, but that token
 is currently the **primary inbound routing key**, deliberately chosen
@@ -47,15 +66,15 @@ the send is authenticated and lands in their Sent folder. (If Michael later
 prefers "Michael at Blank's Sports Nutrition", that's a one-line change —
 make the format a constant, not a literal.)
 
-**Logo hidden behind Gmail's "see more".** Root cause: the logo sits at the
-bottom of the signature, and Gmail's clipping collapses everything from the
-signature/quote boundary down. Fix by moving the brand mark **above** the
-fold rather than fighting the collapse:
+**Logo and Gmail's "see more".** ORIGINAL PLAN (rejected): move the logo into
+a header band above the reply body. Michael doesn't want a header band.
 
-- Put the logo in a **header band at the top of the email card** — small
-  (max-height 40px), left-aligned, above the reply body, on white.
-- The signature below stays text-only: name, title, company, website link.
-- This also matches how the reply reads: brand first, message, sign-off.
+**As built:** the logo stays at the bottom of the signature. Gmail clipping
+collapses a repeated signature on later replies in a thread; that is accepted,
+because the first email of a thread — the one that has to carry the brand —
+renders in full. The mitigation is to keep the signature short, so less falls
+below the fold: the standalone company-name line is dropped (the logo, or the
+wordmark fallback, already carries it) and the block's padding is tightened.
 
 Keep the logo `<img>` absolute-URL'd, with `alt`, explicit width/height,
 and a text fallback. Re-test in Gmail desktop + iOS, Apple Mail, Outlook.
@@ -231,6 +250,4 @@ threading headers present and stable across a 3-message chain.
 4. 6E (notifications) — the real build. Ship assignment email first,
    verify threading and loop safety live, then add reminders, then
    escalation.
-5. 6A (subject token) — LAST, and only after the plus-address routing has
-   been proven with real replies from three clients. This is the one that
-   breaks customer conversations if it's wrong.
+5. ~~6A (subject token)~~ — SKIPPED, see the decisions block at the top.

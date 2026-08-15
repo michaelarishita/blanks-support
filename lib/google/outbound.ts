@@ -5,6 +5,7 @@ import {
   generateMessageId,
 } from "@/lib/email/mime";
 import {
+  formatFromName,
   renderEmailHtml,
   renderEmailText,
   type QuotedHistory,
@@ -316,9 +317,10 @@ async function deliverLoadedMessage(message: LoadedMessage): Promise<DeliveryRes
 
   const raw = buildRawEmail({
     fromEmail,
-    // Same constant the thread renders, so an orphaned reply is called the
-    // same thing in the app and in the customer's inbox.
-    fromName: agent?.name ?? AUTHOR_FALLBACK,
+    // Display name is the company; the address is still this agent's, so the
+    // send stays authenticated and lands in their Sent folder. Format is a
+    // constant in the template module, not a literal here.
+    fromName: formatFromName(agent?.name ?? AUTHOR_FALLBACK, company.company_name),
     to: customer!.email!,
     replyTo: await resolveReplyTo(),
     subject: buildReplySubject(ticket.subject, ticket.number, {
