@@ -19,6 +19,7 @@ import type {
   TicketPriority,
 } from "@/lib/types";
 import QuickAssign from "@/components/QuickAssign";
+import ShopifyPanel from "@/components/ShopifyPanel";
 import Avatar from "@/components/ui/Avatar";
 import { Input } from "@/components/ui/Field";
 import Tooltip from "@/components/ui/Tooltip";
@@ -206,9 +207,10 @@ export default function TicketSidePanel({
           </Link>
         )}
 
-        <div className="mt-3 rounded-md border border-dashed border-subtle p-2.5 text-caption text-tertiary">
-          Shopify order history lands here in Phase 4.
-        </div>
+      </Section>
+
+      <Section title="Shopify">
+        <ShopifyPanel ticketOrderNumber={ticket.order_number} />
       </Section>
 
       <Section title="Assigned to">

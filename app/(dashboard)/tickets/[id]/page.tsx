@@ -5,6 +5,7 @@ import ReplyBox from "@/components/ReplyBox";
 import TicketHeader from "@/components/TicketHeader";
 import TicketSidePanel from "@/components/TicketSidePanel";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
+import { ShopifyProvider } from "@/components/ShopifyContext";
 import {
   canEmail,
   reconcileStuckSends,
@@ -94,6 +95,10 @@ export default async function TicketPage({
   ]);
 
   return (
+    <ShopifyProvider
+      email={t.customer?.email ?? null}
+      orderNumber={t.order_number}
+    >
     <div className="flex h-full">
       <RealtimeRefresher />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -137,5 +142,6 @@ export default async function TicketPage({
         previousTicketCount={customerTicketCount ?? 0}
       />
     </div>
+    </ShopifyProvider>
   );
 }

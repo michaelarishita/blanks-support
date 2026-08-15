@@ -12,7 +12,19 @@ import Button from "@/components/ui/Button";
 import Tooltip from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
 import MacroPicker, { type Macro } from "@/components/MacroPicker";
-import { LockIcon, MailIcon, PaperclipIcon, UserIcon } from "@/components/ui/icons";
+import { useShopify } from "@/components/ShopifyContext";
+import {
+  expandMacro,
+  hasUnresolvedOrder,
+  orderVariableValues,
+} from "@/lib/shopify/macros";
+import {
+  AlertTriangleIcon,
+  LockIcon,
+  MailIcon,
+  PaperclipIcon,
+  UserIcon,
+} from "@/components/ui/icons";
 
 type Mode = "reply" | "note";
 
@@ -45,6 +57,10 @@ export default function ReplyBox({
 
   const isNote = mode === "note";
   const empty = isEmptyHtml(body);
+  const { primaryOrder } = useShopify();
+  // A macro that couldn't find an order leaves a loud placeholder rather than
+  // a blank. Sending "Your order  has shipped" is worse than a visible fault.
+  const unresolvedOrder = hasUnresolvedOrder(body);
 
   const focusComposer = useCallback((next: Mode) => {
     setMode(next);
@@ -56,10 +72,12 @@ export default function ReplyBox({
   useHotkey("n", useCallback(() => focusComposer("note"), [focusComposer]));
 
   function applyMacro(macro: Macro) {
-    const text = macro.body.replaceAll(
-      "{{customer.first_name}}",
-      customerFirstName || "there"
-    );
+    // Order variables come from the context the sidebar already fetched, so
+    // inserting a macro costs no extra Shopify call.
+    const text = expandMacro(macro.body, {
+      "customer.first_name": customerFirstName || "there",
+      ...orderVariableValues(primaryOrder),
+    });
     // Macros are stored as plain text — escape it and convert newlines
     // before it enters an HTML editor.
     const html = text
@@ -168,6 +186,14 @@ export default function ReplyBox({
         {/* Context, not a warning and not a block: covering someone else's
             ticket is normal, but sending without noticing whose it is isn't.
             Auto-assign deliberately won't take it from them. */}
+        {unresolvedOrder && !isNote && (
+          <p className="mt-2 flex items-center gap-1.5 text-caption text-danger-text">
+            <AlertTriangleIcon size={12} className="flex-none" />
+            This reply still contains an unresolved order placeholder — no order
+            was found to fill it in.
+          </p>
+        )}
+
         {assignedToOther && !isNote && (
           <p className="mt-2 flex items-center gap-1.5 text-caption text-tertiary">
             <UserIcon size={12} className="flex-none" />
