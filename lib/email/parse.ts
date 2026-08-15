@@ -26,9 +26,24 @@ export interface ParsedEmail {
   date: Date;
   bodyText: string;
   bodyHtml: string | null;
+  ccEmails: string[];
+  /** Delivered-To / X-Forwarded-To / X-Original-To, lowercased addresses. */
+  deliveredTo: string[];
+  /** Raw List-Id value, if the message carries one. */
+  listId: string | null;
   attachments: ParsedAttachment[];
-  /** Set when the message looks automated and must not be replied to. */
+  /** Set when the message is machine-generated. Always a drop. */
   autoReplyReason: string | null;
+  /** Set when the message carries mailing-list headers. Drop UNLESS it
+   *  arrived via a trusted forwarder. */
+  listReason: string | null;
+}
+
+function headerValues(part: GmailPart | undefined, name: string): string[] {
+  const target = name.toLowerCase();
+  return (part?.headers ?? [])
+    .filter((h) => h.name.toLowerCase() === target)
+    .map((h) => h.value);
 }
 
 function headerValue(part: GmailPart | undefined, name: string): string | null {
@@ -121,9 +136,9 @@ function htmlPartToText(html: string): string {
 }
 
 /**
- * Headers that mark a message as machine-generated. Replying to one of these
- * is how a support inbox and an out-of-office responder end up in an infinite
- * loop, so detection is not optional.
+ * Headers that mark a message as MACHINE-GENERATED — an out-of-office, a
+ * bounce, an autoresponder. Replying to one of these is how a support inbox
+ * and a vacation responder loop forever, so this always drops, no exceptions.
  */
 function detectAutoReply(payload: GmailPart | undefined): string | null {
   const autoSubmitted = headerValue(payload, "Auto-Submitted");
@@ -132,18 +147,56 @@ function detectAutoReply(payload: GmailPart | undefined): string | null {
   }
   if (headerValue(payload, "X-Autoreply")) return "X-Autoreply";
   if (headerValue(payload, "X-Autorespond")) return "X-Autorespond";
-  if (headerValue(payload, "List-Unsubscribe")) return "List-Unsubscribe";
-  if (headerValue(payload, "List-Id")) return "List-Id";
-
-  const precedence = headerValue(payload, "Precedence")?.toLowerCase();
-  if (precedence && ["bulk", "list", "junk", "auto_reply"].includes(precedence)) {
-    return `Precedence: ${precedence}`;
-  }
+  if (headerValue(payload, "X-Blanks-Notification")) return "X-Blanks-Notification";
 
   const failedRecipients = headerValue(payload, "X-Failed-Recipients");
   if (failedRecipients) return "X-Failed-Recipients (bounce)";
 
+  const precedence = headerValue(payload, "Precedence")?.toLowerCase();
+  if (precedence === "auto_reply") return "Precedence: auto_reply";
+
   return null;
+}
+
+/**
+ * Headers that mark a message as BULK — a newsletter, a mailing list.
+ *
+ * Kept separate from auto-reply detection because a Google Group stamps all
+ * of these on ordinary customer mail it forwards. Treating them as automation
+ * meant every message reaching hello@ through the support@ group was silently
+ * discarded as if it were a newsletter. A trusted forwarder suppresses this
+ * rule; it never suppresses the automation rule above.
+ */
+function detectBulkMail(payload: GmailPart | undefined): string | null {
+  if (headerValue(payload, "List-Unsubscribe")) return "List-Unsubscribe";
+
+  const listId = headerValue(payload, "List-Id");
+  if (listId) return `List-Id: ${listId.trim()}`;
+
+  if (headerValue(payload, "Mailing-list")) return "Mailing-list";
+
+  const precedence = headerValue(payload, "Precedence")?.toLowerCase();
+  if (precedence && ["bulk", "list", "junk"].includes(precedence)) {
+    return `Precedence: ${precedence}`;
+  }
+
+  return null;
+}
+
+/**
+ * Everything indicating how the message reached this mailbox. Used to decide
+ * whether a bulk-looking message actually arrived through a group we trust.
+ */
+function deliveryPaths(payload: GmailPart | undefined): string[] {
+  const raw = [
+    ...headerValues(payload, "Delivered-To"),
+    ...headerValues(payload, "X-Forwarded-To"),
+    ...headerValues(payload, "X-Original-To"),
+  ];
+  return raw
+    .flatMap((value) => value.split(","))
+    .map((entry) => parseAddress(entry).email)
+    .filter((email): email is string => Boolean(email));
 }
 
 export function parseGmailMessage(message: GmailMessage): ParsedEmail {
@@ -185,10 +238,14 @@ export function parseGmailMessage(message: GmailMessage): ParsedEmail {
   if (!bodyText) bodyText = message.snippet ?? "";
 
   const from = parseAddress(headerValue(payload, "From"));
-  const to = (headerValue(payload, "To") ?? "")
-    .split(",")
-    .map((entry) => parseAddress(entry).email)
-    .filter((email): email is string => Boolean(email));
+  const addresses = (header: string) =>
+    (headerValue(payload, header) ?? "")
+      .split(",")
+      .map((entry) => parseAddress(entry).email)
+      .filter((email): email is string => Boolean(email));
+
+  const to = addresses("To");
+  const cc = addresses("Cc");
 
   const internal = Number(message.internalDate);
 
@@ -205,8 +262,12 @@ export function parseGmailMessage(message: GmailMessage): ParsedEmail {
     date: Number.isFinite(internal) && internal > 0 ? new Date(internal) : new Date(),
     bodyText: bodyText.replace(/\r\n/g, "\n").trim(),
     bodyHtml,
+    ccEmails: cc,
+    deliveredTo: deliveryPaths(payload),
+    listId: headerValue(payload, "List-Id")?.trim() ?? null,
     attachments,
     autoReplyReason: detectAutoReply(payload),
+    listReason: detectBulkMail(payload),
   };
 }
 

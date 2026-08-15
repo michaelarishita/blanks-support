@@ -51,6 +51,7 @@ Then: Add New → Project → import `michaelarishita/blanks-support`.
 | `NEXT_PUBLIC_MAIL_POLL_SECONDS` | unset in production (Pub/Sub takes over) |
 | `CRON_SECRET` | new random value; guards the cron endpoints |
 | `IGNORED_SENDER_EMAILS` | `support@blankssportsnutrition.com` — senders dropped rather than ticketed, for the Gorgias parallel run |
+| `TRUSTED_FORWARD_ADDRESSES` | `support@blankssportsnutrition.com` — REQUIRED while support@ is a Google Group forwarding to hello@, or every forwarded customer email is discarded as bulk mail |
 | `GMAIL_PUBSUB_TOPIC` | set in A3. NOTE: `GMAIL_`, not `GOOGLE_` — an earlier draft of this table had it wrong, and the wrong name fails silently as "GMAIL_PUBSUB_TOPIC is not set" from the watch-renewal cron |
 | `GMAIL_WEBHOOK_TOKEN` | new random value. REQUIRED in production: the Pub/Sub endpoint accepts any caller when it is unset |
 | `ALERT_EMAIL` | michael@blankssportsnutrition.com — where inbound-down alerts go |

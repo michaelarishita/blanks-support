@@ -92,6 +92,114 @@ export function parseIgnoredSenders(raw: string | undefined): Set<string> {
 }
 
 /**
+ * Addresses we forward through and therefore trust, from
+ * TRUSTED_FORWARD_ADDRESSES.
+ *
+ * support@ is a Google Group with hello@ as a member, so customer mail sent
+ * to support@ reaches us stamped with List-Id, List-Unsubscribe,
+ * Mailing-list and Precedence: list. Those are the newsletter markers, and
+ * the guard was discarding real customers as bulk mail.
+ */
+export const parseTrustedForwarders = parseIgnoredSenders;
+
+/** List-Id for a group address: support@example.com → support.example.com */
+function listIdForms(address: string): string[] {
+  return [address, address.replace("@", ".")];
+}
+
+/**
+ * Did this message reach us through an address we forward from?
+ *
+ * Checked across every header that records the delivery path, because
+ * different forwarders populate different ones: Google Groups sets List-Id
+ * and Delivered-To, plain forwarding sets X-Forwarded-To, some MTAs set
+ * X-Original-To, and the group address is usually still visible in To/Cc.
+ */
+export function viaTrustedForwarder(
+  parsed: Pick<ParsedEmail, "deliveredTo" | "toEmails" | "ccEmails" | "listId">,
+  trusted: Set<string>
+): string | null {
+  if (!trusted.size) return null;
+
+  for (const address of [
+    ...parsed.deliveredTo,
+    ...parsed.toEmails,
+    ...parsed.ccEmails,
+  ]) {
+    if (trusted.has(address.toLowerCase())) return address.toLowerCase();
+  }
+
+  if (parsed.listId) {
+    const listId = parsed.listId.replace(/[<>]/g, "").trim().toLowerCase();
+    for (const address of trusted) {
+      if (listIdForms(address).includes(listId)) return address;
+    }
+  }
+
+  return null;
+}
+
+export interface InboundDrop {
+  /** Stable identifier for the rule, used in logs and skip counts. */
+  rule:
+    | "no-sender"
+    | "automated"
+    | "own-address"
+    | "ignored-sender"
+    | "bulk-mail";
+  detail: string;
+}
+
+export interface GuardContext {
+  ourAddresses: Set<string>;
+  ignoredSenders: Set<string>;
+  trustedForwarders: Set<string>;
+}
+
+/**
+ * Decides whether an inbound message should be discarded, and why.
+ *
+ * Pure, so the rules can be tested without a mailbox. Order matters: the
+ * automation and internal-sender rules protect against genuine mail loops and
+ * are never suppressed. Only the bulk-mail rule yields to a trusted
+ * forwarder, because only that rule misfires on forwarded customer mail.
+ *
+ * Every sender comparison uses the parsed From address alone. Sender and
+ * Return-Path are deliberately NOT consulted: a Google Group rewrites both to
+ * the group address, and support@ is in IGNORED_SENDER_EMAILS, so matching
+ * them would discard group mail a second way.
+ */
+export function evaluateInboundGuards(
+  parsed: ParsedEmail,
+  ctx: GuardContext
+): InboundDrop | null {
+  if (!parsed.fromEmail) {
+    return { rule: "no-sender", detail: "no parseable From address" };
+  }
+
+  if (parsed.autoReplyReason) {
+    return { rule: "automated", detail: parsed.autoReplyReason };
+  }
+
+  const from = parsed.fromEmail.toLowerCase();
+  if (ctx.ourAddresses.has(from)) {
+    return { rule: "own-address", detail: from };
+  }
+  if (ctx.ignoredSenders.has(from)) {
+    return { rule: "ignored-sender", detail: from };
+  }
+
+  if (parsed.listReason) {
+    const forwarder = viaTrustedForwarder(parsed, ctx.trustedForwarders);
+    if (!forwarder) {
+      return { rule: "bulk-mail", detail: parsed.listReason };
+    }
+  }
+
+  return null;
+}
+
+/**
  * Finds the ticket an incoming message belongs to.
  *
  * Precedence matters: the [BLK-n] token is checked first because it survives
@@ -462,6 +570,9 @@ export async function syncSupportMailbox(
   const admin = createAdminClient();
   const ourAddresses = await ourOwnAddresses(connection.account_ref);
   const ignoredSenders = parseIgnoredSenders(process.env.IGNORED_SENDER_EMAILS);
+  const trustedForwarders = parseTrustedForwarders(
+    process.env.TRUSTED_FORWARD_ADDRESSES
+  );
 
   // Drop ids we've already stored before spending a fetch on each one.
   const uniqueIds = [...new Set(collected.ids)];
@@ -482,23 +593,18 @@ export async function syncSupportMailbox(
     try {
       const parsed = parseGmailMessage(await getGmailMessage(accessToken, id));
 
-      if (parsed.autoReplyReason) {
-        countSkip(result, `automated (${parsed.autoReplyReason})`);
-        continue;
-      }
-      if (!parsed.fromEmail) {
-        countSkip(result, "no sender address");
-        continue;
-      }
-      if (ourAddresses.has(parsed.fromEmail)) {
-        countSkip(result, "our own address");
-        continue;
-      }
-      // parsed.fromEmail is already lowercased by parseAddress, and the
-      // configured list is lowercased on parse, so this match is
-      // case-insensitive on both sides.
-      if (ignoredSenders.has(parsed.fromEmail)) {
-        countSkip(result, `ignored sender (${parsed.fromEmail})`);
+      const drop = evaluateInboundGuards(parsed, {
+        ourAddresses,
+        ignoredSenders,
+        trustedForwarders,
+      });
+      if (drop) {
+        // Named rule plus the specific reason, so a wrongly-dropped message
+        // can be traced to the rule that dropped it rather than guessed at.
+        countSkip(result, `${drop.rule} (${drop.detail})`);
+        console.info(
+          `[inbound] dropped ${id} by rule=${drop.rule} detail="${drop.detail}" from=${parsed.fromEmail ?? "?"}`
+        );
         continue;
       }
 

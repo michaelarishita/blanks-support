@@ -152,17 +152,17 @@ describe("parseGmailMessage", () => {
     expect(parsed.subject).toBe("Café");
   });
 
-  describe("auto-reply detection", () => {
+  describe("guard detection", () => {
+    // Machine-generated mail. These always drop — a trusted forwarder never
+    // suppresses them, because they are the genuine loop risk.
     it.each([
       ["Auto-Submitted", "auto-replied"],
       ["X-Autoreply", "yes"],
       ["X-Autorespond", "yes"],
-      ["List-Unsubscribe", "<mailto:x@y.com>"],
-      ["List-Id", "<list.example.com>"],
-      ["Precedence", "bulk"],
-      ["Precedence", "junk"],
+      ["X-Blanks-Notification", "1"],
       ["X-Failed-Recipients", "someone@example.com"],
-    ])("flags %s: %s", (name, value) => {
+      ["Precedence", "auto_reply"],
+    ])("flags %s: %s as automated", (name, value) => {
       const parsed = parseGmailMessage(
         message({
           headers: headers({ From: "jane@example.com", [name]: value }),
@@ -170,6 +170,28 @@ describe("parseGmailMessage", () => {
         })
       );
       expect(parsed.autoReplyReason).toBeTruthy();
+      expect(parsed.listReason).toBeNull();
+    });
+
+    // Mailing-list markers, kept separate: a Google Group stamps these on
+    // ordinary customer mail, so they must be suppressible by a trusted
+    // forwarder without also disabling automation detection.
+    it.each([
+      ["List-Unsubscribe", "<mailto:x@y.com>"],
+      ["List-Id", "<list.example.com>"],
+      ["Mailing-list", "list x@y.com"],
+      ["Precedence", "bulk"],
+      ["Precedence", "list"],
+      ["Precedence", "junk"],
+    ])("flags %s: %s as bulk, not automated", (name, value) => {
+      const parsed = parseGmailMessage(
+        message({
+          headers: headers({ From: "jane@example.com", [name]: value }),
+          body: { data: b64("newsletter") },
+        })
+      );
+      expect(parsed.listReason).toBeTruthy();
+      expect(parsed.autoReplyReason).toBeNull();
     });
 
     it("allows Auto-Submitted: no", () => {
@@ -190,6 +212,24 @@ describe("parseGmailMessage", () => {
         })
       );
       expect(parsed.autoReplyReason).toBeNull();
+      expect(parsed.listReason).toBeNull();
+    });
+
+    it("collects every value of a repeated Delivered-To", () => {
+      const parsed = parseGmailMessage(
+        message({
+          headers: [
+            { name: "From", value: "jane@example.com" },
+            { name: "Delivered-To", value: "support@blankssportsnutrition.com" },
+            { name: "Delivered-To", value: "hello@blankssportsnutrition.com" },
+          ],
+          body: { data: b64("hi") },
+        })
+      );
+      expect(parsed.deliveredTo).toEqual([
+        "support@blankssportsnutrition.com",
+        "hello@blankssportsnutrition.com",
+      ]);
     });
   });
 });
