@@ -6,6 +6,7 @@ import SignatureEditor from "@/components/SignatureEditor";
 import CompanyBrandEditor from "@/components/CompanyBrandEditor";
 import CheckMailNow from "@/components/CheckMailNow";
 import NotificationToggle from "@/components/NotificationToggle";
+import ProfileEditor from "@/components/ProfileEditor";
 import { getCompanySettings } from "@/lib/settings";
 import {
   getConnectionForAgent,
@@ -32,7 +33,7 @@ export default async function SettingsPage({
   const { data: me } = await supabase
     .from("agents")
     .select(
-      "id, name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled"
+      "id, name, display_name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled"
     )
     .eq("id", user.id)
     .single();
@@ -104,6 +105,22 @@ export default async function SettingsPage({
       )}
 
       <section className="mt-8 rounded-xl border border-gray-200 bg-white p-6">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+          Your profile
+        </h2>
+        <p className="mb-4 mt-1 text-sm text-gray-600">
+          How your teammates see you inside this dashboard. Customers never see
+          this — the name on your outbound email is set under Signature.
+        </p>
+        {me && (
+          <ProfileEditor
+            displayName={me.display_name ?? me.name}
+            signatureName={me.name}
+          />
+        )}
+      </section>
+
+      <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
         <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
           Your Gmail
         </h2>

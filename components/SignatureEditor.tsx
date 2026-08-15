@@ -59,7 +59,11 @@ export default function SignatureEditor({
   return (
     <div className="grid gap-6 md:grid-cols-[minmax(0,240px)_minmax(0,1fr)]">
       <div className="space-y-4">
-        <FieldLabel label="Display name" htmlFor="sig-name">
+        <FieldLabel
+          label="Name customers see"
+          htmlFor="sig-name"
+          hint="Goes on outbound email. Your internal name is under Your profile."
+        >
           <Input
             id="sig-name"
             value={name}

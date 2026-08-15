@@ -166,6 +166,21 @@ describe("priority palette", () => {
     expect(distance).toBeGreaterThan(60);
   });
 
+  /**
+   * In the inbox list Urgent is BLACK and High is RED, so hue can't decide
+   * which wins a scan. Weight has to: the black fill must out-contrast the
+   * red one against the row, and Urgent carries three cues (rail, chip,
+   * heavier subject) to High's one.
+   */
+  it("Urgent out-contrasts High against the row background", () => {
+    const panel = token("panel");
+    const urgent = contrast(token("priority-urgent-bg"), panel);
+    const high = contrast(token("priority-high-bg"), panel);
+    expect(urgent).toBeGreaterThan(high);
+    // And by a clear margin, not a rounding error.
+    expect(urgent / high).toBeGreaterThan(1.5);
+  });
+
   it("keeps every priority fill distinct from every other", () => {
     const names = ["urgent", "high", "normal", "low"];
     for (let i = 0; i < names.length; i++) {

@@ -8,13 +8,34 @@ import { shortAgo } from "@/lib/format";
 import { agentDisplayName, customerDisplayName } from "@/lib/display";
 import { useHotkey } from "@/lib/shortcuts";
 import type { Ticket } from "@/lib/types";
-import { CHANNEL_META, STATUS_META } from "@/lib/types";
+import { CHANNEL_META, PRIORITY_META, STATUS_META } from "@/lib/types";
+import type { TicketPriority } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
 import ChannelIcon from "@/components/ui/ChannelIcon";
 import EmptyState from "@/components/ui/EmptyState";
 import Tooltip from "@/components/ui/Tooltip";
 import { InboxIcon } from "@/components/ui/icons";
+
+/**
+ * Only Urgent and High appear in the list. Normal and Low are the default
+ * state, and chipping all four would make every row shout, which is the
+ * opposite of triage.
+ *
+ * Urgent has to out-shout High while being BLACK against a red — hue alone
+ * would lose that fight — so it gets three cues to High's one: an edge rail,
+ * a filled chip, and a heavier subject. The contrast test asserts the black
+ * fill genuinely out-contrasts the red one against the row.
+ */
+const PRIORITY_RAIL: Partial<Record<TicketPriority, string>> = {
+  urgent: "bg-priority-urgent-bg",
+  high: "bg-priority-high-bg",
+};
+
+const PRIORITY_CHIP: Partial<Record<TicketPriority, string>> = {
+  urgent: "bg-priority-urgent-bg text-priority-urgent-fg",
+  high: "bg-priority-high-bg text-priority-high-fg",
+};
 
 // Copy per view — the generic "No tickets here 🎉" told an agent nothing
 // about whether they were done or looking in the wrong place.
@@ -106,6 +127,9 @@ export default function TicketList({
         const status = STATUS_META[t.status];
         // "New" means nobody has picked it up yet — worth pulling the eye.
         const isNew = t.status === "new";
+        const priority = t.priority as TicketPriority;
+        const rail = PRIORITY_RAIL[priority];
+        const chip = PRIORITY_CHIP[priority];
         const customerName = customerDisplayName(t.customer);
         const focused = index === cursor;
 
@@ -125,17 +149,23 @@ export default function TicketList({
               // A raise rather than a grey wash, so the row reads as
               // liftable rather than disabled.
               "hover:z-10 hover:bg-panel hover:shadow-md",
-              focused && "z-10 bg-panel shadow-md"
+              // Focus is a ring rather than a left rail, so the left edge is
+              // free to carry priority.
+              focused && "z-10 bg-panel shadow-md ring-2 ring-inset ring-brand-400"
             )}
           >
+            {rail && (
+              <span
+                aria-hidden="true"
+                className={cn("absolute inset-y-0 left-0 z-20 w-[3px]", rail)}
+              />
+            )}
             <Link
               href={`/tickets/${t.id}${viewSuffix}`}
               aria-label={`Open ticket #${t.number}: ${t.subject}`}
               className="absolute inset-0 z-10"
             />
-            {focused && (
-              <span className="absolute inset-y-0 left-0 z-20 w-0.5 bg-brand-500" />
-            )}
+
             <span className="flex w-2 flex-none justify-center">
               {isNew && (
                 <span
@@ -157,7 +187,7 @@ export default function TicketList({
                 <span
                   className={cn(
                     "truncate text-body text-primary",
-                    isNew ? "font-semibold" : "font-medium"
+                    isNew || priority === "urgent" ? "font-semibold" : "font-medium"
                   )}
                 >
                   {t.subject}
@@ -180,6 +210,19 @@ export default function TicketList({
             </div>
 
             <div className="flex flex-none items-center gap-2.5">
+              {chip && (
+                <span
+                  className={cn(
+                    "rounded-[4px] px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-[0.06em]",
+                    chip
+                  )}
+                  // Never colour alone: the label is the signal, the fill is
+                  // reinforcement.
+                  title={`${PRIORITY_META[priority].label} priority`}
+                >
+                  {PRIORITY_META[priority].label.toUpperCase()}
+                </span>
+              )}
               {/* A name, not initials: two M's and two J's on this team made
                   initial-only circles ambiguous. The avatar stays as a colour
                   cue beside it, never as the identifier. */}

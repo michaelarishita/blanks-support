@@ -10,7 +10,11 @@ import {
   reconcileStuckSends,
   resolveSender,
 } from "@/lib/google/outbound";
-import { customerDisplayName, customerFirstName } from "@/lib/display";
+import {
+  agentDisplayName,
+  customerDisplayName,
+  customerFirstName,
+} from "@/lib/display";
 import {
   applyTicketFilters,
   inboxHref,
@@ -115,6 +119,11 @@ export default async function TicketPage({
           customerFirstName={customerFirstName(t.customer)}
           sendingAs={connection?.account_ref ?? null}
           emailCapable={canEmail(t.channel, t.customer?.email)}
+          assignedToOther={
+            t.assignee && t.assignee.id !== user?.id
+              ? agentDisplayName(t.assignee)
+              : null
+          }
         />
       </div>
 

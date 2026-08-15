@@ -12,7 +12,7 @@ import Button from "@/components/ui/Button";
 import Tooltip from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
 import MacroPicker, { type Macro } from "@/components/MacroPicker";
-import { LockIcon, MailIcon, PaperclipIcon } from "@/components/ui/icons";
+import { LockIcon, MailIcon, PaperclipIcon, UserIcon } from "@/components/ui/icons";
 
 type Mode = "reply" | "note";
 
@@ -22,10 +22,13 @@ export default function ReplyBox({
   customerFirstName,
   sendingAs,
   emailCapable,
+  assignedToOther,
 }: {
   ticketId: string;
   macros: Macro[];
   customerFirstName: string;
+  /** Display name of the owner, when it's someone other than the reader. */
+  assignedToOther: string | null;
   /** Gmail address this agent's replies leave from, if connected. */
   sendingAs: string | null;
   /** False for tickets with no customer email — replies are stored only. */
@@ -161,6 +164,16 @@ export default function ReplyBox({
               : "Write a reply…"
           }
         />
+
+        {/* Context, not a warning and not a block: covering someone else's
+            ticket is normal, but sending without noticing whose it is isn't.
+            Auto-assign deliberately won't take it from them. */}
+        {assignedToOther && !isNote && (
+          <p className="mt-2 flex items-center gap-1.5 text-caption text-tertiary">
+            <UserIcon size={12} className="flex-none" />
+            Assigned to <span className="text-secondary">{assignedToOther}</span>
+          </p>
+        )}
 
         <div className="mt-2 flex items-center gap-3">
           <div className="min-w-0 flex-1 text-caption">

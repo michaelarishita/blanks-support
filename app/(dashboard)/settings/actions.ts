@@ -288,3 +288,29 @@ export async function setNotificationsEnabled(enabled: boolean): Promise<ActionR
   revalidatePath("/settings");
   return { ok: true };
 }
+
+
+/**
+ * The INTERNAL label — what teammates see in the dashboard. Deliberately a
+ * separate action from the signature, so the two can't be edited as if they
+ * were one field.
+ */
+export async function updateDisplayName(displayName: string): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const cleaned = plainField(displayName, FIELD_LIMITS.name);
+  if (!cleaned) return { error: "Display name can't be empty" };
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({ display_name: cleaned })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save your display name.") };
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/inbox");
+  return { ok: true };
+}
