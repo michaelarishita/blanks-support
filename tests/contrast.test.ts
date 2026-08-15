@@ -120,6 +120,64 @@ describe("WCAG AA contrast", () => {
   });
 });
 
+/**
+ * The priority palette inverts the usual convention (red is High, not
+ * Urgent), so it leans harder on labels than on hue. These assertions cover
+ * the two things colour still has to do: stay legible, and stay
+ * distinguishable from the warning tone that already means something else.
+ */
+describe("priority palette", () => {
+  it.each(["urgent", "high", "normal", "low"])(
+    "%s chip text clears AA on its fill",
+    (name) => {
+      const ratio = contrast(token(`priority-${name}-fg`), token(`priority-${name}-bg`));
+      expect(round(ratio)).toBeGreaterThanOrEqual(4.5);
+    }
+  );
+
+  it("gives Low dark text, because white on yellow is illegible", () => {
+    expect(contrast(WHITE, token("priority-low-bg"))).toBeLessThan(4.5);
+    expect(token("priority-low-fg")).toEqual(token("gray-900"));
+  });
+
+  it.each(["urgent", "high", "normal"])("%s chip carries white text", (name) => {
+    expect(token(`priority-${name}-fg`)).toEqual(WHITE);
+  });
+
+  // Amber already means "warning / internal note" here. A Low chip that reads
+  // as a warning would be actively misleading.
+  //
+  // Judged on SATURATION, not contrast: both are light colours, so their
+  // luminance ratio is near 1 no matter how obviously different they look.
+  // What separates a vivid yellow from a pale cream is chroma.
+  it("keeps Low visually distinct from the warning tone", () => {
+    const low = token("priority-low-bg");
+    const warning = token("warning-bg");
+
+    const chroma = (c: [number, number, number]) => Math.max(...c) - Math.min(...c);
+    // Vivid: the yellow is fully saturated.
+    expect(chroma(low)).toBeGreaterThan(180);
+    // Pale: the warning wash is nearly white.
+    expect(chroma(warning)).toBeLessThan(40);
+
+    const distance = Math.sqrt(
+      low.reduce((sum, channel, i) => sum + (channel - warning[i]) ** 2, 0)
+    );
+    expect(distance).toBeGreaterThan(60);
+  });
+
+  it("keeps every priority fill distinct from every other", () => {
+    const names = ["urgent", "high", "normal", "low"];
+    for (let i = 0; i < names.length; i++) {
+      for (let j = i + 1; j < names.length; j++) {
+        const a = token(`priority-${names[i]}-bg`);
+        const b = token(`priority-${names[j]}-bg`);
+        expect(a).not.toEqual(b);
+      }
+    }
+  });
+});
+
 describe("semantic tones keep their own hues", () => {
   it.each([
     ["success-text", "success-bg"],

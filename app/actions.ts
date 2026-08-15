@@ -51,12 +51,14 @@ export async function sendReply(
   // storing anything if it can't — otherwise a missing Gmail connection would
   // swallow the agent's draft into a thread as an undeliverable message.
   let willEmail = false;
+  let unassigned = false;
   if (!isNote) {
     const { data: ticket } = await supabase
       .from("tickets")
-      .select("channel, customer:customers(email)")
+      .select("channel, assignee_id, customer:customers(email)")
       .eq("id", ticketId)
       .single();
+    unassigned = !ticket?.assignee_id;
     const customer = Array.isArray(ticket?.customer)
       ? ticket.customer[0]
       : ticket?.customer;
@@ -92,6 +94,27 @@ export async function sendReply(
     if (!result.ok) deliveryError = result.error;
   }
 
+  // Answering an unowned ticket claims it. Deliberately does NOT reassign a
+  // ticket that already has an owner — replying to someone else's ticket
+  // shouldn't silently take it off them.
+  let claimed = false;
+  if (!isNote && unassigned) {
+    const { error: claimError } = await supabase
+      .from("tickets")
+      .update({ assignee_id: userId })
+      .eq("id", ticketId)
+      .is("assignee_id", null);
+
+    if (!claimError) {
+      claimed = true;
+      await logEvent(supabase, ticketId, userId, "auto_assigned", {
+        reason: "replied to an unassigned ticket",
+      });
+      // No assignment notification here: they just replied to it, so mailing
+      // them about it would be noise.
+    }
+  }
+
   if (!isNote) {
     // A public reply moves the ticket to "waiting on customer". This is the
     // only place `pending` is set by hand, and 6E's escalation suppression
@@ -112,9 +135,13 @@ export async function sendReply(
   // than an error — the draft must be cleared to avoid a duplicate send, but
   // the agent still needs to know the customer hasn't received it.
   if (deliveryError) {
-    return { ok: true, warning: `Saved, but the email didn't send: ${deliveryError}` };
+    return {
+      ok: true,
+      claimed,
+      warning: `Saved, but the email didn't send: ${deliveryError}`,
+    };
   }
-  return { ok: true };
+  return { ok: true, claimed };
 }
 
 /** Re-attempts delivery of a reply that failed to send. */

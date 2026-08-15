@@ -85,6 +85,12 @@ export default function ReplyBox({
         toast(emailCapable ? "Reply sent" : "Reply saved to thread", {
           tone: "success",
         });
+
+      // Surfaced separately so the assignment isn't a silent side effect of
+      // hitting send.
+      if (res?.claimed) {
+        toast("This ticket is now assigned to you", { tone: "info" });
+      }
     });
   }
 

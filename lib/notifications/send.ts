@@ -3,7 +3,7 @@ import { buildRawEmail, generateMessageId } from "@/lib/email/mime";
 import { sendGmailMessage } from "@/lib/google/gmail";
 import { getAccessToken, getSupportInboxConnection } from "@/lib/google/tokens";
 import { getCompanySettings } from "@/lib/settings";
-import { customerDisplayName } from "@/lib/display";
+import { agentDisplayName, customerDisplayName } from "@/lib/display";
 import type { TicketChannel, TicketPriority } from "@/lib/types";
 import {
   ASSIGNMENT_SUBJECT,
@@ -105,7 +105,7 @@ export async function sendAssignmentNotification(
 
   const { data: agent, error: agentError } = await admin
     .from("agents")
-    .select("id, name, email, is_active, notifications_enabled")
+    .select("id, name, display_name, email, is_active, notifications_enabled")
     .eq("id", agentId)
     .maybeSingle();
   if (agentError) return { sent: false, error: agentError.message };
@@ -147,7 +147,9 @@ export async function sendAssignmentNotification(
 
   const company = await getCompanySettings();
   const context: AssignmentContext = {
-    agentName: agent.name,
+    // Internal email to a teammate, so this is the dashboard label — not the
+    // signature name customers see.
+    agentName: agentDisplayName(agent),
     ticket: {
       id: ticket.id,
       number: ticket.number,

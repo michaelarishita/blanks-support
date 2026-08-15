@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import TicketList from "@/components/TicketList";
 import InboxHeader, { SORTS, type SortKey } from "@/components/InboxHeader";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
+import { agentDisplayName } from "@/lib/display";
 import { CHANNEL_META, type Ticket, type TicketChannel } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export default async function InboxPage({
     channel?: string;
     sort?: string;
     customer?: string;
+    assignee?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -64,12 +66,18 @@ export default async function InboxPage({
   if (params.channel) query = query.eq("channel", params.channel);
   // Backs the "N previous tickets" link in the ticket side panel.
   if (params.customer) query = query.eq("customer_id", params.customer);
+  // Backs every clickable agent avatar — "what's on this person's plate".
+  if (params.assignee) query = query.eq("assignee_id", params.assignee);
 
   const { data: tickets } = await query;
   const rows = (tickets as Ticket[]) ?? [];
 
   const channelLabel = params.channel
     ? (CHANNEL_META[params.channel as TicketChannel]?.label ?? params.channel)
+    : null;
+
+  const assigneeName = params.assignee
+    ? agentDisplayName(rows.find((t) => t.assignee?.id === params.assignee)?.assignee)
     : null;
 
   const customerName = params.customer
@@ -80,7 +88,13 @@ export default async function InboxPage({
     <div className="mx-auto max-w-4xl px-6 pb-10">
       <RealtimeRefresher />
       <InboxHeader
-        title={customerName ? `Tickets from ${customerName}` : (TITLES[view] ?? "Tickets")}
+        title={
+          assigneeName
+            ? `Assigned to ${assigneeName}`
+            : customerName
+              ? `Tickets from ${customerName}`
+              : (TITLES[view] ?? "Tickets")
+        }
         count={rows.length}
         channelLabel={channelLabel}
         sort={sort}

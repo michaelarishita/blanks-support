@@ -57,6 +57,24 @@
      thing we render in brand colour. Fills stay at 500. */
   --brand-link: var(--brand-700);
 
+  /* ---- Priority ----
+     NOTE: this palette deliberately INVERTS the usual convention — red is
+     High, not Urgent. Colour is therefore never the only signal: every chip
+     carries its label, and only the SELECTED chip is filled, so nothing is
+     identified by hue alone.
+
+     Low is a vivid yellow, chosen to be plainly distinct from the pale cream
+     --warning-bg used for internal notes and alerts. Dark text on it, since
+     white on yellow fails badly. */
+  --priority-urgent-bg: 24 24 27;
+  --priority-urgent-fg: 255 255 255;
+  --priority-high-bg: 190 24 24;
+  --priority-high-fg: 255 255 255;
+  --priority-normal-bg: 5 104 59;
+  --priority-normal-fg: 255 255 255;
+  --priority-low-bg: 255 214 10;
+  --priority-low-fg: 24 24 27;
+
   /* ---- Semantic ---- */
   --success-bg: 236 253 243;
   --success-border: 169 230 194;

@@ -33,6 +33,16 @@ const config: Config = {
         // warning tone below — so an amber-* class is a mistake, not a brand
         // colour, and should fail to resolve.
         panel: channel("panel"),
+        priority: {
+          "urgent-bg": channel("priority-urgent-bg"),
+          "urgent-fg": channel("priority-urgent-fg"),
+          "high-bg": channel("priority-high-bg"),
+          "high-fg": channel("priority-high-fg"),
+          "normal-bg": channel("priority-normal-bg"),
+          "normal-fg": channel("priority-normal-fg"),
+          "low-bg": channel("priority-low-bg"),
+          "low-fg": channel("priority-low-fg"),
+        },
         success: {
           bg: channel("success-bg"),
           border: channel("success-border"),

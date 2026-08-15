@@ -5,10 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { shortAgo } from "@/lib/format";
-import { customerDisplayName } from "@/lib/display";
+import { agentDisplayName, customerDisplayName } from "@/lib/display";
 import { useHotkey } from "@/lib/shortcuts";
 import type { Ticket } from "@/lib/types";
-import { STATUS_META } from "@/lib/types";
+import { CHANNEL_META, STATUS_META } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
 import ChannelIcon from "@/components/ui/ChannelIcon";
@@ -52,7 +52,7 @@ export default function TicketList({
   const router = useRouter();
   // -1 = nothing focused, so `j` starts at the top rather than the second row.
   const [cursor, setCursor] = useState(-1);
-  const rowRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const move = useCallback(
     (delta: number) => {
@@ -106,12 +106,14 @@ export default function TicketList({
         const focused = index === cursor;
 
         return (
-          <Link
+          // Stretched-link pattern: the whole row navigates via an absolutely
+          // positioned overlay link, which lets the assignee avatar be its own
+          // link. Nesting one <a> inside another is invalid and doesn't work.
+          <div
             key={t.id}
             ref={(el) => {
               rowRefs.current[index] = el;
             }}
-            href={`/tickets/${t.id}`}
             onMouseEnter={() => setCursor(index)}
             className={cn(
               "group relative flex items-center gap-3 border-b border-subtle px-4 py-2.5 last:border-b-0",
@@ -122,8 +124,13 @@ export default function TicketList({
               focused && "z-10 bg-panel shadow-md"
             )}
           >
+            <Link
+              href={`/tickets/${t.id}`}
+              aria-label={`Open ticket #${t.number}: ${t.subject}`}
+              className="absolute inset-0 z-10"
+            />
             {focused && (
-              <span className="absolute inset-y-0 left-0 w-0.5 bg-brand-500" />
+              <span className="absolute inset-y-0 left-0 z-20 w-0.5 bg-brand-500" />
             )}
             <span className="flex w-2 flex-none justify-center">
               {isNew && (
@@ -134,11 +141,12 @@ export default function TicketList({
               )}
             </span>
 
-            <Tooltip content={t.channel.replace("_", " ")}>
-              <span className="flex-none text-tertiary">
-                <ChannelIcon channel={t.channel} />
-              </span>
-            </Tooltip>
+            <span
+              className="flex-none text-tertiary"
+              title={CHANNEL_META[t.channel]?.label ?? t.channel}
+            >
+              <ChannelIcon channel={t.channel} />
+            </span>
 
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
@@ -169,13 +177,20 @@ export default function TicketList({
 
             <div className="flex flex-none items-center gap-2.5">
               {t.assignee ? (
-                <Avatar
-                  name={t.assignee.name}
-                  seed={t.assignee.id}
-                  src={t.assignee.avatar_url}
-                  size="sm"
-                  title={`Assigned to ${t.assignee.name}`}
-                />
+                <Link
+                  href={`/inbox?view=all&assignee=${t.assignee.id}`}
+                  // Above the overlay so this click wins over "open ticket".
+                  className="relative z-20 rounded-full transition-opacity duration-micro ease-out hover:opacity-80"
+                  aria-label={`See tickets assigned to ${agentDisplayName(t.assignee)}`}
+                  title={`Assigned to ${agentDisplayName(t.assignee)} — see their tickets`}
+                >
+                  <Avatar
+                    name={agentDisplayName(t.assignee)}
+                    seed={t.assignee.id}
+                    src={t.assignee.avatar_url}
+                    size="sm"
+                  />
+                </Link>
               ) : (
                 <span
                   title="Unassigned"
@@ -191,7 +206,7 @@ export default function TicketList({
                 {shortAgo(t.last_message_at)}
               </time>
             </div>
-          </Link>
+          </div>
         );
       })}
     </div>

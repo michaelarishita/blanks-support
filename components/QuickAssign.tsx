@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { assignTicket } from "@/app/actions";
 import type { Agent, Ticket } from "@/lib/types";
+import { agentDisplayName } from "@/lib/display";
 import Avatar from "@/components/ui/Avatar";
 import Tooltip from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
@@ -13,6 +14,7 @@ import {
   DropdownLabel,
   DropdownSeparator,
 } from "@/components/ui/Dropdown";
+import Link from "next/link";
 import { CheckIcon, MoreHorizontalIcon, UserIcon } from "@/components/ui/icons";
 
 /** Beyond this many agents the rest move into the overflow menu. */
@@ -21,24 +23,32 @@ const MAX_INLINE = 5;
 export default function QuickAssign({
   ticket,
   agents,
+  currentAgentId,
 }: {
   ticket: Ticket;
   /** Active agents, from the database — never a hardcoded list. */
   agents: Agent[];
+  /** The signed-in agent; their own avatar becomes a Claim button. */
+  currentAgentId: string | null;
 }) {
   const [pending, startTransition] = useTransition();
   const toast = useToast();
 
   const current = ticket.assignee_id ?? null;
+  const mine = Boolean(currentAgentId && current === currentAgentId);
+
+  // Your own avatar is replaced by an explicit Claim button, so the row reads
+  // as "these are other people" plus one clear action for yourself.
+  const others = agents.filter((a) => a.id !== currentAgentId);
 
   // The assignee always appears inline even if they'd otherwise be in the
   // overflow, so the current owner is never hidden behind a menu.
-  const inline = agents.slice(0, MAX_INLINE);
-  if (current && !inline.some((a) => a.id === current)) {
-    const assignee = agents.find((a) => a.id === current);
+  const inline = others.slice(0, MAX_INLINE);
+  if (current && !mine && !inline.some((a) => a.id === current)) {
+    const assignee = others.find((a) => a.id === current);
     if (assignee) inline.splice(MAX_INLINE - 1, 1, assignee);
   }
-  const overflow = agents.filter((a) => !inline.some((i) => i.id === a.id));
+  const overflow = others.filter((a) => !inline.some((i) => i.id === a.id));
 
   function assign(next: string | null, label: string) {
     if (next === current) return;
@@ -64,17 +74,50 @@ export default function QuickAssign({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="space-y-2">
+      {currentAgentId &&
+        (mine ? (
+          <div className="flex items-center justify-between gap-2 rounded-sm border border-brand-200 bg-brand-50 px-2.5 py-1.5">
+            <span className="flex items-center gap-1.5 text-caption font-medium text-brand-900">
+              <CheckIcon size={13} />
+              Assigned to you
+            </span>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => assign(null, "Unassigned")}
+              className="rounded-sm px-1.5 py-0.5 text-caption font-medium text-brand-800 transition-colors duration-micro ease-out hover:bg-brand-100 disabled:opacity-60"
+            >
+              Unassign
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => assign(currentAgentId, "Claimed — assigned to you")}
+            className={cn(
+              "flex w-full items-center justify-center gap-1.5 rounded-sm px-2.5 py-1.5",
+              "bg-brand-500 text-caption font-semibold text-white",
+              "transition-colors duration-micro ease-out hover:bg-brand-600 disabled:opacity-60"
+            )}
+          >
+            <UserIcon size={13} />
+            {current ? "Claim ticket" : "Claim ticket"}
+          </button>
+        ))}
+
+      <div className="flex flex-wrap items-center gap-1.5">
       {inline.map((agent) => {
         const active = agent.id === current;
         return (
-          <Tooltip key={agent.id} content={active ? `${agent.name} (assigned)` : agent.name}>
+          <Tooltip key={agent.id} content={active ? `${agentDisplayName(agent)} (assigned)` : agentDisplayName(agent)}>
             <button
               type="button"
               disabled={pending}
               aria-pressed={active}
-              aria-label={`Assign to ${agent.name}`}
-              onClick={() => assign(agent.id, `Assigned to ${agent.name}`)}
+              aria-label={`Assign to ${agentDisplayName(agent)}`}
+              onClick={() => assign(agent.id, `Assigned to ${agentDisplayName(agent)}`)}
               className={cn(
                 "rounded-full p-0.5 transition-all duration-micro ease-out",
                 "disabled:opacity-60",
@@ -84,7 +127,7 @@ export default function QuickAssign({
               )}
             >
               <Avatar
-                name={agent.name}
+                name={agentDisplayName(agent)}
                 seed={agent.id}
                 src={agent.avatar_url}
                 size="md"
@@ -121,7 +164,7 @@ export default function QuickAssign({
                   key={agent.id}
                   onClick={() => {
                     close();
-                    assign(agent.id, `Assigned to ${agent.name}`);
+                    assign(agent.id, `Assigned to ${agentDisplayName(agent)}`);
                   }}
                   icon={
                     <span className={cn(agent.id !== current && "invisible")}>
@@ -129,7 +172,7 @@ export default function QuickAssign({
                     </span>
                   }
                 >
-                  {agent.name}
+                  {agentDisplayName(agent)}
                 </DropdownItem>
               ))}
               <DropdownSeparator />
@@ -159,8 +202,27 @@ export default function QuickAssign({
         </button>
       </Tooltip>
 
-      {agents.length === 0 && (
+      {others.length === 0 && !currentAgentId && (
         <p className="text-caption text-tertiary">No active agents.</p>
+      )}
+      </div>
+
+      {/* Who owns it, as a link to everything on their plate. */}
+      {current && !mine && (
+        <Link
+          href={`/inbox?view=all&assignee=${current}`}
+          className="inline-flex items-center gap-1 text-caption font-medium text-brand-link transition-colors duration-micro ease-out hover:text-brand-900 hover:underline"
+        >
+          {agentDisplayName(agents.find((a) => a.id === current))}&apos;s tickets
+        </Link>
+      )}
+      {mine && currentAgentId && (
+        <Link
+          href={`/inbox?view=mine`}
+          className="inline-flex items-center gap-1 text-caption font-medium text-brand-link transition-colors duration-micro ease-out hover:text-brand-900 hover:underline"
+        >
+          See all of your tickets
+        </Link>
       )}
     </div>
   );

@@ -50,6 +50,24 @@ export function customerFirstName(customer: CustomerLike | null | undefined): st
   return name ? name.split(/\s+/)[0] : "";
 }
 
+export interface AgentLike {
+  /** Customer-facing signature name. */
+  name?: string | null;
+  /** Internal label, when one has been set. */
+  display_name?: string | null;
+}
+
+/**
+ * The name to show INSIDE the dashboard.
+ *
+ * Deliberately separate from the signature name: the team calls Michael
+ * "Mike", and customers must never see that on outbound email. Anything
+ * customer-facing reads `agent.name` directly and must not call this.
+ */
+export function agentDisplayName(agent: AgentLike | null | undefined): string {
+  return present(agent?.display_name) ?? present(agent?.name) ?? AUTHOR_FALLBACK;
+}
+
 export interface MessageAuthorInput {
   /** True for a reply or internal note written by the team. */
   isOutbound: boolean;

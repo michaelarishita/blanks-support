@@ -5,8 +5,9 @@ import { cn } from "@/lib/cn";
 import { dayLabel } from "@/lib/format";
 import { sanitizeRichText } from "@/lib/html";
 import { splitQuotedText } from "@/lib/email/parse";
-import { messageAuthorName } from "@/lib/display";
+import { agentDisplayName, messageAuthorName } from "@/lib/display";
 import Attachments from "@/components/Attachments";
+import Link from "next/link";
 import { retryDelivery } from "@/app/actions";
 import type { Message } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
@@ -173,7 +174,7 @@ export default function Thread({
         // client render cannot produce different strings.
         const author = messageAuthorName({
           isOutbound: isAgent,
-          agentName: m.agent?.name,
+          agentName: m.agent ? agentDisplayName(m.agent) : null,
           customerName,
         });
 
@@ -245,7 +246,20 @@ export default function Thread({
                       {isNote && (
                         <LockIcon size={11} className="mr-1 inline align-[-1px]" />
                       )}
-                      {isNote ? `Internal note · ${author}` : author}
+                      {isNote && "Internal note · "}
+                      {/* An agent's name links to their queue; a customer's
+                          doesn't, since there's no such view for them. */}
+                      {m.agent_id ? (
+                        <Link
+                          href={`/inbox?view=all&assignee=${m.agent_id}`}
+                          className="underline decoration-transparent transition-colors duration-micro ease-out hover:decoration-current"
+                          title={`See tickets assigned to ${author}`}
+                        >
+                          {author}
+                        </Link>
+                      ) : (
+                        author
+                      )}
                     </span>
                     <time
                       dateTime={m.created_at}

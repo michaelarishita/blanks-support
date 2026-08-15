@@ -20,7 +20,7 @@ import type {
 } from "@/lib/types";
 import QuickAssign from "@/components/QuickAssign";
 import Avatar from "@/components/ui/Avatar";
-import { Input, Select } from "@/components/ui/Field";
+import { Input } from "@/components/ui/Field";
 import Tooltip from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
 import {
@@ -32,6 +32,22 @@ import {
   MailIcon,
   MessengerIcon,
 } from "@/components/ui/icons";
+
+/**
+ * Fill styles for the SELECTED priority chip.
+ *
+ * This palette deliberately inverts the usual helpdesk convention — red is
+ * High, black is Urgent — so the label always shows and only one chip is ever
+ * coloured. Low is a vivid yellow rather than the pale --warning-* cream, so
+ * it can't be mistaken for the internal-note/warning tone, and it takes dark
+ * text because white on yellow is illegible.
+ */
+const PRIORITY_FILL: Record<TicketPriority, string> = {
+  urgent: "border-transparent bg-priority-urgent-bg text-priority-urgent-fg",
+  high: "border-transparent bg-priority-high-bg text-priority-high-fg",
+  normal: "border-transparent bg-priority-normal-bg text-priority-normal-fg",
+  low: "border-transparent bg-priority-low-bg text-priority-low-fg",
+};
 
 /** Tag cloud gains a filter box past this many tags. */
 const TAG_SEARCH_THRESHOLD = 12;
@@ -97,11 +113,13 @@ function CopyableEmail({ email }: { email: string }) {
 export default function TicketSidePanel({
   ticket,
   agents,
+  currentAgentId,
   allTags,
   previousTicketCount,
 }: {
   ticket: Ticket;
   agents: Agent[];
+  currentAgentId: string | null;
   allTags: Tag[];
   /** Other tickets from this customer, excluding the one on screen. */
   previousTicketCount: number;
@@ -189,7 +207,11 @@ export default function TicketSidePanel({
       </Section>
 
       <Section title="Assigned to">
-        <QuickAssign ticket={ticket} agents={agents} />
+        <QuickAssign
+          ticket={ticket}
+          agents={agents}
+          currentAgentId={currentAgentId}
+        />
       </Section>
 
       <Section title="Status">
@@ -236,22 +258,35 @@ export default function TicketSidePanel({
       </Section>
 
       <Section title="Priority">
-        <Select
-          value={ticket.priority}
-          disabled={pending}
-          onChange={(e) =>
-            run(
-              () => setPriority(ticket.id, e.target.value),
-              `Priority set to ${PRIORITY_META[e.target.value as TicketPriority].label.toLowerCase()}`
-            )
-          }
-        >
-          {(Object.keys(PRIORITY_META) as TicketPriority[]).map((p) => (
-            <option key={p} value={p}>
-              {PRIORITY_META[p].label}
-            </option>
-          ))}
-        </Select>
+        <div className="grid grid-cols-2 gap-1.5">
+          {(Object.keys(PRIORITY_META) as TicketPriority[]).map((p) => {
+            const active = ticket.priority === p;
+            return (
+              <button
+                key={p}
+                disabled={pending}
+                aria-pressed={active}
+                onClick={() =>
+                  run(
+                    () => setPriority(ticket.id, p),
+                    `Priority set to ${PRIORITY_META[p].label.toLowerCase()}`
+                  )
+                }
+                className={cn(
+                  "rounded-sm border px-2 py-1.5 text-caption font-semibold",
+                  "transition-colors duration-micro ease-out disabled:opacity-60",
+                  // Only the SELECTED chip is filled. Colour is never the sole
+                  // signal — the label is always present — which matters
+                  // doubly here because this palette inverts the usual
+                  // convention: red is High, not Urgent.
+                  active ? PRIORITY_FILL[p] : "border-subtle text-secondary hover:border-strong hover:text-primary"
+                )}
+              >
+                {PRIORITY_META[p].label}
+              </button>
+            );
+          })}
+        </div>
       </Section>
 
       <Section title="Tags">

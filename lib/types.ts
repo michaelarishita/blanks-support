@@ -4,6 +4,8 @@ export interface ActionResult {
   error?: string;
   /** Succeeded, but with something the agent needs to know (e.g. send failed). */
   warning?: string;
+  /** A reply auto-assigned the ticket to its author. */
+  claimed?: boolean;
 }
 
 export type TicketStatus = "new" | "open" | "pending" | "resolved" | "closed";
@@ -13,7 +15,10 @@ export type TicketPriority = "low" | "normal" | "high" | "urgent";
 export interface Agent {
   id: string;
   email: string;
+  /** Customer-facing signature name. NOT the dashboard label. */
   name: string;
+  /** Internal, team-facing label. Falls back to `name`. */
+  display_name?: string | null;
   role: "admin" | "agent";
   avatar_url: string | null;
   gmail_connected: boolean;

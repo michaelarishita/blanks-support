@@ -7,6 +7,7 @@ import { assignTicket, setStatus } from "@/app/actions";
 import { useHotkey } from "@/lib/shortcuts";
 import { CHANNEL_META, STATUS_META } from "@/lib/types";
 import { MANUAL_STATUSES, isWaitingOnCustomer } from "@/lib/ticket-status";
+import { agentDisplayName } from "@/lib/display";
 import type { ActionResult, Agent, Ticket, TicketStatus } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
@@ -150,13 +151,13 @@ export default function TicketHeader({
               {ticket.assignee ? (
                 <>
                   <Avatar
-                    name={ticket.assignee.name}
+                    name={agentDisplayName(ticket.assignee)}
                     seed={ticket.assignee.id}
                     src={ticket.assignee.avatar_url}
                     size="xs"
                   />
                   <span className="max-w-[90px] truncate">
-                    {ticket.assignee.name}
+                    {agentDisplayName(ticket.assignee)}
                   </span>
                 </>
               ) : (
@@ -192,7 +193,7 @@ export default function TicketHeader({
                     close();
                     run(
                       () => assignTicket(ticket.id, a.id),
-                      `Assigned to ${a.name}`
+                      `Assigned to ${agentDisplayName(a)}`
                     );
                   }}
                   icon={
@@ -201,7 +202,7 @@ export default function TicketHeader({
                     </span>
                   }
                 >
-                  {a.name}
+                  {agentDisplayName(a)}
                 </DropdownItem>
               ))}
               {ticket.assignee_id && (
