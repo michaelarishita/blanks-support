@@ -34,6 +34,10 @@ export async function GET(request: NextRequest) {
   }
 
   const isSupport = request.nextUrl.searchParams.get("mode") === "support";
+  // Set only by the confirm link on the mismatch warning, and carried inside
+  // the signed state so it can't be forged by editing the callback URL.
+  const allowMismatch =
+    request.nextUrl.searchParams.get("allowMismatch") === "1";
   if (isSupport && me.role !== "admin") {
     return NextResponse.redirect(
       new URL(
@@ -44,7 +48,7 @@ export async function GET(request: NextRequest) {
   }
 
   const nonce = randomNonce();
-  const state = signState({ n: nonce, a: user.id, s: isSupport });
+  const state = signState({ n: nonce, a: user.id, s: isSupport, m: allowMismatch });
 
   let authUrl: string;
   try {
@@ -53,8 +57,9 @@ export async function GET(request: NextRequest) {
       scopes: isSupport ? SUPPORT_INBOX_SCOPES : AGENT_SCOPES,
       state,
       // Nudges Google's account chooser toward the right account. For the
-      // support mailbox we can't guess, so let the user pick.
-      loginHint: isSupport ? undefined : me.email,
+      // support mailbox that's SUPPORT_EMAIL — picking the wrong account here
+      // is the mistake this hint exists to prevent.
+      loginHint: isSupport ? process.env.SUPPORT_EMAIL : me.email,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Google OAuth is not configured";

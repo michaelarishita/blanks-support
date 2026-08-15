@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { refreshAccessToken, revokeToken } from "./oauth";
+import { humanizePostgresError } from "@/lib/supabase/errors";
 
 // Storage and lifecycle for Google OAuth tokens.
 // Everything here uses the service-role client: oauth_tokens is admin-only
@@ -23,7 +24,7 @@ export interface StoredConnection {
 const PUBLIC_COLUMNS =
   "id, agent_id, account_ref, scopes, is_support_inbox, last_history_id, watch_expires_at, created_at";
 
-export async function saveConnection(opts: {
+export interface SaveConnectionOptions {
   agentId: string | null;
   accountRef: string;
   refreshToken: string;
@@ -31,7 +32,65 @@ export async function saveConnection(opts: {
   expiresInSeconds: number;
   scopes: string[];
   isSupportInbox: boolean;
-}) {
+}
+
+/**
+ * Claims the single support-inbox slot, replacing whatever holds it.
+ *
+ * Runs through a SQL function so the delete and insert are one transaction:
+ * a crash between them would leave no support mailbox connected, and inbound
+ * would stop with no error anywhere. The displaced account's refresh token
+ * comes back so it can be revoked with Google rather than left live.
+ */
+async function claimSupportInbox(opts: SaveConnectionOptions): Promise<void> {
+  const admin = createAdminClient();
+
+  const { data, error } = await admin.rpc("claim_support_inbox", {
+    p_account_ref: opts.accountRef,
+    p_encrypted_refresh_token: encryptSecret(opts.refreshToken),
+    p_encrypted_access_token: encryptSecret(opts.accessToken),
+    p_access_token_expires_at: new Date(
+      Date.now() + opts.expiresInSeconds * 1000
+    ).toISOString(),
+    p_scopes: opts.scopes,
+  });
+
+  if (error) {
+    throw new Error(
+      humanizePostgresError(error, "Could not connect the support mailbox.")
+    );
+  }
+
+  const displaced = Array.isArray(data) ? data[0] : data;
+  const previousToken = displaced?.previous_encrypted_refresh_token as
+    | string
+    | null
+    | undefined;
+  const previousAccount = displaced?.previous_account_ref as string | undefined;
+
+  if (previousToken && previousAccount !== opts.accountRef) {
+    // Best effort: the slot is already reassigned, so a failed revoke must not
+    // fail the connect.
+    try {
+      await revokeToken(decryptSecret(previousToken));
+    } catch (e) {
+      console.error(
+        `[tokens] could not revoke the displaced support mailbox (${previousAccount}):`,
+        e
+      );
+    }
+  }
+}
+
+export async function saveConnection(opts: SaveConnectionOptions) {
+  if (opts.isSupportInbox) {
+    // The support inbox is a slot, not a row keyed by address. Matching on
+    // account_ref here is what caused connecting a second address to INSERT
+    // alongside the first and trip oauth_tokens_one_support_inbox.
+    await claimSupportInbox(opts);
+    return;
+  }
+
   const admin = createAdminClient();
   const row = {
     provider: PROVIDER,
@@ -43,32 +102,37 @@ export async function saveConnection(opts: {
       Date.now() + opts.expiresInSeconds * 1000
     ).toISOString(),
     scopes: opts.scopes,
-    is_support_inbox: opts.isSupportInbox,
+    is_support_inbox: false,
     updated_at: new Date().toISOString(),
   };
 
-  // Reconnecting the same account replaces the old row rather than tripping
-  // the unique constraint. Matching on agent_id/account_ref covers both the
-  // per-agent case and the (agent_id is null) support-inbox case.
-  const existing = admin
+  // An agent has one connection; reconnecting a different Google account
+  // replaces it rather than accumulating rows.
+  const { data: found, error: lookupError } = await admin
     .from("oauth_tokens")
     .select("id")
     .eq("provider", PROVIDER)
-    .eq("account_ref", opts.accountRef);
-  const { data: found } = await (opts.agentId
-    ? existing.eq("agent_id", opts.agentId)
-    : existing.is("agent_id", null)
-  ).maybeSingle();
+    .eq("agent_id", opts.agentId)
+    .maybeSingle();
+  if (lookupError) {
+    throw new Error(
+      humanizePostgresError(lookupError, "Could not read the existing connection.")
+    );
+  }
 
   if (found) {
     const { error } = await admin
       .from("oauth_tokens")
       .update(row)
       .eq("id", found.id);
-    if (error) throw new Error(error.message);
+    if (error) {
+      throw new Error(humanizePostgresError(error, "Could not save the connection."));
+    }
   } else {
     const { error } = await admin.from("oauth_tokens").insert(row);
-    if (error) throw new Error(error.message);
+    if (error) {
+      throw new Error(humanizePostgresError(error, "Could not save the connection."));
+    }
   }
 
   if (opts.agentId) {
@@ -76,7 +140,9 @@ export async function saveConnection(opts: {
       .from("agents")
       .update({ gmail_connected: true })
       .eq("id", opts.agentId);
-    if (error) throw new Error(error.message);
+    if (error) {
+      throw new Error(humanizePostgresError(error, "Could not update the agent."));
+    }
   }
 }
 

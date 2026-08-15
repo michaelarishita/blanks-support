@@ -41,7 +41,9 @@ export async function GET(request: NextRequest) {
   const rawState = params.get("state");
   if (!code || !rawState) return back(request, { error: "Malformed response from Google." });
 
-  const state = verifyState<{ n: string; a: string; s: boolean }>(rawState);
+  const state = verifyState<{ n: string; a: string; s: boolean; m?: boolean }>(
+    rawState
+  );
   if (!state) return back(request, { error: "Invalid sign-in state. Please try again." });
 
   // CSRF: the nonce in the signed state must match the one we set as a cookie
@@ -86,6 +88,19 @@ export async function GET(request: NextRequest) {
     }
 
     const accountRef = await fetchGoogleEmail(tokens.access_token);
+
+    // Connecting the wrong account as the support inbox is silent and total:
+    // inbound mail to SUPPORT_EMAIL would simply never be read, with nothing
+    // erroring anywhere. Refuse it unless explicitly confirmed.
+    const expected = process.env.SUPPORT_EMAIL?.trim().toLowerCase();
+    if (
+      state.s &&
+      expected &&
+      accountRef.trim().toLowerCase() !== expected &&
+      !state.m
+    ) {
+      return back(request, { mismatch: accountRef, expected });
+    }
 
     await saveConnection({
       // The support mailbox is shared, not owned by whoever connected it.

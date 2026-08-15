@@ -14,7 +14,12 @@ import {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connected?: string; error?: string }>;
+  searchParams: Promise<{
+    connected?: string;
+    error?: string;
+    mismatch?: string;
+    expected?: string;
+  }>;
 }) {
   const params = await searchParams;
   const supabase = await createClient();
@@ -61,6 +66,34 @@ export default async function SettingsPage({
           Gmail connected as <span className="font-semibold">{params.connected}</span>.
         </div>
       )}
+      {params.mismatch && (
+        <div className="mt-6 rounded-lg border border-danger-border bg-danger-bg px-4 py-3 text-sm text-danger-text">
+          <p className="font-semibold">
+            Not connected — that isn&apos;t the support mailbox.
+          </p>
+          <p className="mt-1">
+            You signed in as{" "}
+            <span className="font-mono text-mono">{params.mismatch}</span>, but
+            SUPPORT_EMAIL is{" "}
+            <span className="font-mono text-mono">{params.expected}</span>.
+            Inbound mail is read from SUPPORT_EMAIL, so connecting this account
+            would mean customer email is never picked up — silently, with
+            nothing erroring.
+          </p>
+          <p className="mt-2">
+            Connect again and choose{" "}
+            <span className="font-mono text-mono">{params.expected}</span>, or
+            change SUPPORT_EMAIL if this account is genuinely the right one.
+          </p>
+          <a
+            href="/api/google/connect?mode=support&allowMismatch=1"
+            className="mt-3 inline-block rounded-md border border-danger-border px-3 py-1.5 text-xs font-semibold hover:bg-danger-bg"
+          >
+            I know — connect {params.mismatch} anyway
+          </a>
+        </div>
+      )}
+
       {params.error && (
         <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {params.error}
@@ -133,11 +166,19 @@ export default async function SettingsPage({
           <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
             Support mailbox
           </h2>
-          <p className="mb-4 mt-1 text-sm text-gray-600">
-            The shared inbox that incoming customer email is pulled from —
-            currently <span className="font-medium">{supportAddress}</span>.
+          <p className="mb-3 mt-1 text-sm text-gray-600">
+            The shared inbox that incoming customer email is pulled from.
             Connect it once, as an admin.
           </p>
+          <div className="mb-4 rounded-md border border-info-border bg-info-bg px-3 py-2 text-sm text-info-text">
+            Sign in as{" "}
+            <span className="font-mono text-mono font-semibold">
+              {supportAddress}
+            </span>{" "}
+            — not your own account. This is the address SUPPORT_EMAIL points
+            at, and it&apos;s the only mailbox inbound email is read from.
+            Connecting a different account is refused unless you confirm it.
+          </div>
           {supportInbox ? (
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2 text-sm">
