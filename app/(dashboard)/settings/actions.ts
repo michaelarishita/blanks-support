@@ -8,6 +8,7 @@ import { syncSupportMailbox } from "@/lib/google/inbound";
 import { updateCompanySettings } from "@/lib/settings";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { FIELD_LIMITS, absoluteUrl, hexColor, plainField } from "@/lib/fields";
+import { humanizePostgresError } from "@/lib/supabase/errors";
 import type { ActionResult } from "@/lib/types";
 
 /** Resolves the caller, and their admin status, from the verified session. */
@@ -268,4 +269,22 @@ export async function checkMailNow() {
   revalidatePath("/settings");
   revalidatePath("/inbox");
   return result;
+}
+
+
+/** Mutes or unmutes assignment/reminder/escalation email for this agent. */
+export async function setNotificationsEnabled(enabled: boolean): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({ notifications_enabled: Boolean(enabled) })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save that preference.") };
+  }
+
+  revalidatePath("/settings");
+  return { ok: true };
 }

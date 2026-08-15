@@ -6,6 +6,7 @@ import type { TicketStatus } from "@/lib/types";
 import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
 import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
 import { syncSupportMailboxThrottled } from "@/lib/google/inbound";
+import { sendAssignmentNotification } from "@/lib/notifications/send";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -149,6 +150,17 @@ export async function setStatus(ticketId: string, status: TicketStatus) {
 
 export async function assignTicket(ticketId: string, assigneeId: string | null) {
   const { supabase, userId } = await requireAgent();
+
+  // Read the current owner first: the notification must fire on a CHANGE, not
+  // on every save. Re-assigning a ticket to whoever already holds it is a
+  // no-op, and mailing them about it would train people to ignore these.
+  const { data: before } = await supabase
+    .from("tickets")
+    .select("assignee_id")
+    .eq("id", ticketId)
+    .maybeSingle();
+  const previousAssignee = before?.assignee_id ?? null;
+
   const { error } = await supabase
     .from("tickets")
     .update({ assignee_id: assigneeId })
@@ -158,6 +170,18 @@ export async function assignTicket(ticketId: string, assigneeId: string | null) 
   await logEvent(supabase, ticketId, userId, "assigned", {
     assignee_id: assigneeId,
   });
+
+  // Self-assignment still notifies: the spec is explicit that assigning
+  // yourself a ticket should still produce the record.
+  if (assigneeId && assigneeId !== previousAssignee) {
+    const result = await sendAssignmentNotification(ticketId, assigneeId);
+    if (result.error) {
+      // The assignment itself succeeded; the email is secondary, so this
+      // reports rather than failing the action.
+      console.error("[assign] notification failed:", result.error);
+    }
+  }
+
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
   return { ok: true };

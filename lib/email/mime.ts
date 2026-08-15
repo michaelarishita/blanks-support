@@ -68,6 +68,8 @@ export interface EmailParts {
   messageId: string;
   inReplyTo?: string | null;
   references?: string[];
+  /** Extra headers, e.g. the loop-protection stamps on notifications. */
+  extraHeaders?: Record<string, string>;
 }
 
 /** Base64 with the 76-character line wrapping RFC 2045 requires. */
@@ -96,6 +98,11 @@ export function buildRawEmail(parts: EmailParts): string {
     // Fold the References chain — it grows with the conversation and a single
     // long header line is non-compliant.
     headers.push(`References: ${parts.references.join(CRLF + " ")}`);
+  }
+  for (const [name, value] of Object.entries(parts.extraHeaders ?? {})) {
+    // Sanitized like every other header: a newline here would let a value
+    // inject headers of its own.
+    headers.push(`${sanitizeHeader(name)}: ${sanitizeHeader(value)}`);
   }
 
   let message: string;

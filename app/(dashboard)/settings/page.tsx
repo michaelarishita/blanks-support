@@ -5,6 +5,7 @@ import QueuedReplies from "@/components/QueuedReplies";
 import SignatureEditor from "@/components/SignatureEditor";
 import CompanyBrandEditor from "@/components/CompanyBrandEditor";
 import CheckMailNow from "@/components/CheckMailNow";
+import NotificationToggle from "@/components/NotificationToggle";
 import { getCompanySettings } from "@/lib/settings";
 import {
   getConnectionForAgent,
@@ -30,7 +31,9 @@ export default async function SettingsPage({
 
   const { data: me } = await supabase
     .from("agents")
-    .select("id, name, email, role, gmail_connected, title, phone, signature_enabled")
+    .select(
+      "id, name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled"
+    )
     .eq("id", user.id)
     .single();
 
@@ -133,6 +136,17 @@ export default async function SettingsPage({
             company={company}
           />
         )}
+      </section>
+
+      <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+          Notifications
+        </h2>
+        <p className="mb-4 mt-1 text-sm text-gray-600">
+          Email sent to you when a ticket is assigned, and for the reminders
+          and chasers that follow it.
+        </p>
+        <NotificationToggle enabled={me?.notifications_enabled !== false} />
       </section>
 
       {me?.role === "admin" && (
