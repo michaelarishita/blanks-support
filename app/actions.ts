@@ -7,6 +7,7 @@ import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
 import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
 import { syncSupportMailboxThrottled } from "@/lib/google/inbound";
 import { sendAssignmentNotification } from "@/lib/notifications/send";
+import { STATUSES_AWAITING_AGENT } from "@/lib/ticket-status";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -92,12 +93,15 @@ export async function sendReply(
   }
 
   if (!isNote) {
-    // A public reply usually means we're waiting on the customer.
+    // A public reply moves the ticket to "waiting on customer". This is the
+    // only place `pending` is set by hand, and 6E's escalation suppression
+    // depends on it — the status list comes from lib/ticket-status so the
+    // rule and its tests share one source.
     await supabase
       .from("tickets")
       .update({ status: "pending" })
       .eq("id", ticketId)
-      .in("status", ["new", "open"]);
+      .in("status", STATUSES_AWAITING_AGENT);
   } else {
     await logEvent(supabase, ticketId, userId, "note_added");
   }

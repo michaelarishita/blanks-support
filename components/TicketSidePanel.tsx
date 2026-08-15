@@ -5,14 +5,20 @@ import { useState, useTransition, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { setPriority, setStatus, toggleTag } from "@/app/actions";
 import { customerDisplayName } from "@/lib/display";
+import {
+  MANUAL_STATUSES,
+  activeManualStatus,
+  isWaitingOnCustomer,
+} from "@/lib/ticket-status";
 import { PRIORITY_META, STATUS_META } from "@/lib/types";
 import type {
   ActionResult,
+  Agent,
   Tag,
   Ticket,
   TicketPriority,
-  TicketStatus,
 } from "@/lib/types";
+import QuickAssign from "@/components/QuickAssign";
 import Avatar from "@/components/ui/Avatar";
 import { Input, Select } from "@/components/ui/Field";
 import Tooltip from "@/components/ui/Tooltip";
@@ -20,6 +26,7 @@ import { useToast } from "@/components/ui/Toast";
 import {
   CheckIcon,
   ChevronRightIcon,
+  ClockIcon,
   CopyIcon,
   InstagramIcon,
   MailIcon,
@@ -89,10 +96,12 @@ function CopyableEmail({ email }: { email: string }) {
 
 export default function TicketSidePanel({
   ticket,
+  agents,
   allTags,
   previousTicketCount,
 }: {
   ticket: Ticket;
+  agents: Agent[];
   allTags: Tag[];
   /** Other tickets from this customer, excluding the one on screen. */
   previousTicketCount: number;
@@ -179,10 +188,14 @@ export default function TicketSidePanel({
         </div>
       </Section>
 
+      <Section title="Assigned to">
+        <QuickAssign ticket={ticket} agents={agents} />
+      </Section>
+
       <Section title="Status">
         <div className="grid grid-cols-2 gap-1.5">
-          {(["open", "pending", "resolved", "closed"] as TicketStatus[]).map((s) => {
-            const active = ticket.status === s;
+          {MANUAL_STATUSES.map((s) => {
+            const active = activeManualStatus(ticket.status) === s;
             return (
               <button
                 key={s}
@@ -206,6 +219,20 @@ export default function TicketSidePanel({
             );
           })}
         </div>
+
+        {/* Passive, never a button: pending is set when a reply goes out and
+            cleared when the customer answers. Escalation keys off it. */}
+        {isWaitingOnCustomer(ticket.status) && (
+          <p className="mt-2 flex items-center gap-1.5 text-caption text-warning-text">
+            <ClockIcon size={12} />
+            Waiting on customer since your last reply
+          </p>
+        )}
+        {ticket.status === "closed" && (
+          <p className="mt-2 text-caption text-tertiary">
+            Closed automatically after 7 days resolved.
+          </p>
+        )}
       </Section>
 
       <Section title="Priority">

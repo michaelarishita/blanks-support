@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import { assignTicket, setStatus } from "@/app/actions";
 import { useHotkey } from "@/lib/shortcuts";
 import { CHANNEL_META, STATUS_META } from "@/lib/types";
+import { MANUAL_STATUSES, isWaitingOnCustomer } from "@/lib/ticket-status";
 import type { ActionResult, Agent, Ticket, TicketStatus } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
@@ -22,6 +23,7 @@ import {
 import {
   ArrowLeftIcon,
   CheckIcon,
+  ClockIcon,
   MoreHorizontalIcon,
   SnoozeIcon,
   UserIcon,
@@ -119,7 +121,16 @@ export default function TicketHeader({
       </div>
 
       <div className="flex flex-none items-center gap-2">
-        <Badge tone={status.tone}>{status.label}</Badge>
+        {isWaitingOnCustomer(ticket.status) ? (
+          <Tooltip content="Set when your reply went out; clears automatically when the customer answers">
+            <Badge tone="warning">
+              <ClockIcon size={11} />
+              Waiting on customer
+            </Badge>
+          </Tooltip>
+        ) : (
+          <Badge tone={status.tone}>{status.label}</Badge>
+        )}
 
         {/* Assign — controlled so the `a` shortcut can open it. */}
         <Dropdown
@@ -247,7 +258,11 @@ export default function TicketHeader({
           {(close) => (
             <>
               <DropdownLabel>Set status</DropdownLabel>
-              {(["open", "pending", "resolved", "closed"] as TicketStatus[]).map(
+              {/* Only the manual statuses. `pending` and `closed` are
+                  consequences — set when a reply goes out, and by the
+                  auto-close cron — and offering them as buttons invited
+                  agents to fight the automation. */}
+              {MANUAL_STATUSES.map(
                 (s) => (
                   <DropdownItem
                     key={s}

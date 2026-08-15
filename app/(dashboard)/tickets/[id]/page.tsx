@@ -95,6 +95,7 @@ export default async function TicketPage({
 
       <TicketSidePanel
         ticket={t}
+        agents={(agents as Agent[]) ?? []}
         allTags={(tags as Tag[]) ?? []}
         previousTicketCount={customerTicketCount ?? 0}
       />
