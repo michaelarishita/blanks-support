@@ -51,9 +51,9 @@ export default async function DashboardLayout({
         </div>
       </div>
       <ShortcutsOverlay />
-      {/* Off unless NEXT_PUBLIC_MAIL_POLL_SECONDS is set — see MailPoller. */}
+      {/* Safety net behind Pub/Sub push; 5 min unless overridden. */}
       <MailPoller
-        intervalSeconds={Number(process.env.NEXT_PUBLIC_MAIL_POLL_SECONDS) || 0}
+        intervalSeconds={Number(process.env.NEXT_PUBLIC_MAIL_POLL_SECONDS) || 300}
       />
     </ToastProvider>
   );

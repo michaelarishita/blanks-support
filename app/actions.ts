@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { TicketStatus } from "@/lib/types";
 import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
 import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
+import { syncSupportMailboxThrottled } from "@/lib/google/inbound";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -190,4 +191,25 @@ export async function setPriority(ticketId: string, priority: string) {
   await logEvent(supabase, ticketId, userId, "priority_changed", { priority });
   revalidatePath(`/tickets/${ticketId}`);
   return { ok: true };
+}
+
+
+/**
+ * Background inbox refresh, called when the dashboard mounts and on a light
+ * interval while a session is open. Throttled server-side, so several agents
+ * with the dashboard open do not multiply into several syncs a minute.
+ */
+export async function autoSyncInbox() {
+  await requireAgent();
+
+  const result = await syncSupportMailboxThrottled();
+  const imported = result.created + result.appended;
+  if (imported > 0) {
+    revalidatePath("/inbox");
+  }
+  return {
+    imported,
+    throttled: Boolean(result.throttled),
+    error: result.error,
+  };
 }

@@ -7,6 +7,7 @@ import {
   listGmailMessages,
 } from "./gmail";
 import { getAccessToken, getSupportInboxConnection, setLastHistoryId } from "./tokens";
+import { getSettingsBlob, patchSettingsBlob } from "@/lib/settings";
 import {
   extractTicketToken,
   parseGmailMessage,
@@ -619,6 +620,55 @@ export async function syncSupportMailbox(
   // safe — the gmail_message_id unique index dedupes.
   if (collected.historyId) {
     await setLastHistoryId(connection.id, collected.historyId);
+  }
+
+  return result;
+}
+
+
+/** Floor between automatic syncs. Manual "Check mail now" ignores it. */
+export const SYNC_MIN_INTERVAL_MS = 60_000;
+
+const LAST_SYNC_KEY = "inbound_last_sync_at";
+
+/**
+ * Sync unless one ran very recently.
+ *
+ * The throttle is GLOBAL rather than per-user, which is a deliberate
+ * deviation from the spec: the mailbox is one shared resource, so N agents
+ * opening the dashboard should not mean N syncs a minute against Gmail's
+ * quota. The stamp lives in the settings row so it is shared across serverless
+ * instances, which an in-memory guard would not be.
+ *
+ * Since Pub/Sub push went live this is a safety net, not the mechanism — it is
+ * what covers a lapsed watch or a dropped notification.
+ */
+export async function syncSupportMailboxThrottled(
+  minIntervalMs = SYNC_MIN_INTERVAL_MS
+): Promise<SyncResult & { throttled?: boolean }> {
+  let lastSyncAt: number | null = null;
+  try {
+    const blob = await getSettingsBlob();
+    const stored = blob[LAST_SYNC_KEY];
+    if (typeof stored === "string") lastSyncAt = new Date(stored).getTime();
+  } catch (e) {
+    // A missing settings table is reported by the schema banner; don't let it
+    // stop the sync, which doesn't otherwise need that row.
+    console.error("[inbound] could not read the sync stamp:", e);
+  }
+
+  if (lastSyncAt && Date.now() - lastSyncAt < minIntervalMs) {
+    return { ...emptyResult(), throttled: true };
+  }
+
+  const result = await syncSupportMailbox();
+
+  // Stamped even on failure, so a persistently broken sync can't be retried
+  // on every dashboard load by every agent.
+  try {
+    await patchSettingsBlob({ [LAST_SYNC_KEY]: new Date().toISOString() });
+  } catch (e) {
+    console.error("[inbound] could not write the sync stamp:", e);
   }
 
   return result;
