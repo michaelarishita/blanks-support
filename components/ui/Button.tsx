@@ -6,12 +6,16 @@ import { cn } from "@/lib/cn";
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "success";
 export type ButtonSize = "sm" | "md";
 
-// Amber is the brand accent and is reserved for the single primary action in
-// a view (see globals.css). Two amber buttons on one screen means one of them
+// Blue is the brand accent and is reserved for the single primary action in
+// a view (see globals.css). Two blue buttons on one screen means one of them
 // should be `secondary`.
+//
+// White on brand-500 measures 5.06:1, so the label darkens the FILL on hover
+// rather than lightening it — hover:bg-brand-400 would drop white text below
+// AA. The contrast test asserts this.
 const VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "bg-brand-500 text-gray-950 shadow-sm hover:bg-brand-400 active:bg-brand-600 disabled:bg-brand-200 disabled:text-brand-800/50",
+    "bg-brand-500 text-white shadow-sm hover:bg-brand-600 active:bg-brand-700 disabled:bg-brand-200 disabled:text-brand-800",
   secondary:
     "bg-panel text-primary border border-subtle shadow-sm hover:bg-gray-50 hover:border-strong active:bg-gray-100",
   ghost: "text-secondary hover:bg-gray-100 hover:text-primary active:bg-gray-200",

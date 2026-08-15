@@ -28,10 +28,10 @@ const config: Config = {
       colors: {
         // Replaces Tailwind's default neutral so there is exactly one ramp.
         gray: ramp("gray"),
-        brand: ramp("brand"),
-        // Aliased so pre-existing amber-* classes pick up the real brand
-        // yellow rather than Tailwind's orange.
-        amber: ramp("brand"),
+        brand: { ...ramp("brand"), link: channel("brand-link") },
+        // No `amber` alias. Amber now means exactly one thing — the semantic
+        // warning tone below — so an amber-* class is a mistake, not a brand
+        // colour, and should fail to resolve.
         panel: channel("panel"),
         success: {
           bg: channel("success-bg"),

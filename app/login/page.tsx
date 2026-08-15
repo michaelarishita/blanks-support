@@ -37,7 +37,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-950 px-4">
       <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-xl">
         <div className="mb-6 text-center">
-          <div className="text-xs font-semibold uppercase tracking-widest text-amber-500">
+          <div className="text-xs font-semibold uppercase tracking-widest text-brand-600">
             Blanks Sports Nutrition
           </div>
           <h1 className="mt-1 text-2xl font-bold">Support Dashboard</h1>
@@ -51,7 +51,7 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@blankssportsnutrition.com"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand-400 focus:outline-none"
           />
           <input
             type="password"
@@ -60,7 +60,7 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand-400 focus:outline-none"
           />
           <button
             type="submit"

@@ -234,7 +234,7 @@ const RichTextEditor = forwardRef<
             // Lists need their markers back — Tailwind's preflight removes them.
             "[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5",
             "[&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5",
-            "[&_a]:text-brand-800 [&_a]:underline"
+            "[&_a]:text-brand-link [&_a]:underline"
           )}
         />
       </div>

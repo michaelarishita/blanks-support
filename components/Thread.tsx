@@ -278,7 +278,7 @@ export default function Thread({
                         "[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5",
                         "[&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5",
                         "[&_a]:underline",
-                        isAgent && !isNote ? "[&_a]:text-brand-300" : "[&_a]:text-brand-800"
+                        isAgent && !isNote ? "[&_a]:text-brand-300" : "[&_a]:text-brand-link"
                       )}
                       dangerouslySetInnerHTML={{
                         __html: sanitizeRichText(m.body_html),

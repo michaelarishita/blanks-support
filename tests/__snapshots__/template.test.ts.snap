@@ -31,7 +31,7 @@ exports[`renderEmailHtml — snapshot > matches the approved signature layout 1`
             <tr><td style="padding:0;background-color:#ffffff;color:#666666;font-size:14px;line-height:1.5;">Founder/CEO</td></tr>
             <tr><td style="padding:0;background-color:#ffffff;color:#666666;font-size:14px;line-height:1.5;">Blank's Sports Nutrition</td></tr>
             <tr><td style="padding:0;background-color:#ffffff;color:#666666;font-size:14px;line-height:1.5;">+1 555 0100</td></tr>
-            <tr><td style="padding:0;background-color:#ffffff;font-size:14px;line-height:1.5;"><a href="https://blankssportsnutrition.com" style="color:#f5c518;text-decoration:none;">blankssportsnutrition.com</a></td></tr>
+            <tr><td style="padding:0;background-color:#ffffff;font-size:14px;line-height:1.5;"><a href="https://blankssportsnutrition.com" style="color:#0061ff;text-decoration:none;">blankssportsnutrition.com</a></td></tr>
             <tr><td style="padding:16px 0 0 0;background-color:#ffffff;"><img src="https://cdn.example.com/logo.png" alt="Blank's Sports Nutrition" width="240" height="60" style="display:block;border:0;outline:none;text-decoration:none;max-width:240px;width:100%;height:auto;" /></td></tr>
           </table>
         </td>

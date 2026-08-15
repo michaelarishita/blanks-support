@@ -51,7 +51,7 @@ export default function QueuedReplies({ pendingCount }: { pendingCount: number }
     <div>
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 text-sm text-gray-700">
-          <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
+          <span className="inline-block h-2 w-2 rounded-full bg-brand-500" />
           {pendingCount} {pendingCount === 1 ? "reply is" : "replies are"} saved but
           not emailed.
         </div>

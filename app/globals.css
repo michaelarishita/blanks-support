@@ -39,18 +39,23 @@
   --text-secondary: var(--gray-600);
   --text-tertiary: var(--gray-400);
 
-  /* ---- Brand ---- */
-  --brand-50: 254 251 232;
-  --brand-100: 255 248 194;
-  --brand-200: 255 238 136;
-  --brand-300: 255 223 68;
-  --brand-400: 253 204 17;
-  --brand-500: 245 197 24;
-  --brand-600: 217 158 4;
-  --brand-700: 172 113 7;
-  --brand-800: 138 87 14;
-  --brand-900: 118 72 18;
-  --brand-950: 69 37 6;
+  /* ---- Brand: blue-raspberry, #0061ff is the 500/primary step ---- */
+  --brand-50: 239 245 255;
+  --brand-100: 219 232 255;
+  --brand-200: 190 214 255;
+  --brand-300: 145 188 255;
+  --brand-400: 92 150 255;
+  --brand-500: 0 97 255;
+  --brand-600: 0 82 219;
+  --brand-700: 0 71 194;
+  --brand-800: 7 58 156;
+  --brand-900: 13 53 122;
+  --brand-950: 10 33 80;
+
+  /* Inline links and small text on white use the darker step: #0061ff
+     clears AA for normal text but only just, and link text is the smallest
+     thing we render in brand colour. Fills stay at 500. */
+  --brand-link: var(--brand-700);
 
   /* ---- Semantic ---- */
   --success-bg: 236 253 243;
@@ -82,7 +87,7 @@
 
 /* This is a light-only product (see CLAUDE.md design conventions). No
    prefers-color-scheme block — an inherited dark palette would fight the
-   explicit surface tokens above and wash out the amber accent. */
+   explicit surface tokens above and wash out the blue accent. */
 
 body {
   background: rgb(var(--surface));

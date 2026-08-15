@@ -166,7 +166,7 @@ export default function TicketSidePanel({
         {previousTicketCount > 0 && customer?.id && (
           <Link
             href={`/inbox?view=all&customer=${customer.id}`}
-            className="mt-2.5 inline-flex items-center gap-1 text-caption font-medium text-brand-800 transition-colors duration-micro ease-out hover:text-brand-900 hover:underline"
+            className="mt-2.5 inline-flex items-center gap-1 text-caption font-medium text-brand-link transition-colors duration-micro ease-out hover:text-brand-900 hover:underline"
           >
             {previousTicketCount} previous{" "}
             {previousTicketCount === 1 ? "ticket" : "tickets"}

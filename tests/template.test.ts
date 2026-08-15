@@ -72,7 +72,9 @@ describe("renderEmailHtml — signature fields are user input", () => {
       company: { ...company, brand_color: "red;} body{display:none" },
     });
     expect(output).not.toContain("display:none");
-    expect(output).toContain("#f5c518");
+    // Reads the default rather than repeating the hex — a duplicated colour
+    // literal is how the palette and the test drift apart.
+    expect(output).toContain(DEFAULT_COMPANY.brand_color);
   });
 
   it.each([

@@ -79,7 +79,7 @@ export const DEFAULT_COMPANY: CompanySettings = {
   company_name: "Blank's Sports Nutrition",
   website: "https://blankssportsnutrition.com",
   website_label: "blankssportsnutrition.com",
-  brand_color: "#f5c518",
+  brand_color: "#0061ff",
   logo_url: null,
   logo_width: 240,
   logo_height: null,

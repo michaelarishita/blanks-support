@@ -64,7 +64,7 @@ export default function WidgetPage() {
   return (
     <div className="mx-auto max-w-md px-6 py-8">
       <div className="mb-6">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-amber-500">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-brand-600">
           Blanks Sports Nutrition
         </div>
         <h1 className="text-xl font-bold">How can we help?</h1>
@@ -90,7 +90,7 @@ export default function WidgetPage() {
             required
             value={form.topic}
             onChange={(e) => set("topic", e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand-400 focus:outline-none"
           >
             <option value="" disabled>
               Choose a topic…
@@ -112,7 +112,7 @@ export default function WidgetPage() {
               type="text"
               value={form.name}
               onChange={(e) => set("name", e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand-400 focus:outline-none"
             />
           </div>
           <div>
@@ -124,7 +124,7 @@ export default function WidgetPage() {
               required
               value={form.email}
               onChange={(e) => set("email", e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand-400 focus:outline-none"
             />
           </div>
         </div>
@@ -139,7 +139,7 @@ export default function WidgetPage() {
               value={form.order_number}
               onChange={(e) => set("order_number", e.target.value)}
               placeholder="#1234"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand-400 focus:outline-none"
             />
           </div>
         )}
@@ -153,7 +153,7 @@ export default function WidgetPage() {
             rows={5}
             value={form.message}
             onChange={(e) => set("message", e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand-400 focus:outline-none"
           />
         </div>
 
