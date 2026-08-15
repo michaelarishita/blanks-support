@@ -9,13 +9,10 @@ import {
 } from "@/components/ui/Dropdown";
 import { CheckIcon, ChevronDownIcon } from "@/components/ui/icons";
 
-export const SORTS = {
-  newest: "Newest activity",
-  oldest: "Oldest activity",
-  priority: "Priority",
-} as const;
+import { SORTS, type SortKey } from "@/lib/ticket-query";
 
-export type SortKey = keyof typeof SORTS;
+export { SORTS };
+export type { SortKey };
 
 export default function InboxHeader({
   title,

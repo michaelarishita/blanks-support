@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { assignTicket, setStatus } from "@/app/actions";
 import { useHotkey } from "@/lib/shortcuts";
@@ -34,14 +35,20 @@ export default function TicketHeader({
   ticket,
   agents,
   currentAgentId,
+  advanceHref,
+  isLastInView,
 }: {
   ticket: Ticket;
   agents: Agent[];
   currentAgentId: string | null;
+  /** Where to go once this ticket is done. */
+  advanceHref: string;
+  isLastInView: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [assignOpen, setAssignOpen] = useState(false);
   const toast = useToast();
+  const router = useRouter();
   const status = STATUS_META[ticket.status];
   const isOpenStatus = ticket.status !== "resolved" && ticket.status !== "closed";
 
@@ -60,7 +67,11 @@ export default function TicketHeader({
     );
   }
 
-  /** Resolve, with Undo back to whatever the status was before. */
+  /**
+   * Resolve, then move on. Leaving the agent on a ticket they just finished
+   * makes them navigate back manually every time. Undo and a link back both
+   * live in the toast, which outlives this page.
+   */
   const resolve = useCallback(() => {
     const previous = ticket.status;
     startTransition(async () => {
@@ -69,8 +80,9 @@ export default function TicketHeader({
         toast(res.error, { tone: "error" });
         return;
       }
-      toast("Ticket resolved", {
+      toast(isLastInView ? "Ticket resolved — that was the last one" : "Ticket resolved", {
         tone: "success",
+        link: { label: `Ticket #${ticket.number}`, href: `/tickets/${ticket.id}` },
         action: {
           label: "Undo",
           onClick: () =>
@@ -79,8 +91,9 @@ export default function TicketHeader({
             }),
         },
       });
+      router.push(advanceHref);
     });
-  }, [ticket.id, ticket.status, toast]);
+  }, [ticket.id, ticket.number, ticket.status, toast, router, advanceHref, isLastInView]);
 
   useHotkey("e", resolve, { enabled: isOpenStatus });
   useHotkey(

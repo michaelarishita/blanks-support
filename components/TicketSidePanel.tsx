@@ -114,12 +114,17 @@ export default function TicketSidePanel({
   ticket,
   agents,
   currentAgentId,
+  advanceHref,
+  isLastInView,
   allTags,
   previousTicketCount,
 }: {
   ticket: Ticket;
   agents: Agent[];
   currentAgentId: string | null;
+  /** Where to go after handing the ticket on. */
+  advanceHref: string;
+  isLastInView: boolean;
   allTags: Tag[];
   /** Other tickets from this customer, excluding the one on screen. */
   previousTicketCount: number;
@@ -211,6 +216,8 @@ export default function TicketSidePanel({
           ticket={ticket}
           agents={agents}
           currentAgentId={currentAgentId}
+          advanceHref={advanceHref}
+          isLastInView={isLastInView}
         />
       </Section>
 

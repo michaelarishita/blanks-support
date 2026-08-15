@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { shortAgo } from "@/lib/format";
 import { agentDisplayName, customerDisplayName } from "@/lib/display";
@@ -50,6 +50,10 @@ export default function TicketList({
   view?: string;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Ticket links carry the current view, so opening one and then assigning it
+  // away can advance within the list the agent was actually looking at.
+  const viewSuffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
   // -1 = nothing focused, so `j` starts at the top rather than the second row.
   const [cursor, setCursor] = useState(-1);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -74,8 +78,8 @@ export default function TicketList({
     "enter",
     useCallback(() => {
       const target = tickets[cursor];
-      if (target) router.push(`/tickets/${target.id}`);
-    }, [cursor, tickets, router])
+      if (target) router.push(`/tickets/${target.id}${viewSuffix}`);
+    }, [cursor, tickets, router, viewSuffix])
   );
 
   // A shorter list after a filter change must not leave the cursor dangling.
@@ -125,7 +129,7 @@ export default function TicketList({
             )}
           >
             <Link
-              href={`/tickets/${t.id}`}
+              href={`/tickets/${t.id}${viewSuffix}`}
               aria-label={`Open ticket #${t.number}: ${t.subject}`}
               className="absolute inset-0 z-10"
             />
@@ -176,11 +180,14 @@ export default function TicketList({
             </div>
 
             <div className="flex flex-none items-center gap-2.5">
+              {/* A name, not initials: two M's and two J's on this team made
+                  initial-only circles ambiguous. The avatar stays as a colour
+                  cue beside it, never as the identifier. */}
               {t.assignee ? (
                 <Link
                   href={`/inbox?view=all&assignee=${t.assignee.id}`}
                   // Above the overlay so this click wins over "open ticket".
-                  className="relative z-20 rounded-full transition-opacity duration-micro ease-out hover:opacity-80"
+                  className="relative z-20 flex max-w-[7.5rem] items-center gap-1.5 rounded-sm px-1 py-0.5 text-caption text-secondary transition-colors duration-micro ease-out hover:bg-gray-100 hover:text-primary"
                   aria-label={`See tickets assigned to ${agentDisplayName(t.assignee)}`}
                   title={`Assigned to ${agentDisplayName(t.assignee)} — see their tickets`}
                 >
@@ -188,14 +195,18 @@ export default function TicketList({
                     name={agentDisplayName(t.assignee)}
                     seed={t.assignee.id}
                     src={t.assignee.avatar_url}
-                    size="sm"
+                    size="xs"
+                    className="flex-none"
                   />
+                  <span className="truncate">{agentDisplayName(t.assignee)}</span>
                 </Link>
               ) : (
                 <span
-                  title="Unassigned"
-                  className="h-6 w-6 rounded-full border border-dashed border-strong"
-                />
+                  className="px-1 text-caption text-tertiary"
+                  title="Nobody has picked this up yet"
+                >
+                  Unassigned
+                </span>
               )}
               <Badge tone={status.tone}>{status.label}</Badge>
               <time

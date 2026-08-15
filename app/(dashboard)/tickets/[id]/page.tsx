@@ -11,16 +11,28 @@ import {
   resolveSender,
 } from "@/lib/google/outbound";
 import { customerDisplayName, customerFirstName } from "@/lib/display";
+import {
+  applyTicketFilters,
+  inboxHref,
+  nextTicketId,
+  ticketHref,
+  type TicketViewParams,
+} from "@/lib/ticket-query";
 import type { Ticket, Message, Agent, Tag } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function TicketPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<TicketViewParams>;
 }) {
   const { id } = await params;
+  // The view the agent came from, carried on the link out of the inbox, so
+  // "next ticket" means next in the list they were actually looking at.
+  const view = await searchParams;
   const supabase = await createClient();
 
   // Sweep abandoned sends before reading the thread, so a reply whose send
@@ -57,6 +69,17 @@ export default async function TicketPage({
   // Which Gmail this agent's replies would leave from, and how many other
   // tickets this customer has — both drive UI copy, so resolve them here
   // rather than round-tripping from the client.
+  // The ordered ids of the view, so assigning away or resolving can advance
+  // to whatever the agent would have opened next.
+  const { data: viewRows } = await applyTicketFilters(
+    supabase.from("tickets").select("id").limit(200),
+    view,
+    user?.id ?? null
+  );
+  const orderedIds = (viewRows ?? []).map((row) => row.id as string);
+  const nextId = nextTicketId(orderedIds, id);
+  const advanceHref = nextId ? ticketHref(nextId, view) : inboxHref(view);
+
   const [connection, { count: customerTicketCount }] = await Promise.all([
     user ? resolveSender(user.id) : Promise.resolve(null),
     supabase
@@ -74,6 +97,8 @@ export default async function TicketPage({
           ticket={t}
           agents={(agents as Agent[]) ?? []}
           currentAgentId={user?.id ?? null}
+          advanceHref={advanceHref}
+          isLastInView={!nextId}
         />
 
         <div className="scrollbar-slim flex-1 overflow-y-auto bg-surface px-6 py-4">
@@ -97,6 +122,8 @@ export default async function TicketPage({
         ticket={t}
         agents={(agents as Agent[]) ?? []}
         currentAgentId={user?.id ?? null}
+        advanceHref={advanceHref}
+        isLastInView={!nextId}
         allTags={(tags as Tag[]) ?? []}
         previousTicketCount={customerTicketCount ?? 0}
       />
