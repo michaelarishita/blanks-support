@@ -1,28 +1,12 @@
-// Shopify Admin GraphQL client. Server-only — the token is a full read
+import { ShopifyError, UNCONFIGURED_MESSAGE, shopDomain, shopifyConfigured } from "./config";
+import { getShopifyAccessToken } from "./token";
+
+// Shopify Admin GraphQL client. Server-only — the access token is a full read
 // credential for the store and must never reach a browser.
 
+export { ShopifyError, shopifyConfigured, shopDomain } from "./config";
+
 const API_VERSION = "2025-01";
-
-export class ShopifyError extends Error {
-  readonly kind: "unconfigured" | "throttled" | "auth" | "network" | "graphql";
-  constructor(kind: ShopifyError["kind"], message: string) {
-    super(message);
-    this.name = "ShopifyError";
-    this.kind = kind;
-  }
-}
-
-export function shopifyConfigured(): boolean {
-  return Boolean(process.env.SHOPIFY_ADMIN_TOKEN && process.env.SHOPIFY_SHOP_DOMAIN);
-}
-
-/** `blanks.myshopify.com` — normalised, since people paste the full URL. */
-export function shopDomain(): string {
-  return (process.env.SHOPIFY_SHOP_DOMAIN ?? "")
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "");
-}
 
 interface GraphQLResponse<T> {
   data?: T;
@@ -47,22 +31,27 @@ export async function shopifyGraphQL<T>(
   variables: Record<string, unknown> = {}
 ): Promise<T> {
   if (!shopifyConfigured()) {
-    throw new ShopifyError(
-      "unconfigured",
-      "Shopify isn't connected. Set SHOPIFY_SHOP_DOMAIN and SHOPIFY_ADMIN_TOKEN."
-    );
+    throw new ShopifyError("unconfigured", UNCONFIGURED_MESSAGE);
   }
 
   const url = `https://${shopDomain()}/admin/api/${API_VERSION}/graphql.json`;
+  let token = await getShopifyAccessToken();
 
-  for (let attempt = 0; ; attempt++) {
+  // Two independent retry budgets. Throttling is Shopify asking us to wait;
+  // a 401 means the token died early (revoked, rotated, or minted just before
+  // an expiry we misjudged) and is worth exactly one re-mint. Sharing one
+  // counter between them would let a store that 401s every time loop.
+  let throttleAttempt = 0;
+  let authRetried = false;
+
+  for (;;) {
     let response: Response;
     try {
       response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_TOKEN!,
+          "X-Shopify-Access-Token": token,
         },
         body: JSON.stringify({ query, variables }),
         // The sidebar is allowed to be stale; it is never allowed to hang.
@@ -75,10 +64,24 @@ export async function shopifyGraphQL<T>(
       );
     }
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
+      if (!authRetried) {
+        authRetried = true;
+        token = await getShopifyAccessToken({ forceRefresh: true });
+        continue;
+      }
       throw new ShopifyError(
         "auth",
-        `Shopify rejected the token (${response.status}). Check SHOPIFY_ADMIN_TOKEN and its scopes.`
+        "Shopify rejected a freshly minted access token. Check that the app is still installed and SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET belong to this store."
+      );
+    }
+
+    // 403 is a scope problem, not an expiry one — a new token has the same
+    // scopes and would be rejected identically, so don't spend a mint on it.
+    if (response.status === 403) {
+      throw new ShopifyError(
+        "auth",
+        "Shopify refused the request (403). The app is missing a required scope."
       );
     }
 
@@ -89,8 +92,9 @@ export async function shopifyGraphQL<T>(
       response.status === 429 ||
       body.errors?.some((e) => e.extensions?.code === "THROTTLED");
 
-    if (throttled && attempt < THROTTLE_RETRIES) {
-      await new Promise((r) => setTimeout(r, THROTTLE_BACKOFF_MS[attempt]));
+    if (throttled && throttleAttempt < THROTTLE_RETRIES) {
+      await new Promise((r) => setTimeout(r, THROTTLE_BACKOFF_MS[throttleAttempt]));
+      throttleAttempt++;
       continue;
     }
     if (throttled) {

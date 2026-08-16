@@ -191,7 +191,14 @@ Permissions (App Review): pages_messaging, instagram_manage_messages,
 instagram_basic, pages_manage_metadata, Human Agent.
 
 ### Phase 4 — Shopify sidebar + power features
-Read-only Shopify Admin API custom app. Customer 360 in TicketSidePanel:
+Read-only Shopify Admin API app, created in the **Dev Dashboard** — custom
+apps can no longer be made in the Shopify admin and there is no static
+`shpat_` token. Env is SHOPIFY_SHOP_DOMAIN / SHOPIFY_CLIENT_ID /
+SHOPIFY_CLIENT_SECRET; `lib/shopify/token.ts` exchanges those for a 24-hour
+token via the client credentials grant and caches it encrypted in
+`oauth_tokens` (provider `shopify`). Do not reintroduce a static token, and
+do not cache it in a module variable — see DROP-7-SPEC.md "Access tokens".
+Customer 360 in TicketSidePanel:
 recent orders + status + tracking, lifetime spend, order lookup by email /
 order number. Macro variables {{order.*}}. Then: rules engine (auto-tag/
 assign/reply), SLA timers, snooze, merge, full-text search (Postgres FTS),

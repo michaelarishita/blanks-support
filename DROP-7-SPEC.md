@@ -45,8 +45,11 @@ The highest-value feature remaining. "Where is my order" is the most common
 DTC ticket, and answering it currently means leaving the help desk.
 
 **Connection**
-- Shopify admin → Settings → Apps and sales channels → Develop apps →
-  Create an app (`Blanks Support`).
+- Shopify Dev Dashboard (dev.shopify.com) → Apps → create `Blanks Support`
+  under the organisation that owns the store, then install it on the store.
+  Custom apps can no longer be created in the Shopify admin, and a Dev
+  Dashboard app issues no static `shpat_` token — only a client ID and
+  secret. See "Access tokens" below.
 - Admin API scopes, read-only: `read_orders`, `read_customers`,
   `read_fulfillments`, `read_products`.
 - **Check `read_all_orders`.** Without it the Orders API only returns the
@@ -54,10 +57,34 @@ DTC ticket, and answering it currently means leaving the help desk.
   customers write in about. Request/enable it if the scope list allows;
   if it needs Shopify approval, note it and proceed with the 60-day
   limitation surfaced in the UI rather than hidden.
-- Store the Admin API access token as `SHOPIFY_ADMIN_TOKEN` and the shop
-  domain as `SHOPIFY_SHOP_DOMAIN`. Server-side only, never `NEXT_PUBLIC_`.
+- Env is `SHOPIFY_SHOP_DOMAIN`, `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`.
+  Server-side only, never `NEXT_PUBLIC_`.
 - Use the GraphQL Admin API. Respect the cost-based rate limit: back off on
   `THROTTLED`, never fetch in a loop per ticket render.
+
+**Access tokens** — [client credentials grant][ccg]
+
+[ccg]: https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/client-credentials-grant
+
+- `POST https://{shop}/admin/oauth/access_token`, form-encoded, with
+  `grant_type=client_credentials`, `client_id`, `client_secret`. Returns
+  `access_token`, `scope`, `expires_in` (86399 — 24 hours).
+- Available only for apps built by your own organisation and installed on a
+  store you own. That is exactly our case; a public or distributed app would
+  need a different grant.
+- **The token must be persisted, not held in a module variable.** On
+  serverless every cold start would begin with nothing and mint again, so a
+  burst of invocations would hammer the token endpoint and get rate-limited.
+  It lives in `oauth_tokens` (provider `shopify`, `agent_id` null, shop
+  domain as `account_ref`), AES-256-GCM encrypted under
+  `TOKEN_ENCRYPTION_KEY` — the same table and pattern as the Gmail tokens,
+  so no new migration. Refreshed when under five minutes remain, a window
+  wider than any single request that might carry the token.
+- On a 401 from the Admin API, force one re-mint and retry once, then fail.
+  A 403 is a scope problem — a new token has the same scopes, so it fails
+  immediately rather than spending a mint.
+- A failed cache write never fails the caller: two instances minting at once
+  trips the unique index, and the loser still holds a good token.
 
 **Sidebar behaviour**
 - When a ticket's customer has an email, look them up in Shopify by email.

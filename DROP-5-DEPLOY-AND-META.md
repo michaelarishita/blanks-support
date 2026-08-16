@@ -45,7 +45,7 @@ Then: Add New → Project → import `michaelarishita/blanks-support`.
 | `SUPABASE_SERVICE_ROLE_KEY` | same — server-only, never `NEXT_PUBLIC_` |
 | `GOOGLE_CLIENT_ID` | Google Cloud → Credentials |
 | `GOOGLE_CLIENT_SECRET` | same |
-| `TOKEN_ENCRYPTION_KEY` | **COPY the local value verbatim. Do not regenerate.** Regenerating makes every stored Gmail token undecryptable and forces all agents (and the support mailbox) to reconnect. |
+| `TOKEN_ENCRYPTION_KEY` | **COPY the local value verbatim. Do not regenerate.** Regenerating makes every stored Gmail token undecryptable and forces all agents (and the support mailbox) to reconnect. (It also protects the cached Shopify token, but that one re-mints itself, so Gmail is what makes this non-negotiable.) |
 | `SUPPORT_EMAIL` | hello@blankssportsnutrition.com — NOT support@, which still routes to Melissa's existing setup during the parallel run |
 | `NEXT_PUBLIC_SITE_URL` | `https://support.blankssportsnutrition.com` — pins OAuth redirect + the absolute logo URL in email |
 | `NEXT_PUBLIC_MAIL_POLL_SECONDS` | unset in production (Pub/Sub takes over) |
@@ -56,6 +56,9 @@ Then: Add New → Project → import `michaelarishita/blanks-support`.
 | `GMAIL_WEBHOOK_TOKEN` | new random value. REQUIRED in production: the Pub/Sub endpoint accepts any caller when it is unset |
 | `ALERT_EMAIL` | michael@blankssportsnutrition.com — where inbound-down alerts go |
 | `WIDGET_ALLOWED_ORIGINS` | `https://blankssportsnutrition.com,https://www.blankssportsnutrition.com` plus the Shopify storefront domain if the site is served from one |
+| `SHOPIFY_SHOP_DOMAIN` | `blanks-sports-nutrition.myshopify.com` — the `.myshopify.com` domain, not the storefront one |
+| `SHOPIFY_CLIENT_ID` | Shopify **Dev Dashboard** → the `Blanks Support` app. There is no `shpat_` token to copy; the app mints 24-hour tokens from these two |
+| `SHOPIFY_CLIENT_SECRET` | same — server-only, never `NEXT_PUBLIC_` |
 
 Deploy. Confirm green, then Settings → Domains → add
 `support.blankssportsnutrition.com` (the GoDaddy CNAME already exists from

@@ -182,8 +182,8 @@ export default function ShopifyPanel({
   if (!configured) {
     return (
       <p className="text-caption text-tertiary">
-        Shopify isn&apos;t connected. Add SHOPIFY_SHOP_DOMAIN and
-        SHOPIFY_ADMIN_TOKEN to enable order context.
+        Shopify isn&apos;t connected. Add SHOPIFY_SHOP_DOMAIN,
+        SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET to enable order context.
       </p>
     );
   }

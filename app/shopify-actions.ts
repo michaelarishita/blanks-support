@@ -28,7 +28,7 @@ function describe(e: unknown): string {
       case "throttled":
         return "Shopify is rate-limiting us. Try again in a moment.";
       case "auth":
-        return "Shopify rejected our credentials — check the app token and its scopes.";
+        return "Shopify rejected our credentials — check the app's client ID, secret and scopes.";
       case "network":
         return "Couldn't reach Shopify.";
       default:
