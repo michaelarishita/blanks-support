@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import GmailConnect from "@/components/GmailConnect";
 import QueuedReplies from "@/components/QueuedReplies";
 import SignatureEditor from "@/components/SignatureEditor";
@@ -57,6 +58,14 @@ export default async function SettingsPage({
     .eq("direction", "outbound")
     .eq("type", "public")
     .in("delivery_status", ["queued", "failed"]);
+
+  // null distinguishes "the migration hasn't been run" from "no rules are on",
+  // which look identical as a zero and mean entirely different things.
+  const { count: ruleCount, error: rulesError } = await supabase
+    .from("rules")
+    .select("id", { count: "exact", head: true })
+    .eq("enabled", true);
+  const liveRuleCount = rulesError ? null : (ruleCount ?? 0);
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
@@ -176,6 +185,32 @@ export default async function SettingsPage({
             can&apos;t break brand consistency for the team.
           </p>
           <CompanyBrandEditor company={company} />
+        </section>
+      )}
+
+      {me?.role === "admin" && (
+        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+            Routing rules
+          </h2>
+          <p className="mb-4 mt-1 text-sm text-gray-600">
+            Assign, tag, prioritise or auto-reply automatically as tickets
+            arrive. Every rule can be tested against recent tickets before it
+            goes live, and every firing is recorded on the ticket.
+          </p>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-gray-500">
+              {liveRuleCount === null
+                ? "Run 0011_rules.sql to enable routing."
+                : `${liveRuleCount} rule${liveRuleCount === 1 ? "" : "s"} live`}
+            </span>
+            <Link
+              href="/settings/rules"
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+            >
+              Manage rules
+            </Link>
+          </div>
         </section>
       )}
 

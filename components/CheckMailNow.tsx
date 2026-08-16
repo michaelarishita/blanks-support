@@ -23,6 +23,7 @@ export default function CheckMailNow({ connected }: { connected: boolean }) {
       }
 
       const skipped = Object.entries(result.skipped);
+      const ruleHits = Object.entries(result.ruleHits ?? {});
       setSummary(
         [
           `Checked ${result.checked}`,
@@ -32,6 +33,11 @@ export default function CheckMailNow({ connected }: { connected: boolean }) {
           // reads as broken when it's usually loop protection working.
           skipped.length
             ? `skipped ${skipped.map(([why, n]) => `${n} × ${why}`).join(", ")}`
+            : null,
+          // Same reasoning for routing: a rule that quietly reassigned inbound
+          // mail should be visible from the button that pulled it in.
+          ruleHits.length
+            ? `rules ${ruleHits.map(([name, n]) => `${n} × ${name}`).join(", ")}`
             : null,
         ]
           .filter(Boolean)

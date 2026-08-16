@@ -81,7 +81,7 @@ The plan when the owner wants to go live again:
    OAuth token becomes undecryptable and all agents must reconnect.
 7. Add the production callback to the Google OAuth client:
    https://support.blankssportsnutrition.com/api/google/callback
-8. Run migrations 0002–0006 against the production Supabase project. The
+8. Run migrations 0002–0011 against the production Supabase project. The
    dashboard shows a banner listing any that are missing.
 
 ### Turning on inbound push (production only)
@@ -200,9 +200,48 @@ token via the client credentials grant and caches it encrypted in
 do not cache it in a module variable — see DROP-7-SPEC.md "Access tokens".
 Customer 360 in TicketSidePanel:
 recent orders + status + tracking, lifetime spend, order lookup by email /
-order number. Macro variables {{order.*}}. Then: rules engine (auto-tag/
-assign/reply), SLA timers, snooze, merge, full-text search (Postgres FTS),
-collision detection (Supabase Presence), keyboard shortcuts.
+order number. Macro variables {{order.*}}. Then: SLA timers, snooze, merge,
+full-text search (Postgres FTS), collision detection (Supabase Presence),
+keyboard shortcuts.
+
+**Rules engine (Drop 7C — DONE, local only).** DROP-7-SPEC said the `rules`
+table already existed. It did not; `0011_rules.sql` creates it, along with
+`messages.is_automated`.
+
+- `lib/rules/` splits three ways on purpose: `types.ts` (shapes + the single
+  validator), `evaluate.ts` (pure matching, no I/O), `engine.ts` (the DB side).
+  The dry-run calls the same `ruleMatches` the live path calls, so "would have
+  matched" and "did match" cannot disagree.
+- Admin UI at Settings → Routing rules (`/settings/rules`). Reorderable,
+  testable against the last 50 tickets before enabling, seeded with the four
+  rules in the spec — all disabled.
+- Triggers fire from the intake route and from `ingestMessage` in
+  `lib/google/inbound.ts`. `runRulesSafely` never throws: a broken rule must not
+  turn a received customer message into a 500 or abandon a mail batch.
+- Semantics that are deliberate, not accidents:
+  - **Facts are snapshotted before the run.** A tag added by rule 1 is invisible
+    to rule 3. Cascading would make outcomes depend on ordering nobody can see,
+    and the dry-run could not model it.
+  - **First assignment wins, and a ticket with an owner is never reassigned.**
+    The UPDATE is conditional on `assignee_id is null`, so a human claiming it in
+    the same second beats the rule instead of being silently overwritten.
+  - **The assignment email is sent once, after every rule has run**, so the
+    priority prefix in Harvey's subject reflects a priority a later rule raised.
+  - **A rule with zero conditions matches nothing.** `every` over an empty array
+    is true, which would have auto-assigned the entire inbox to one person.
+  - **A blank condition value is false for negative operators too.** Vacuous
+    truth would make a half-finished "subject contains none of" match everything.
+  - **An auto-reply may only use `{{customer.first_name}}`.** `{{order.*}}` is
+    refused at save time: nothing reviews an automatic send, so an order variable
+    would mail `[NO ORDER — CHECK BEFORE SENDING]` to the customer, which is the
+    exact outcome that placeholder exists to prevent. It sends at most once per
+    ticket and never once a human has replied.
+  - `is_automated` keeps an auto-reply from stamping `first_response_at` — the
+    trigger in 0011 replaces 0001's — so Phase 5 doesn't report a two-second
+    human response time. The thread labels it "Automatic reply".
+- Every firing writes a `ticket_events` row naming the rule AND its skips. A
+  rule that matched and then did nothing is otherwise indistinguishable from a
+  rule that never ran.
 
 ### Phase 5 — CSAT, reporting, Ike export
 CSAT email on resolve (1–5 one-tap). Analytics dashboard (volume by

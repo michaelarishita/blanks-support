@@ -43,7 +43,11 @@ const DELIVERY = {
 /** Identity for grouping: same person *and* same kind of message. */
 function authorKey(m: Message): string {
   if (m.type === "internal_note") return `note:${m.agent_id ?? "?"}`;
-  if (m.direction === "outbound") return `agent:${m.agent_id ?? "?"}`;
+  // An auto-reply never groups with a human reply, even though both have a
+  // null agent when the mailbox sent them — they are not the same author.
+  if (m.direction === "outbound") {
+    return m.is_automated ? "rule" : `agent:${m.agent_id ?? "?"}`;
+  }
   return "customer";
 }
 
@@ -247,6 +251,11 @@ export default function Thread({
                         <LockIcon size={11} className="mr-1 inline align-[-1px]" />
                       )}
                       {isNote && "Internal note · "}
+                      {/* Named, not silent: an outbound reply nobody on the
+                          team wrote is otherwise indistinguishable from a
+                          colleague's, and the first question is always "who
+                          sent that?" */}
+                      {isAgent && !isNote && m.is_automated && "Automatic reply · "}
                       {/* An agent's name links to their queue; a customer's
                           doesn't, since there's no such view for them. */}
                       {m.agent_id ? (

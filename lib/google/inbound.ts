@@ -13,6 +13,7 @@ import {
   parseGmailMessage,
   type ParsedEmail,
 } from "@/lib/email/parse";
+import { runRulesSafely } from "@/lib/rules/engine";
 
 // Pulls new mail from the shared support mailbox and turns it into tickets.
 // Driven by two triggers that share this one implementation: the Pub/Sub
@@ -27,6 +28,8 @@ export interface SyncResult {
   created: number;
   appended: number;
   skipped: Record<string, number>;
+  /** Rule name → how many messages in this run it fired on. */
+  ruleHits: Record<string, number>;
   error?: string;
 }
 
@@ -36,7 +39,7 @@ const SENDER_MATCH_WINDOW_DAYS = 7;
 const DEFAULT_MAX_MESSAGES = 25;
 
 function emptyResult(): SyncResult {
-  return { checked: 0, created: 0, appended: 0, skipped: {} };
+  return { checked: 0, created: 0, appended: 0, skipped: {}, ruleHits: {} };
 }
 
 function countSkip(result: SyncResult, reason: string) {
@@ -484,6 +487,20 @@ async function ingestMessage(
       event_type: "email_received",
       detail: { match_path: path, from: parsed.fromEmail },
     });
+  }
+
+  // Routing. A new ticket fires ticket_created; anything appended to an
+  // existing one is a customer reply. Runs after the message is stored, so a
+  // body condition sees the mail that just arrived.
+  const rules = await runRulesSafely(
+    ticketId,
+    path === "new" ? "ticket_created" : "message_received"
+  );
+  for (const rule of rules.fired) {
+    // Surfaced in the same skip/count summary "Check mail now" already shows,
+    // so a rule firing on inbound mail isn't invisible until someone opens the
+    // ticket.
+    result.ruleHits[rule.name] = (result.ruleHits[rule.name] ?? 0) + 1;
   }
 
   return { ticketId, path };

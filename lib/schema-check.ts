@@ -152,6 +152,23 @@ const MIGRATIONS: {
         ? null
         : "column `agents.display_name`",
   },
+  {
+    file: "0011_rules.sql",
+    title: "Routing rules — nothing is assigned automatically without this",
+    probe: async () => {
+      const missing: string[] = [];
+      if (!(await columnExists("rules", "conditions"))) {
+        missing.push("table `rules`");
+      }
+      // Checked separately: the column is what keeps an auto-reply from
+      // stamping first_response_at, so the table existing without it would
+      // still corrupt the response-time reporting.
+      if (!(await columnExists("messages", "is_automated"))) {
+        missing.push("column `messages.is_automated`");
+      }
+      return missing.length ? missing.join(", ") : null;
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

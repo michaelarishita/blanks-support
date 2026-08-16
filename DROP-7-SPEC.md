@@ -120,10 +120,13 @@ Read-only until the team trusts the integration.
 
 Michael's stated first rule: order changes → Harvey, notified immediately.
 
-**Model** (`rules` table already exists): trigger (ticket created / message
-received), ordered conditions (channel, topic, tag, subject keyword, body
-keyword, customer email domain), actions (assign, add tag, set priority,
-send auto-reply).
+**Model** — ~~`rules` table already exists~~ **it did not.** 0001 created 13
+tables and none of them was this one; the claim above was wrong and cost a
+session's worth of confusion. `supabase/migrations/0011_rules.sql` creates it.
+
+Trigger (ticket created / message received), ordered conditions (channel,
+topic, tag, subject keyword, body keyword, customer email domain), actions
+(assign, add tag, set priority, send auto-reply).
 
 **Requirements**
 - Rules are ordered and evaluated top-down; first assignment wins, other

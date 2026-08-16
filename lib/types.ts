@@ -80,6 +80,8 @@ export interface Message {
   body_text: string;
   body_html: string | null;
   delivery_status: string;
+  /** Sent by a rule, not a person. Excluded from first_response_at. */
+  is_automated?: boolean;
   created_at: string;
   agent?: Agent | null;
   attachments?: Attachment[];

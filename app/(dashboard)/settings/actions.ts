@@ -262,7 +262,14 @@ export async function removeBrandLogo(): Promise<ActionResult> {
 export async function checkMailNow() {
   const me = await requireAgent();
   if (!me) {
-    return { checked: 0, created: 0, appended: 0, skipped: {}, error: "Not authenticated" };
+    return {
+      checked: 0,
+      created: 0,
+      appended: 0,
+      skipped: {},
+      ruleHits: {},
+      error: "Not authenticated",
+    };
   }
 
   const result = await syncSupportMailbox();

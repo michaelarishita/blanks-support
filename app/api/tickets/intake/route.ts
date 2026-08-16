@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { corsHeaders, isOriginAllowed } from "@/lib/cors";
+import { runRulesSafely } from "@/lib/rules/engine";
 
 // ------------------------------------------------------------
 // Public intake endpoint for the website support widget.
@@ -160,6 +161,13 @@ export async function POST(request: Request) {
     event_type: "created",
     detail: { via: "web_form", ip },
   });
+
+  // Routing runs inline, after the ticket is safely stored. It is deliberately
+  // not fire-and-forget: on serverless, work started after the response is
+  // killed with the invocation, so "assign Harvey and email him immediately"
+  // would become "sometimes". runRulesSafely never throws, so a broken rule
+  // cannot turn a received message into a 500 for the customer.
+  await runRulesSafely(ticket.id, "ticket_created");
 
   return NextResponse.json(
     { ok: true, ticket_number: ticket.number },
