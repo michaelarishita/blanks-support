@@ -97,15 +97,31 @@ export interface TicketEvent {
   agent?: Agent | null;
 }
 
+/**
+ * The customer-facing topic picker, and the source of truth for topic names.
+ *
+ * Every entry must exist as a row in `tags` — the intake endpoint looks the
+ * topic up BY NAME to apply the topic tag, so a topic here with no matching
+ * tag row silently creates untagged tickets. tests/topics.test.ts holds this
+ * list against the tag rows the migrations produce.
+ *
+ * Rules match on these strings too, so removing or renaming one can leave a
+ * rule condition pointing at a topic nothing can produce. That is also
+ * asserted rather than remembered.
+ *
+ * DEPRECATED TOPICS ARE REMOVED FROM HERE BUT NOT FROM `tags`: dropping the
+ * row would take the tag off every historical ticket that carries it. See
+ * 0012 for "Ambassador / athlete", which is retired from this picker and
+ * still on the tickets that used it.
+ */
 export const TOPICS = [
   "Order questions",
   "Product questions",
   "Shipping & returns",
-  "Subscription",
+  "Subscription Help",
   "Wholesale / retailer",
   "Sponsorship inquiry",
   "Event questions",
-  "Ambassador / athlete",
   "Feedback",
   "Other",
 ] as const;

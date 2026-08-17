@@ -15,6 +15,10 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  // Thumbnails need the bytes rendered in place. The default is still a
+  // download, so a click on the chip saves the file rather than navigating an
+  // agent away into a raw image.
+  const inline = new URL(request.url).searchParams.get("inline") === "1";
 
   const supabase = await createClient();
   const {
@@ -35,9 +39,13 @@ export async function GET(
   const admin = createAdminClient();
   const { data, error } = await admin.storage
     .from("attachments")
-    .createSignedUrl(attachment.storage_path, SIGNED_URL_TTL_SECONDS, {
-      download: attachment.filename,
-    });
+    .createSignedUrl(
+      attachment.storage_path,
+      SIGNED_URL_TTL_SECONDS,
+      // Content-Disposition: attachment is what makes a browser save rather
+      // than render, so an <img> pointing here has to opt out of it.
+      inline ? {} : { download: attachment.filename }
+    );
 
   if (error || !data?.signedUrl) {
     return NextResponse.json(

@@ -64,13 +64,49 @@
     "background:" + BG + ";border:1px solid " + BORDER + ";color-scheme:dark";
 
   var iframe = document.createElement("iframe");
-  iframe.src = ORIGIN + "/widget";
+  // Tell the widget who framed it, so its height messages can be addressed to
+  // exactly this origin instead of broadcast. The value is matched against the
+  // server's allowlist over there — it is a hint, not a grant.
+  iframe.src =
+    ORIGIN + "/widget?parent=" + encodeURIComponent(window.location.origin);
   iframe.title = "Blanks Support";
   // Same background again: an iframe paints its own canvas white by default,
   // before the document inside it has any styles at all.
   iframe.style.cssText =
     "width:100%;height:100%;border:0;display:block;background:" + BG;
   panel.appendChild(iframe);
+
+  // ---- Auto-sizing -------------------------------------------------------
+  //
+  // The widget measures itself and posts its height whenever it changes: on
+  // load, when the conditional order-number field appears, and when the
+  // success state replaces the form.
+  var HEIGHT_MESSAGE = "blanks-widget-height"; // mirrors lib/widget-frame.ts
+  var MIN_HEIGHT = 260;
+  var VIEWPORT_MARGIN = 120; // clears the floating button and a little air
+
+  window.addEventListener("message", function (event) {
+    // Three checks, and all three matter. Any page on the internet can
+    // postMessage into this window, so the sender has to be OUR origin AND
+    // OUR iframe — the origin alone would let a second Blanks iframe on the
+    // same page drive this panel.
+    if (event.origin !== ORIGIN) return;
+    if (event.source !== iframe.contentWindow) return;
+
+    var data = event.data;
+    if (!data || data.type !== HEIGHT_MESSAGE) return;
+
+    var height = Number(data.height);
+    if (!isFinite(height) || height <= 0) return;
+
+    // Clamped both ways: a mid-transition measurement must not collapse the
+    // panel, and a long form must not run off the bottom of the screen. Past
+    // the ceiling the iframe scrolls internally, which is the correct
+    // fallback rather than a panel taller than the viewport.
+    var ceiling = Math.max(MIN_HEIGHT, window.innerHeight - VIEWPORT_MARGIN);
+    panel.style.height =
+      Math.min(Math.max(height, MIN_HEIGHT), ceiling) + "px";
+  });
 
   var open = false;
   btn.addEventListener("click", function () {

@@ -243,6 +243,61 @@ table already existed. It did not; `0011_rules.sql` creates it, along with
   rule that matched and then did nothing is otherwise indistinguishable from a
   rule that never ran.
 
+**Live routing (0012).** 0011's placeholders are deleted and replaced with the
+real thing, ENABLED: Product/Wholesale/Events → Jon (Normal), Orders/Shipping
+→ Harvey (High), Sponsorship → Michael, and refund keywords → High. The refund
+rule is LAST on purpose — priority actions stack and the last write wins, so a
+refund mention on a Product question ends at High instead of being reset to
+Normal. A rule ships enabled only if its assignee's account resolves; a missing
+account leaves it off, where the editor says "choose who this assigns to"
+rather than firing at nobody.
+
+### Topics — three homes, no foreign key
+
+`TOPICS` in lib/types.ts (the picker), `tags.name` (what intake looks up BY
+NAME), and `rules.conditions` (what routing matches on). Nothing in the
+database ties them together, so a rename breaks two of them silently: a topic
+with no tag row files untagged tickets, and a rule naming a retired topic reads
+as live routing while being unreachable. `tests/topics.test.ts` reconstructs
+the post-migration state from the SQL and asserts both directions.
+
+Deprecating a topic means removing it from TOPICS and LEAVING THE TAG ROW —
+deleting the row cascades through ticket_tags and rewrites history. That is
+what happened to "Ambassador / athlete" in 0012.
+
+### Customer file uploads (Drop 7, widget)
+
+Up to 3 files, 10MB each, on the public intake endpoint — the most abusable
+surface in the product.
+
+- **Type comes from the CONTENT** (`lib/uploads/sniff.ts`), never the
+  extension or the browser's Content-Type: a caller who picks both the file
+  and the header otherwise nominates which allowlist entry they match. JPEG,
+  PNG, WebP, HEIC, PDF. `mif1` alone is not HEIC — it's shared with AVIF.
+- **EXIF is stripped** (`lib/uploads/strip.ts`), because a photo of a damaged
+  tub is a photo taken at the customer's address. Pure byte manipulation, no
+  image library — `sharp` means native binaries and this project has already
+  paid for one round of Vercel build archaeology. JPEG drops APP1/APP13/COM
+  and keeps APP0/APP2 (dropping ICC would shift the colours); PNG drops the
+  text and eXIf chunks; WebP drops EXIF/XMP, clears the VP8X flags and
+  rewrites the RIFF size. HEIC has no segment to drop — EXIF is an *item* in
+  `mdat` located via `meta`/`iinf`/`iloc` — so its payload is ZEROED IN PLACE,
+  which leaves every other offset in the file untouched.
+- **FAIL CLOSED.** Anything not fully parsed is refused, not stored. The
+  alternative is keeping the GPS we promised to remove.
+- Validation runs BEFORE anything is written, and is all-or-nothing: a
+  half-accepted batch leaves a customer thinking three photos arrived.
+- The customer gets an actionable sentence; the parser reason goes to the log
+  only. Narrating "unrecognised HEIC layout" to a public caller tells them
+  which code path they reached.
+- Uploads carry their own rate limit (3 per 10 min/IP) on top of the
+  submission limit (5/min) — five text posts a minute is noise, five 10MB
+  posts is 50MB of storage a minute.
+- Thread rendering: images thumbnail via `/api/attachments/[id]?inline=1`
+  (the default still sets a download disposition). **HEIC is not
+  thumbnailed** — Chrome and Firefox can't decode it, so an `<img>` would show
+  a broken-image icon.
+
 ### Phase 5 — CSAT, reporting, Ike export
 CSAT email on resolve (1–5 one-tap). Analytics dashboard (volume by
 channel/topic, first-response & resolution times, per-agent, CSAT trend).
@@ -255,3 +310,13 @@ export. `exports` table exists.
 Light UI, Tailwind, amber-500 accent on gray-900, system font stack (do NOT
 use next/font/google). Status colors in lib/types.ts STATUS_META. Keep the
 customer-facing widget minimal and fast.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

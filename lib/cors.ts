@@ -8,7 +8,12 @@
  * rate limit in the route remain the real defences.
  */
 
-const FALLBACK_ORIGINS = [
+/**
+ * Exported so tests can hold next.config.mjs's copy of this list against it —
+ * that file is .mjs and cannot import from here, so the two are kept in step
+ * by a test rather than by the module system.
+ */
+export const FALLBACK_ORIGINS = [
   "https://blankssportsnutrition.com",
   "https://www.blankssportsnutrition.com",
 ];

@@ -169,6 +169,23 @@ const MIGRATIONS: {
       return missing.length ? missing.join(", ") : null;
     },
   },
+  {
+    file: "0012_topics_and_live_routing.sql",
+    title: "Live routing rules and the Subscription Help topic rename",
+    probe: async () => {
+      const admin = createAdminClient();
+      // The rename is the cheapest reliable signal that this file ran: the
+      // rules half can't be probed by shape, since 0011 also creates rules.
+      const { data, error } = await admin
+        .from("tags")
+        .select("id")
+        .eq("name", "Subscription Help")
+        .maybeSingle();
+      // A missing tags table is 0001's problem, already reported above.
+      if (error) return null;
+      return data ? null : "the `Subscription` topic has not been renamed";
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */
