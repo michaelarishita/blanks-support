@@ -121,6 +121,134 @@ describe("WCAG AA contrast", () => {
 });
 
 /**
+ * The customer widget is the only dark surface in the product, which makes it
+ * the only place the brand blue behaves differently — a fill colour that
+ * clears AA on white does not clear it on near-black, and the failure is
+ * quiet because the colour still LOOKS like the brand.
+ */
+describe("widget dark palette", () => {
+  const bg = () => token("widget-bg");
+  const card = () => token("widget-card");
+  const field = () => token("widget-field");
+
+  it("is near-black, not pure black", () => {
+    // #000 bands on gradients and leaves nothing for a shadow to be darker
+    // than. Every channel is lifted off zero on purpose.
+    expect(bg().every((channel) => channel > 0)).toBe(true);
+    expect(luminance(bg())).toBeLessThan(0.01);
+  });
+
+  it("steps the card up from the page, and the field up from the card", () => {
+    expect(luminance(card())).toBeGreaterThan(luminance(bg()));
+    expect(luminance(field())).toBeGreaterThan(luminance(card()));
+  });
+
+  it("body text clears AAA on the card", () => {
+    expect(contrast(token("widget-text"), card())).toBeGreaterThanOrEqual(7);
+  });
+
+  it.each([
+    ["widget-card", "card"],
+    ["widget-field", "field"],
+  ])("body text clears AA on the %s", (surface) => {
+    expect(contrast(token("widget-text"), token(surface))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("secondary text clears AA on the card", () => {
+    expect(contrast(token("widget-text-secondary"), card())).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // Placeholders are real text that people read to understand a field, so
+  // they are held to the text ratio rather than waved through as decoration.
+  it("placeholder text clears AA on the field it sits in", () => {
+    expect(
+      contrast(token("widget-text-secondary"), field())
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  /**
+   * THE TRAP, asserted in both directions.
+   *
+   * #0061ff carries white at 5.06:1 as a FILL, which is why the button keeps
+   * it. As TEXT on this background it manages 3.85:1 on the page and 3.55:1
+   * on the card — below AA, while still looking unmistakably like the brand.
+   * Nothing about it appears broken, which is precisely why it needs a test.
+   */
+  it("brand-500 FAILS as accent text on dark, which is why it isn't one", () => {
+    expect(contrast(token("brand-500"), bg())).toBeLessThan(4.5);
+    expect(contrast(token("brand-500"), card())).toBeLessThan(4.5);
+  });
+
+  it("the widget accent is the lighter 400 step, not 500", () => {
+    expect(token("widget-accent")).toEqual(token("brand-400"));
+    expect(token("widget-accent")).not.toEqual(token("brand-500"));
+  });
+
+  it.each(["widget-bg", "widget-card"])(
+    "the accent clears AA on the %s",
+    (surface) => {
+      expect(contrast(token("widget-accent"), token(surface))).toBeGreaterThanOrEqual(
+        4.5
+      );
+    }
+  );
+
+  /**
+   * A floor, not the measured value: the accent is 6.73:1 on the page and
+   * 6.21:1 on the card. Asserting 6 leaves the palette room to move without
+   * letting it drift back toward the 4.5 line unnoticed.
+   *
+   * NOTE: this is comfortably AA but NOT AAA — the spec called for ~7:1 and
+   * the 400 step does not reach it against these surfaces. brand-300
+   * (#91bcff) measures 9.27:1 on the card if AAA is wanted.
+   */
+  it.each(["widget-bg", "widget-card"])(
+    "the accent keeps a wide margin over AA on the %s",
+    (surface) => {
+      expect(contrast(token("widget-accent"), token(surface))).toBeGreaterThanOrEqual(6);
+    }
+  );
+
+  it("the accent beats brand-500 on dark by a clear margin", () => {
+    const accent = contrast(token("widget-accent"), card());
+    const brand = contrast(token("brand-500"), card());
+    expect(accent / brand).toBeGreaterThan(1.5);
+  });
+
+  // WCAG 1.4.11: a control's boundary owes 3:1 against what's behind it. The
+  // CARD's border is exempt — it separates two surfaces, it doesn't tell you
+  // where you can type — which is why the two borders are different tokens.
+  it("the field border clears the 3:1 non-text minimum against the card", () => {
+    expect(contrast(token("widget-field-border"), card())).toBeGreaterThanOrEqual(3);
+  });
+
+  it("the field border also holds against the field's own fill", () => {
+    expect(contrast(token("widget-field-border"), field())).toBeGreaterThanOrEqual(3);
+  });
+
+  it("the focus ring is visible against the page it draws on", () => {
+    expect(contrast(token("widget-accent"), bg())).toBeGreaterThanOrEqual(3);
+  });
+
+  it.each(["widget-danger", "widget-success"])(
+    "%s is legible on the card",
+    (name) => {
+      expect(contrast(token(name), card())).toBeGreaterThanOrEqual(4.5);
+    }
+  );
+
+  // The app's danger/success tones are dark ink for light backgrounds. Reusing
+  // them here would put near-black text on near-black.
+  it.each([
+    ["widget-danger", "danger-text"],
+    ["widget-success", "success-text"],
+  ])("%s is its own token, not the app's %s", (dark, light) => {
+    expect(luminance(token(dark))).toBeGreaterThan(luminance(token(light)));
+    expect(contrast(token(light), token("widget-card"))).toBeLessThan(4.5);
+  });
+});
+
+/**
  * The priority palette inverts the usual convention (red is High, not
  * Urgent), so it leans harder on labels than on hue. These assertions cover
  * the two things colour still has to do: stay legible, and stay

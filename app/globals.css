@@ -89,6 +89,34 @@
   --info-border: 180 211 251;
   --info-text: 23 80 158;
 
+  /* ---- Customer widget: dark ----
+     The ONLY dark surface in the product. Defined at :root so the html/body
+     rules below can reach them (custom properties cascade down, never up),
+     but nothing in the dashboard consumes them, so the app stays light.
+
+     Not pure black: #000 bands on gradients and makes shadows impossible —
+     there is nothing for an elevation to be darker THAN. */
+  --widget-bg: 11 13 16; /* #0b0d10 — page and panel */
+  --widget-card: 20 23 28; /* #14171c — one step up, the card */
+  --widget-border: 38 43 51; /* #262b33 — the card's edge */
+
+  /* Form controls sit a step above the card so a field reads as a field
+     before you click it. The field BORDER is deliberately much lighter than
+     the card border: a card edge is decoration, but a control boundary is
+     covered by WCAG 1.4.11 and owes 3:1 against what's behind it. */
+  --widget-field: 26 30 37; /* #1a1e25 */
+  --widget-field-border: 101 110 125; /* #656e7d — 3.49:1 on the card */
+
+  --widget-text: 244 246 250; /* #f4f6fa — 16.6:1 on the card */
+  --widget-text-secondary: 142 151 166; /* #8e97a6 — 6.1:1 on the card */
+
+  /* Accent on dark is the 400 step, NOT brand-500. #0061ff manages only
+     3.6:1 on the card — it is a fill colour, not a text colour, and on a
+     dark ground it fails outright. The contrast test asserts both halves. */
+  --widget-accent: var(--brand-400);
+  --widget-danger: 255 143 143;
+  --widget-success: 110 231 168;
+
   /* ---- Elevation: soft and low-opacity; never pair lg with a border ---- */
   --shadow-sm: 0 1px 2px 0 rgb(var(--gray-900) / 0.04),
     0 1px 3px 0 rgb(var(--gray-900) / 0.06);
@@ -103,9 +131,87 @@
   --duration-panel: 200ms;
 }
 
-/* This is a light-only product (see CLAUDE.md design conventions). No
+/* The DASHBOARD is light-only (see CLAUDE.md design conventions). No
    prefers-color-scheme block — an inherited dark palette would fight the
-   explicit surface tokens above and wash out the blue accent. */
+   explicit surface tokens above and wash out the blue accent.
+
+   The customer widget is the one exception, and it is dark unconditionally
+   rather than by OS preference: it renders inside an iframe on the
+   storefront, where matching the host page's theme is not something we can
+   detect and guess at. One deliberate look beats two accidental ones. */
+
+/* ============================================================
+   Customer widget — dark, scoped to the /widget route
+   ============================================================ */
+
+/* The wrapper carries the theme. `color-scheme` here is what makes NATIVE
+   controls render dark — the <select> popup, scrollbars, spinners, the date
+   picker. Without it those stay white and the form looks half-finished. */
+.theme-widget-dark {
+  color-scheme: dark;
+}
+
+/* /widget is a nested route, so it cannot set <html> or <body> — those belong
+   to the root layout, which the dashboard shares. `:has()` lets the route
+   reach them anyway, which matters for two things the wrapper alone can't
+   fix: the overscroll/rubber-band area past the end of the page, and a white
+   flash before first paint inside the iframe.
+
+   Baseline in every browser we support. If it ever failed, the wrapper below
+   still paints the same background, so the page degrades to "correct except
+   when you overscroll" rather than to "white". */
+html:has(.theme-widget-dark) {
+  color-scheme: dark;
+  background-color: rgb(var(--widget-bg));
+}
+html:has(.theme-widget-dark) body {
+  background-color: rgb(var(--widget-bg));
+  color: rgb(var(--widget-text));
+}
+
+/* The app's focus ring puts a white halo between the element and the blue —
+   that reads as a bright artefact on a dark form. Same ring, dark halo. */
+.theme-widget-dark :focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgb(var(--widget-bg)),
+    0 0 0 4px rgb(var(--widget-accent));
+  border-radius: 6px;
+}
+
+/* Chrome forces its own background on autofilled fields — white in light
+   mode, a pale yellow when it thinks it filled a login. Either one lands as
+   an obviously-broken white block in the middle of a dark form. There is no
+   property that disables it; the inset shadow trick is the only way to
+   repaint the field, and -webkit-text-fill-color is the only way to recolour
+   the text inside it. */
+.theme-widget-dark input:-webkit-autofill,
+.theme-widget-dark input:-webkit-autofill:hover,
+.theme-widget-dark textarea:-webkit-autofill,
+.theme-widget-dark select:-webkit-autofill {
+  -webkit-text-fill-color: rgb(var(--widget-text));
+  -webkit-box-shadow: 0 0 0 1000px rgb(var(--widget-field)) inset;
+  caret-color: rgb(var(--widget-text));
+  /* Chrome animates its background in on a delay; an absurd transition
+     duration means that animation never arrives. */
+  transition: background-color 9999s ease-out 0s;
+}
+
+/* Focus is a separate rule because it also uses box-shadow: without the ring
+   repeated here, focusing an autofilled field would silently lose it. */
+.theme-widget-dark input:-webkit-autofill:focus-visible,
+.theme-widget-dark textarea:-webkit-autofill:focus-visible,
+.theme-widget-dark select:-webkit-autofill:focus-visible {
+  -webkit-box-shadow:
+    0 0 0 1000px rgb(var(--widget-field)) inset,
+    0 0 0 2px rgb(var(--widget-bg)),
+    0 0 0 4px rgb(var(--widget-accent));
+}
+
+.theme-widget-dark ::placeholder {
+  color: rgb(var(--widget-text-secondary));
+  opacity: 1; /* Firefox dims placeholders by default, below the ratio. */
+}
 
 body {
   background: rgb(var(--surface));

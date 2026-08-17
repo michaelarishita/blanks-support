@@ -5,6 +5,12 @@
  *   <script src="https://support.blankssportsnutrition.com/widget.js" defer></script>
  *
  * Renders a floating "Support" button that opens the ticket form in a panel.
+ *
+ * Everything here is inline style on purpose: this runs on the storefront,
+ * where a stylesheet of ours would be one more thing to collide with the
+ * theme's CSS. Colours are duplicated from the tokens in app/globals.css
+ * because this file cannot import them — if the widget palette changes, both
+ * places move.
  */
 (function () {
   var ORIGIN = (function () {
@@ -16,33 +22,62 @@
     }
   })();
 
+  // Mirrors --widget-* in app/globals.css.
+  var BG = "#0b0d10";
+  var BORDER = "#262b33";
+  var BRAND = "#0061ff";
+  var BRAND_HOVER = "#0052db"; // Darker, never lighter — white label is 5.06:1.
+
   // floating button
   var btn = document.createElement("button");
-  btn.textContent = "💬 Support";
+  btn.type = "button";
+  btn.textContent = "Support";
   btn.setAttribute("aria-label", "Open support");
-  btn.style.cssText =
-    "position:fixed;bottom:20px;right:20px;z-index:99998;background:#111;color:#fff;" +
-    "border:none;border-radius:999px;padding:12px 20px;font:600 14px -apple-system,sans-serif;" +
-    "cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)";
+  btn.setAttribute("aria-expanded", "false");
+  var btnBase =
+    "position:fixed;bottom:20px;right:20px;z-index:99998;color:#fff;" +
+    "border:none;border-radius:999px;padding:14px 22px;" +
+    "font:600 15px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;" +
+    // 44px minimum tap target, and a shadow dark enough to hold against a
+    // white storefront background.
+    "min-height:48px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.28);" +
+    "transition:background-color 120ms ease";
+  btn.style.cssText = btnBase + ";background:" + BRAND;
+
+  btn.addEventListener("mouseenter", function () {
+    btn.style.backgroundColor = BRAND_HOVER;
+  });
+  btn.addEventListener("mouseleave", function () {
+    btn.style.backgroundColor = BRAND;
+  });
 
   // panel
+  //
+  // The background is the widget's OWN near-black, not #fff. A white panel
+  // behind a dark iframe shows as a bright frame at the rounded corners and
+  // as a full white flash for the moment before the iframe paints.
   var panel = document.createElement("div");
   panel.style.cssText =
     "position:fixed;bottom:80px;right:20px;z-index:99999;width:380px;max-width:calc(100vw - 40px);" +
     "height:560px;max-height:calc(100vh - 120px);border-radius:16px;overflow:hidden;" +
-    "box-shadow:0 12px 40px rgba(0,0,0,.3);display:none;background:#fff";
+    "box-shadow:0 12px 40px rgba(0,0,0,.45);display:none;" +
+    "background:" + BG + ";border:1px solid " + BORDER + ";color-scheme:dark";
 
   var iframe = document.createElement("iframe");
   iframe.src = ORIGIN + "/widget";
   iframe.title = "Blanks Support";
-  iframe.style.cssText = "width:100%;height:100%;border:0";
+  // Same background again: an iframe paints its own canvas white by default,
+  // before the document inside it has any styles at all.
+  iframe.style.cssText =
+    "width:100%;height:100%;border:0;display:block;background:" + BG;
   panel.appendChild(iframe);
 
   var open = false;
   btn.addEventListener("click", function () {
     open = !open;
     panel.style.display = open ? "block" : "none";
-    btn.textContent = open ? "✕ Close" : "💬 Support";
+    btn.textContent = open ? "Close" : "Support";
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
   });
 
   document.body.appendChild(btn);

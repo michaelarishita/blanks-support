@@ -63,6 +63,21 @@ const config: Config = {
           border: channel("info-border"),
           text: channel("info-text"),
         },
+        // Customer widget only — the one dark surface in the product. Kept as
+        // its own group so a `widget-*` class in the dashboard is obviously
+        // wrong at the call site rather than merely dark.
+        widget: {
+          bg: channel("widget-bg"),
+          card: channel("widget-card"),
+          border: channel("widget-border"),
+          field: channel("widget-field"),
+          "field-border": channel("widget-field-border"),
+          text: channel("widget-text"),
+          muted: channel("widget-text-secondary"),
+          accent: channel("widget-accent"),
+          danger: channel("widget-danger"),
+          success: channel("widget-success"),
+        },
       },
       backgroundColor: {
         surface: channel("surface"),
