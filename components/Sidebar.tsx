@@ -104,9 +104,12 @@ function NavRow({
 export default function Sidebar({
   me,
   counts,
+  channelCounts,
 }: {
   me: Agent | null;
   counts: { open: number; mine: number; unassigned: number };
+  /** Open tickets per channel — same new/open definition as the Open view. */
+  channelCounts: Record<TicketChannel, number>;
 }) {
   const pathname = usePathname();
   const params = useSearchParams();
@@ -162,6 +165,13 @@ export default function Sidebar({
             active={onInbox && activeChannel === c}
             icon={<ChannelIcon channel={c} />}
             label={CHANNEL_META[c].label}
+            // Counts OPEN tickets, while the link opens the All view for that
+            // channel. Deliberate, and matching the Views rows above: the
+            // number answers "is there anything waiting on this channel",
+            // which is why it disappears at zero. Making it count everything
+            // the destination shows would leave a permanent badge on every
+            // row that has ever had a ticket.
+            count={channelCounts[c]}
           />
         ))}
       </nav>

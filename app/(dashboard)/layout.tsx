@@ -6,6 +6,7 @@ import MailPoller from "@/components/MailPoller";
 import HealthBanner from "@/components/HealthBanner";
 import SchemaBanner from "@/components/SchemaBanner";
 import { ToastProvider } from "@/components/ui";
+import type { TicketChannel } from "@/lib/types";
 
 export default async function DashboardLayout({
   children,
@@ -26,10 +27,12 @@ export default async function DashboardLayout({
 
   const { data: counts } = await supabase
     .from("tickets")
-    .select("status, assignee_id");
+    .select("status, assignee_id, channel");
 
-  const open =
-    counts?.filter((t) => ["new", "open"].includes(t.status)).length ?? 0;
+  /** What the Open view means, in one place now that two things ask. */
+  const isOpen = (status: string) => ["new", "open"].includes(status);
+
+  const open = counts?.filter((t) => isOpen(t.status)).length ?? 0;
   const mine =
     counts?.filter(
       (t) => t.assignee_id === user.id && !["resolved", "closed"].includes(t.status)
@@ -39,10 +42,27 @@ export default async function DashboardLayout({
       (t) => !t.assignee_id && !["resolved", "closed"].includes(t.status)
     ).length ?? 0;
 
+  // Counted here rather than with four `head: true` count queries: the rows
+  // are already loaded for the view counts above, so this is free.
+  const byChannel: Record<TicketChannel, number> = {
+    web_form: 0,
+    email: 0,
+    instagram: 0,
+    messenger: 0,
+  };
+  for (const ticket of counts ?? []) {
+    const channel = ticket.channel as TicketChannel;
+    if (isOpen(ticket.status) && channel in byChannel) byChannel[channel]++;
+  }
+
   return (
     <ToastProvider>
       <div className="flex h-screen bg-surface">
-        <Sidebar me={me} counts={{ open, mine, unassigned }} />
+        <Sidebar
+          me={me}
+          counts={{ open, mine, unassigned }}
+          channelCounts={byChannel}
+        />
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Schema first: an unrun migration explains most other symptoms. */}
           <SchemaBanner />
