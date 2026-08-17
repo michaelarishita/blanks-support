@@ -115,6 +115,54 @@ Inbound works locally by polling. Push needs Google Cloud wiring:
 - `lib/supabase/admin.ts` (service-role, bypasses RLS) is for API
   routes/webhooks only. Never import it into anything client-reachable.
 
+### Safari / WebKit — a blind spot in the test suite
+
+Every test we run is Node or Chrome. **No test in this repo can see a WebKit
+bug**, and the customer widget is the one surface where that matters: it is
+public, and half the people using it are on an iPhone.
+
+**`The string did not match the expected pattern.`** is WebKit's `SyntaxError`
+for a whole family of unrelated failures, with nothing in it to say which:
+
+| It really means | Chrome would have said |
+|---|---|
+| `postMessage` with a malformed `targetOrigin` | "Invalid target origin" |
+| `new URL()` on a relative or empty string | "Failed to construct 'URL'" |
+| `response.json()` on a body that isn't JSON | "Unexpected token '<'…" |
+
+Rules that follow, all of them enforced by tests/widget-errors.test.ts:
+
+- **Never show a caught error's own `.message` to a customer.** `setError(err.message)`
+  is how that WebKit string reached the widget's error box. Only strings the
+  SERVER sent in its JSON `error` field are customer copy; everything else maps
+  through `lib/widget-errors.ts`.
+- **Never call `res.json()` on a customer-facing path.** Read `.text()` and
+  `JSON.parse` inside a try, so a non-JSON body (a platform 413, an HTML error
+  page, an empty response) becomes our copy rather than the browser's.
+- **Validate a `targetOrigin` before `postMessage`.** It THROWS on a malformed
+  value rather than ignoring it, and from inside a ResizeObserver callback that
+  throw is invisible to any surrounding try/catch. Don't validate with
+  `new URL()` — it throws the same WebKit message and reproduces the bug.
+
+**Reproducing anything here needs a real Safari.** `safaridriver` is installed
+but refuses to start a session until Safari → Settings → Advanced → "Show
+Develop menu", then Develop → "Allow Remote Automation" is switched on. That is
+a manual toggle; it cannot be enabled from a script.
+
+### The proxy buffers request bodies, and truncates at 10MB
+
+Anything `proxy.ts` matches has its body buffered, and past 10MB Next
+**truncates it and runs the route anyway** — logging "Request body exceeded
+10MB" where nobody is looking. The route then gets a multipart body cut off
+mid-file, `request.formData()` throws, and the customer is told "Invalid
+request" about a photo that was fine. Two ordinary iPhone photos cross that
+line.
+
+`api/tickets/intake` is therefore excluded from the matcher. It loses nothing:
+it is public anyway, and does its own origin check, honeypot, rate limiting and
+content validation. **Any future upload route needs the same exclusion** — the
+symptom points at the parser, not at the proxy.
+
 ## Structure
 
 - `app/(dashboard)/` — authed UI (inbox, tickets/[id]); layout does auth

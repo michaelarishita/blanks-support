@@ -39,6 +39,19 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|widget.js|robots.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // `api/tickets/intake` is excluded, and NOT just because it's public.
+    //
+    // Anything the proxy matches has its request body buffered first, and that
+    // buffer is capped at 10MB — past which Next TRUNCATES the body and logs
+    // "Request body exceeded 10MB", but still runs the route. The route then
+    // gets a multipart body cut off mid-file, `request.formData()` throws, and
+    // the customer is told "Invalid request" for a photo that was perfectly
+    // fine. Uploads allow 3 files at 10MB each, so any two decent phone photos
+    // cross that line.
+    //
+    // The route needs no proxy anyway: it is in the isPublic list above, and
+    // it does its own origin check, honeypot, rate limiting and content
+    // validation. Excluding it means the body is never buffered at all.
+    "/((?!_next/static|_next/image|favicon.ico|widget.js|robots.txt|api/tickets/intake|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

@@ -2,7 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { TOPICS } from "@/lib/types";
-import { HEIGHT_MESSAGE_TYPE, isUsableHeight } from "@/lib/widget-frame";
+import {
+  HEIGHT_MESSAGE_TYPE,
+  isUsableHeight,
+  isValidTargetOrigin,
+} from "@/lib/widget-frame";
+import {
+  GENERIC_FAILURE,
+  messageForThrown,
+  readSubmissionResponse,
+} from "@/lib/widget-errors";
 import {
   ACCEPTED_DESCRIPTION,
   ACCEPT_ATTRIBUTE,
@@ -112,11 +121,14 @@ export default function WidgetForm({
     e.preventDefault();
     setState("sending");
     setError("");
+
+    const hadFiles = files.length > 0;
+
     try {
       // Multipart only when there is something to carry; the JSON path stays
       // the common case and stays exactly as it was.
       let res: Response;
-      if (files.length) {
+      if (hadFiles) {
         const payload = new FormData();
         for (const [key, value] of Object.entries(form)) payload.append(key, value);
         for (const file of files) payload.append("files", file);
@@ -130,12 +142,26 @@ export default function WidgetForm({
           body: JSON.stringify(form),
         });
       }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Something went wrong");
-      setTicketNumber(data.ticket_number);
+
+      // NOT res.json(). That throws the browser's own parse error on any
+      // non-JSON body, and this catch used to put that string straight in
+      // front of the customer — which in Safari reads "The string did not
+      // match the expected pattern."
+      const result = await readSubmissionResponse(res, hadFiles);
+      if (!result.ok) {
+        setError(result.error ?? GENERIC_FAILURE);
+        setState("error");
+        return;
+      }
+
+      setTicketNumber(result.ticketNumber ?? null);
       setState("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      // Whatever this is — a DOMException, a network TypeError, something a
+      // future browser invents — the customer sees our copy. The raw value
+      // goes to the console, where it is useful and harmless.
+      console.error("[widget] submit failed:", err);
+      setError(messageForThrown(err, hadFiles));
       setState("error");
     }
   }
@@ -461,7 +487,14 @@ function useHeightReporting({
     // embed, no ?parent to read — we address every allowed origin in turn.
     // Only the real parent's origin matches, and the browser silently drops
     // the rest, so this stays precise without ever needing targetOrigin "*".
-    const targets = parentOrigin ? [parentOrigin] : allowedParents;
+    //
+    // Filtered, because postMessage THROWS on a malformed target rather than
+    // ignoring it, and a throw in here happens inside the observer callback
+    // where nothing is watching for it. A misconfigured origin should cost the
+    // panel its auto-sizing, not the whole form.
+    const targets = (parentOrigin ? [parentOrigin] : allowedParents).filter(
+      isValidTargetOrigin
+    );
     if (!targets.length) return;
 
     let lastSent = -1;

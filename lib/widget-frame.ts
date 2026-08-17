@@ -48,6 +48,31 @@ export function resolveParentOrigin(
     : null;
 }
 
+/**
+ * Is this string usable as a postMessage targetOrigin?
+ *
+ * `postMessage` THROWS on a malformed target rather than ignoring it, and
+ * WebKit's message for that is the famously unhelpful "The string did not
+ * match the expected pattern." — the same text it uses for half a dozen
+ * unrelated failures. Thrown from inside a ResizeObserver callback it would
+ * also be invisible to the surrounding try/catch.
+ *
+ * The values here come from server config (WIDGET_ALLOWED_ORIGINS,
+ * NEXT_PUBLIC_SITE_URL), so a deployment that sets one without a scheme —
+ * `support.blankssportsnutrition.com` rather than `https://…` — is an entirely
+ * ordinary mistake that would break the widget in one browser family only.
+ *
+ * Deliberately hand-rolled rather than `new URL()`: that constructor throws
+ * the SAME WebKit message on a relative string, so validating with it would
+ * reproduce the exact bug it is meant to prevent.
+ */
+export function isValidTargetOrigin(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  // "*" is valid to postMessage and refused here on purpose: it would hand
+  // the message to whatever page happened to frame us.
+  return /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(value.trim());
+}
+
 /** Lower bound on the panel height, so a mid-transition measurement can't collapse it. */
 export const MIN_PANEL_HEIGHT = 260;
 
