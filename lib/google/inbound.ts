@@ -17,6 +17,7 @@ import { runRulesSafely } from "@/lib/rules/engine";
 import { MAX_FILE_BYTES } from "@/lib/uploads/limits";
 import { sniffFileType } from "@/lib/uploads/sniff";
 import { stripMetadata } from "@/lib/uploads/strip";
+import { storageContentType } from "@/lib/attachments";
 
 // Pulls new mail from the shared support mailbox and turns it into tickets.
 // Driven by two triggers that share this one implementation: the Pub/Sub
@@ -337,7 +338,7 @@ function safeFilename(filename: string): string {
  * they're signature logos and tracking artefacts far more often than content,
  * and we render inbound mail as text anyway, so nothing would reference them.
  */
-async function storeAttachments(
+export async function storeInboundAttachments(
   accessToken: string,
   parsed: ParsedEmail,
   ticketId: string,
@@ -398,7 +399,11 @@ async function storeAttachments(
       const { error: uploadError } = await admin.storage
         .from("attachments")
         .upload(path, bytes, {
-          contentType: mimeType,
+          // Stored NEUTRAL when we could not identify the bytes, so a
+          // direct fetch of a signed URL has nothing to render even if the
+          // sender labelled it text/html. The row keeps the declared type
+          // for display; the bucket does not.
+          contentType: storageContentType(sniffed ? sniffed.kind : null),
           upsert: true,
         });
       if (uploadError) {
@@ -511,7 +516,7 @@ async function ingestMessage(
   }
 
   if (parsed.attachments.length) {
-    await storeAttachments(accessToken, parsed, ticketId, inserted.id, result);
+    await storeInboundAttachments(accessToken, parsed, ticketId, inserted.id, result);
   }
 
   // Recorded so we can see whether the [BLK-n] token is actually doing the

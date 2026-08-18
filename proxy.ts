@@ -24,6 +24,11 @@ export function proxy(request: NextRequest) {
     path.startsWith("/api/webhooks/") ||
     // Same for Vercel cron invocations, which authenticate with CRON_SECRET.
     path.startsWith("/api/cron/") ||
+    // And for the one-off admin jobs, which authenticate with CRON_SECRET
+    // too. They are NOT session-gated on purpose: they are run with curl, and
+    // a cookie check here would only redirect them to a login page. The
+    // secret is the authorisation.
+    path.startsWith("/api/admin/") ||
     // Reminder confirmation pages: the signed token is the authorisation, and
     // the agent may be reading the email on a device that isn't signed in.
     path.startsWith("/remind/");

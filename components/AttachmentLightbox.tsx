@@ -13,6 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import type { Attachment } from "@/lib/types";
+import { isInlineSafe } from "@/lib/attachments";
 import { XIcon, ChevronRightIcon, ChevronDownIcon } from "@/components/ui/icons";
 
 /**
@@ -55,14 +56,17 @@ export function useLightbox(): LightboxApi {
 /**
  * Which attachments get the full-size treatment.
  *
- * HEIC is absent on purpose: Chrome and Firefox cannot decode it, so opening
- * one would present a broken-image icon in a dark box. It keeps the download
- * chip, which at least does something.
+ * The SAME allowlist the download route enforces, imported rather than
+ * repeated. That route is the actual security boundary — it refuses to serve
+ * anything else inline however the client asks — so a second copy here could
+ * only drift into promising something the server will not render.
+ *
+ * HEIC and PDF are absent for different reasons: HEIC because Chrome and
+ * Firefox cannot decode it, PDF because its viewers execute JavaScript. Both
+ * keep the download chip, which at least does something.
  */
-const VIEWABLE = new Set(["image/jpeg", "image/png", "image/webp"]);
-
 export function isViewable(attachment: Attachment): boolean {
-  return Boolean(attachment.mime_type && VIEWABLE.has(attachment.mime_type));
+  return isInlineSafe(attachment.mime_type);
 }
 
 /**
