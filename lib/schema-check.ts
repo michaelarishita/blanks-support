@@ -186,6 +186,14 @@ const MIGRATIONS: {
       return data ? null : "the `Subscription` topic has not been renamed";
     },
   },
+  {
+    file: "0013_meta_messaging.sql",
+    title: "Instagram/Messenger dedupe — without it Meta redelivery doubles messages",
+    probe: async () =>
+      (await columnExists("messages", "deleted_at"))
+        ? null
+        : "column `messages.deleted_at`",
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

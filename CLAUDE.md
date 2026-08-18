@@ -243,7 +243,54 @@ and the 404-retry fallback in `deliverMessage`.
 Google Cloud Pub/Sub topic + push subscription, calling users.watch, and a
 daily cron to renew it.
 
-### Phase 3 — Instagram + Messenger
+### Phase 3 — Instagram + Messenger (9C/9D: webhook + Messenger inbound DONE)
+
+**One endpoint, `/api/webhooks/meta`, for both channels** — that is what 9A's
+choice of Facebook Login for Business buys: one app, one token store, one
+webhook, one set of send logic.
+
+**Signature verification is the whole security of that endpoint.** It is a
+public URL that creates tickets. `lib/meta/signature.ts` HMACs the RAW body
+with the app secret; the route reads `request.text()` FIRST and parses only
+after the check passes. Parsing first and re-serialising to verify produces
+different bytes — key order, spacing, unicode escaping — so every check fails,
+and the tempting conclusion is that signature checking "doesn't work" and gets
+removed. It fails CLOSED when META_APP_SECRET is unset: "nothing to check" is
+how an endpoint ships unauthenticated.
+
+- **GET is the handshake** and must echo `hub.challenge` as PLAIN TEXT. JSON —
+  even the right value in quotes — fails verification with no useful error.
+- **POST always answers 200** once the signature passes. Meta retries hard on
+  anything else and disables a persistently failing subscription, so an event
+  we cannot process is counted and stepped over, never thrown.
+- 403, not 200, for a bad signature. Retry behaviour is a reason to
+  acknowledge events we understand; it is not a reason to accept unsigned ones.
+
+**Echoes swap the parties.** On `is_echo` the PAGE is the sender, so the
+customer is the RECIPIENT. Reading `sender.id` as the customer files our own
+reply under a "customer" whose id is the page — a ticket from ourselves, with
+our words attributed to them. Echoes are stored `outbound` and `is_automated`
+so they do not stamp first_response_at, and rules do not run on them: routing
+a ticket because of something WE said would be nonsense.
+
+**Dedupe is the unique index**, `messages_meta_message_id_uniq` in 0013 — same
+discipline as the Gmail path, so the ingest does not have to be transactional
+to be correct. It is INERT until 0013 is applied: without the index a
+redelivery inserts a second row silently.
+
+**Media is downloaded on receipt**, never stored as a Meta URL. Their CDN links
+are short-lived, so storing the URL works in testing and 404s in front of an
+agent hours later. DM photos go through the same sniff + EXIF strip as widget
+uploads — a customer photo is a customer photo.
+
+Story replies are tagged rather than treated as support requests, unsends mark
+`deleted_at` rather than removing the row (so the thread cannot lie about what
+was said), and reactions become ticket_events — a heart is not a ticket.
+
+Still to build: 9E outbound + the 24h window, Instagram on the same plumbing,
+the countdown UI.
+
+#### Original plan
 One Meta app; webhooks → `/api/webhooks/meta` (verify X-Hub-Signature-256,
 dedupe by message id). DM conversation ↔ ticket via meta_conversation_id.
 Reply + mark-seen via Send API using the stored page token. Enforce the
