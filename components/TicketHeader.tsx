@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { assignTicket, setStatus } from "@/app/actions";
 import { useHotkey } from "@/lib/shortcuts";
@@ -49,6 +49,8 @@ export default function TicketHeader({
   const [assignOpen, setAssignOpen] = useState(false);
   const toast = useToast();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inboxHref = `/inbox${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
   const status = STATUS_META[ticket.status];
   const isOpenStatus = ticket.status !== "resolved" && ticket.status !== "closed";
 
@@ -104,19 +106,40 @@ export default function TicketHeader({
     useCallback(() => setAssignOpen((v) => !v), [])
   );
 
+  /**
+   * Browser back rather than a link to /inbox.
+   *
+   * Next restores scroll position on a back navigation and not on a fresh
+   * push, so a link would drop Melissa at the top of a list she was forty
+   * rows into. The href is the fallback for a ticket opened directly from an
+   * email, where there is no history to go back to — and it carries the
+   * current view so the list is the one she was filtering.
+   */
+  function goBack() {
+    if (window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push(inboxHref);
+  }
+
   return (
-    <header className="flex flex-none items-center gap-3 border-b border-subtle bg-panel px-5 py-2.5">
+    <header className="pt-safe flex flex-none items-center gap-3 border-b border-subtle bg-panel px-3 py-2.5 sm:px-5">
       <Tooltip content="Back to inbox">
-        <Link
-          href="/inbox"
-          className="flex h-7 w-7 items-center justify-center rounded-sm text-tertiary transition-colors duration-micro ease-out hover:bg-gray-100 hover:text-primary"
+        <button
+          type="button"
+          onClick={goBack}
+          // 44px on a phone, 28 on a desktop. This is the control someone
+          // reaches for most on the ticket screen, and it sits in the corner
+          // where a mis-tap costs a whole navigation.
+          className="flex h-11 w-11 flex-none items-center justify-center rounded-sm text-tertiary transition-colors duration-micro ease-out hover:bg-gray-100 hover:text-primary sm:h-7 sm:w-7"
           aria-label="Back to inbox"
         >
           <ArrowLeftIcon />
-        </Link>
+        </button>
       </Tooltip>
 
-      <span className="flex-none text-tertiary">
+      <span className="hidden flex-none text-tertiary sm:block">
         <ChannelIcon channel={ticket.channel} size={18} />
       </span>
 

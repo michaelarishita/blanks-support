@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Blanks Support">
+  <rect width="512" height="512" rx="112" fill="#0061ff"/>
+  <path d="M148 150h132c46 0 78 26 78 66 0 26-14 46-37 56 29 8 47 31 47 62 0 44-34 72-86 72H148V150zm70 54v56h54c19 0 31-11 31-28s-12-28-31-28h-54zm0 106v62h60c22 0 35-12 35-31s-13-31-35-31h-60z" fill="#ffffff"/>
+</svg>

@@ -132,6 +132,10 @@ export default async function TicketPage({
         />
       </div>
 
+      {/* Desktop only for now. On a phone this becomes a bottom sheet, which
+          is the next piece of 8C — hidden rather than squeezed, because a
+          280px context pane beside a 375px thread leaves neither usable. */}
+      <div className="hidden md:flex">
       <TicketSidePanel
         ticket={t}
         agents={(agents as Agent[]) ?? []}
@@ -141,6 +145,7 @@ export default async function TicketPage({
         allTags={(tags as Tag[]) ?? []}
         previousTicketCount={customerTicketCount ?? 0}
       />
+      </div>
     </div>
     </ShopifyProvider>
   );

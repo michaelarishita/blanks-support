@@ -49,9 +49,14 @@ export const config = {
     // fine. Uploads allow 3 files at 10MB each, so any two decent phone photos
     // cross that line.
     //
-    // The route needs no proxy anyway: it is in the isPublic list above, and
+    // manifest.webmanifest is excluded for a different reason: the browser
+    // fetches it to decide whether the app is installable, sometimes without
+    // credentials, and a manifest that 307s to an HTML login page is simply
+    // not a manifest. Nothing in it is private.
+    //
+    // The intake route needs no proxy anyway: it is in the isPublic list, and
     // it does its own origin check, honeypot, rate limiting and content
     // validation. Excluding it means the body is never buffered at all.
-    "/((?!_next/static|_next/image|favicon.ico|widget.js|robots.txt|api/tickets/intake|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|widget.js|robots.txt|manifest.webmanifest|api/tickets/intake|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

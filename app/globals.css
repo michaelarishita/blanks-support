@@ -264,6 +264,53 @@ time,
   }
 }
 
+/* ============================================================
+   Touch and mobile platform behaviour
+   ============================================================ */
+
+/* The default is a translucent blue rectangle that flashes on every tap,
+   including on rows that are meant to feel like surfaces rather than buttons.
+   Set deliberately to nothing; the components provide their own :active state,
+   which is the one that can be made to match the design. */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* iOS clips content behind the notch and the home indicator. Exposed as
+   utilities rather than applied globally, because only the elements actually
+   at the edges should pay for it — padding the whole page would leave a bar of
+   dead space mid-layout in landscape. */
+@layer utilities {
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .px-safe {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  /* For a sticky footer: its own padding PLUS the inset, so the control keeps
+     its breathing room instead of sitting on the home indicator. */
+  .pb-safe-3 {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Momentum scrolling, and a scroll container that doesn't hand the gesture
+     to the page when it hits its own end — the cause of a sheet that scrolls
+     the thread behind it. */
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  /* A row that owns horizontal gestures (swipe actions) while leaving vertical
+     scrolling to the list. Without it the browser claims both and the swipe
+     never fires. */
+  .touch-pan-y-only {
+    touch-action: pan-y;
+  }
+}
+
 /* Honour the OS setting — motion is decoration, never the only signal. */
 @media (prefers-reduced-motion: reduce) {
   *,

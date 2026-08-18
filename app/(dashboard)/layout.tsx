@@ -6,6 +6,8 @@ import MailPoller from "@/components/MailPoller";
 import HealthBanner from "@/components/HealthBanner";
 import SchemaBanner from "@/components/SchemaBanner";
 import { ToastProvider } from "@/components/ui";
+import MobileTopBar from "@/components/MobileTopBar";
+import PullToRefresh from "@/components/PullToRefresh";
 import type { TicketChannel } from "@/lib/types";
 
 export default async function DashboardLayout({
@@ -57,17 +59,31 @@ export default async function DashboardLayout({
 
   return (
     <ToastProvider>
-      <div className="flex h-screen bg-surface">
-        <Sidebar
-          me={me}
-          counts={{ open, mine, unassigned }}
-          channelCounts={byChannel}
-        />
+      {/* dvh, not vh: on iOS Safari 100vh is the tallest the viewport ever
+          gets, so a full-height app layout puts its own bottom edge behind the
+          browser chrome and nothing at the foot of the page is reachable. */}
+      <div className="flex h-[100dvh] bg-surface">
+        {/* The sidebar is the desktop navigation. On a phone it becomes the
+            chip bar below — not a hamburger, because switching views is the
+            most frequent thing triage does and a menu adds two taps to it. */}
+        <div className="hidden md:flex">
+          <Sidebar
+            me={me}
+            counts={{ open, mine, unassigned }}
+            channelCounts={byChannel}
+          />
+        </div>
         <div className="flex min-w-0 flex-1 flex-col">
+          <MobileTopBar
+            counts={{ open, mine, unassigned }}
+            channelCounts={byChannel}
+          />
           {/* Schema first: an unrun migration explains most other symptoms. */}
           <SchemaBanner />
           <HealthBanner />
-          <main className="scrollbar-slim flex-1 overflow-y-auto">{children}</main>
+          <PullToRefresh className="scrollbar-slim scroll-touch flex-1 overflow-y-auto">
+            {children}
+          </PullToRefresh>
         </div>
       </div>
       <ShortcutsOverlay />

@@ -61,7 +61,7 @@ export default async function InboxPage({
     : null;
 
   return (
-    <div className="mx-auto max-w-4xl px-6 pb-10">
+    <div className="mx-auto max-w-4xl px-0 pb-10 sm:px-6">
       <RealtimeRefresher />
       <InboxHeader
         title={
@@ -75,7 +75,7 @@ export default async function InboxPage({
         channelLabel={channelLabel}
         sort={sort}
       />
-      <TicketList tickets={rows} view={view} />
+      <TicketList tickets={rows} view={view} currentAgentId={user?.id ?? null} />
     </div>
   );
 }

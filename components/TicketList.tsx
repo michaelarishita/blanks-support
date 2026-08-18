@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { assignTicket, setStatus } from "@/app/actions";
+import SwipeRow from "@/components/SwipeRow";
+import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { shortAgo } from "@/lib/format";
 import { agentDisplayName, customerDisplayName } from "@/lib/display";
@@ -66,11 +69,16 @@ const EMPTY_COPY: Record<string, { title: string; description: string }> = {
 export default function TicketList({
   tickets,
   view = "open",
+  currentAgentId = null,
 }: {
   tickets: Ticket[];
   view?: string;
+  /** Needed for Claim; null on the rare render without a session. */
+  currentAgentId?: string | null;
 }) {
   const router = useRouter();
+  const toast = useToast();
+  const [, startTransition] = useTransition();
   const searchParams = useSearchParams();
   // Ticket links carry the current view, so opening one and then assigning it
   // away can advance within the list the agent was actually looking at.
@@ -108,6 +116,60 @@ export default function TicketList({
     setCursor((c) => (c >= tickets.length ? tickets.length - 1 : c));
   }, [tickets.length]);
 
+  /**
+   * Both swipe actions post an undo, and that is what makes a swipe an
+   * acceptable trigger for them: the gesture is easy to fire by accident on a
+   * moving train, so the cost of being wrong has to be one tap.
+   */
+  function resolveTicket(ticket: Ticket) {
+    const previous = ticket.status;
+    startTransition(async () => {
+      const res = await setStatus(ticket.id, "resolved");
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast(`#${ticket.number} resolved`, {
+        tone: "success",
+        action: {
+          label: "Undo",
+          onClick: () => {
+            startTransition(async () => {
+              await setStatus(ticket.id, previous);
+              router.refresh();
+            });
+          },
+        },
+      });
+      router.refresh();
+    });
+  }
+
+  function claimTicket(ticket: Ticket) {
+    if (!currentAgentId) return;
+    const previous = ticket.assignee_id ?? null;
+    startTransition(async () => {
+      const res = await assignTicket(ticket.id, currentAgentId);
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast(`#${ticket.number} is yours`, {
+        tone: "success",
+        action: {
+          label: "Undo",
+          onClick: () => {
+            startTransition(async () => {
+              await assignTicket(ticket.id, previous);
+              router.refresh();
+            });
+          },
+        },
+      });
+      router.refresh();
+    });
+  }
+
   if (tickets.length === 0) {
     const copy = EMPTY_COPY[view] ?? EMPTY_COPY.all;
     return (
@@ -137,14 +199,23 @@ export default function TicketList({
           // Stretched-link pattern: the whole row navigates via an absolutely
           // positioned overlay link, which lets the assignee avatar be its own
           // link. Nesting one <a> inside another is invalid and doesn't work.
-          <div
+          <SwipeRow
             key={t.id}
+            label={`Ticket #${t.number}`}
+            canResolve={t.status !== "resolved" && t.status !== "closed"}
+            canClaim={Boolean(currentAgentId) && t.assignee_id !== currentAgentId}
+            onResolve={() => resolveTicket(t)}
+            onClaim={() => claimTicket(t)}
+          >
+          <div
             ref={(el) => {
               rowRefs.current[index] = el;
             }}
             onMouseEnter={() => setCursor(index)}
             className={cn(
-              "group relative flex items-center gap-3 border-b border-subtle px-4 py-2.5 last:border-b-0",
+              // Taller on a phone: 2.5 units of padding is a comfortable
+              // mouse target and a cramped thumb one.
+              "group relative flex items-center gap-3 border-b border-subtle px-4 py-3.5 last:border-b-0 sm:py-2.5",
               "transition-[background-color,box-shadow] duration-micro ease-out",
               // A raise rather than a grey wash, so the row reads as
               // liftable rather than disabled.
@@ -176,7 +247,7 @@ export default function TicketList({
             </span>
 
             <span
-              className="flex-none text-tertiary"
+              className="hidden flex-none text-tertiary sm:block"
               title={CHANNEL_META[t.channel]?.label ?? t.channel}
             >
               <ChannelIcon channel={t.channel} />
@@ -230,7 +301,7 @@ export default function TicketList({
                 <Link
                   href={`/inbox?view=all&assignee=${t.assignee.id}`}
                   // Above the overlay so this click wins over "open ticket".
-                  className="relative z-20 flex max-w-[7.5rem] items-center gap-1.5 rounded-sm px-1 py-0.5 text-caption text-secondary transition-colors duration-micro ease-out hover:bg-gray-100 hover:text-primary"
+                  className="relative z-20 hidden max-w-[7.5rem] items-center gap-1.5 sm:flex rounded-sm px-1 py-0.5 text-caption text-secondary transition-colors duration-micro ease-out hover:bg-gray-100 hover:text-primary"
                   aria-label={`See tickets assigned to ${agentDisplayName(t.assignee)}`}
                   title={`Assigned to ${agentDisplayName(t.assignee)} — see their tickets`}
                 >
@@ -245,13 +316,15 @@ export default function TicketList({
                 </Link>
               ) : (
                 <span
-                  className="px-1 text-caption text-tertiary"
+                  className="hidden px-1 text-caption text-tertiary sm:inline"
                   title="Nobody has picked this up yet"
                 >
                   Unassigned
                 </span>
               )}
-              <Badge tone={status.tone}>{status.label}</Badge>
+              <span className="hidden sm:inline">
+                <Badge tone={status.tone}>{status.label}</Badge>
+              </span>
               <time
                 dateTime={t.last_message_at}
                 title={new Date(t.last_message_at).toLocaleString()}
@@ -261,6 +334,7 @@ export default function TicketList({
               </time>
             </div>
           </div>
+          </SwipeRow>
         );
       })}
     </div>
