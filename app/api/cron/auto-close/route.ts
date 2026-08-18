@@ -1,7 +1,10 @@
 import type { NextRequest } from "next/server";
 import { cronUnauthorized, isCronAuthorized } from "@/lib/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sweepOrphanedUploads } from "@/lib/uploads/sweep";
+import {
+  sweepDeletedTicketFolders,
+  sweepOrphanedUploads,
+} from "@/lib/uploads/sweep";
 
 // Daily. Resolved tickets nobody has touched for a week become closed.
 //
@@ -28,6 +31,14 @@ export async function GET(request: NextRequest) {
     console.error("[cron] orphan upload sweep failed:", uploads.error);
   }
 
+  // The other half: attachments whose TICKET is gone. Postgres deletes do not
+  // reach the bucket, so without this every deleted ticket leaves customer
+  // photographs behind — unreachable from the app, and still stored.
+  const ticketFiles = await sweepDeletedTicketFolders();
+  if (ticketFiles.error) {
+    console.error("[cron] deleted-ticket sweep failed:", ticketFiles.error);
+  }
+
   const admin = createAdminClient();
   const cutoff = new Date(Date.now() - AUTO_CLOSE_DAYS * 86_400_000).toISOString();
 
@@ -42,7 +53,7 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
   if (!stale?.length) {
-    return Response.json({ ok: true, closed: 0, uploads });
+    return Response.json({ ok: true, closed: 0, uploads, ticketFiles });
   }
 
   const ids = stale.map((ticket) => ticket.id);
@@ -68,6 +79,7 @@ export async function GET(request: NextRequest) {
   return Response.json({
     ok: true,
     uploads,
+    ticketFiles,
     closed: ids.length,
     numbers: stale.map((ticket) => ticket.number),
     // Surfaced so a persistent backlog above the cap is visible rather than

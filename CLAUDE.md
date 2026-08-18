@@ -299,8 +299,51 @@ Story replies are tagged rather than treated as support requests, unsends mark
 `deleted_at` rather than removing the row (so the thread cannot lie about what
 was said), and reactions become ticket_events — a heart is not a ticket.
 
-Still to build: 9E outbound + the 24h window, Instagram on the same plumbing,
-the countdown UI.
+**Instagram rides the same plumbing, and that is tested rather than assumed.**
+One webhook, one normaliser, one ingest; `object: "instagram"` is the only
+switch. The genuine differences are which id column identifies the customer
+(`ig_user_id` vs `fb_psid`) and which profile fields the Graph call asks for.
+tests/meta-inbound.test.ts drives both channels through processMetaEvents with
+Supabase and the Graph API faked at the edges.
+
+Still to build: 9E outbound + the 24h window, the countdown UI.
+
+### Serving attachments — the guard that makes accepting any type safe
+
+Email accepts ANY file type on purpose: a wholesale CSV or a signed PDF is a
+legitimate thing for a customer to send. That is only safe because of how the
+files are served.
+
+**Inline rendering is a server-side allowlist of three raster image types**
+(`lib/attachments.ts`). `?inline=1` is a REQUEST, not an instruction — it used
+to be honoured unconditionally, which meant an HTML or SVG attachment could be
+served with its own content type from the storage origin and execute there,
+against whichever agent opened the ticket. SVG, HTML and PDF are excluded by
+name, each with the reason, because a quietly-growing allowlist is how this
+erodes. The thread UI imports the same list rather than keeping its own.
+
+Anything not identified by content sniffing is STORED as
+`application/octet-stream`, so even a signed URL fetched directly has nothing
+to render. The database row keeps the declared type for display; the bucket
+does not.
+
+### Storage does not cascade
+
+Deleting a ticket removes its `attachments` rows and leaves the objects. They
+are customer photographs, so that is a retention problem before it is a
+billing one — and it happens however the ticket went, including a hand-written
+DELETE in the SQL editor.
+
+`sweepDeletedTicketFolders` (daily, on the auto-close cron) removes per-ticket
+folders whose ticket no longer exists. The signal is deliberately NOT age:
+intake creates the ticket row BEFORE uploading under it, so a folder with no
+ticket can never be an upload in flight. It **fails safe** — a failed ticket
+lookup makes every folder look orphaned, so nothing is deleted unless we
+positively know which tickets exist. Folders that are not ticket ids are left
+alone and reported.
+
+`/api/admin/backfill-attachments` re-fetches attachments Gmail still holds for
+mail that arrived before the inline fix. Dry by default; `apply=1` writes.
 
 #### Original plan
 One Meta app; webhooks → `/api/webhooks/meta` (verify X-Hub-Signature-256,
