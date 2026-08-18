@@ -13,6 +13,8 @@ import Button from "@/components/ui/Button";
 import Tooltip from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
 import MacroPicker, { type Macro } from "@/components/MacroPicker";
+import ReplyWindowNotice from "@/components/ReplyWindowNotice";
+import type { ReplyWindow } from "@/lib/meta/window";
 import { useShopify } from "@/components/ShopifyContext";
 import {
   expandMacro,
@@ -36,6 +38,7 @@ export default function ReplyBox({
   sendingAs,
   emailCapable,
   assignedToOther,
+  replyWindow = null,
 }: {
   ticketId: string;
   macros: Macro[];
@@ -46,6 +49,8 @@ export default function ReplyBox({
   sendingAs: string | null;
   /** False for tickets with no customer email — replies are stored only. */
   emailCapable: boolean;
+  /** Present only on Instagram/Messenger tickets. */
+  replyWindow?: ReplyWindow | null;
 }) {
   // Holds HTML from the editor; the server sanitizes it and derives the
   // canonical plain text.
@@ -93,6 +98,9 @@ export default function ReplyBox({
 
   const isNote = mode === "note";
   const empty = isEmptyHtml(body);
+  // A closed Meta window blocks a public reply but never an internal note —
+  // the team can still talk about a ticket they cannot answer.
+  const socialBlocked = Boolean(replyWindow && !replyWindow.canSend) && !isNote;
   const { primaryOrder } = useShopify();
   // A macro that couldn't find an order leaves a loud placeholder rather than
   // a blank. Sending "Your order  has shipped" is worse than a visible fault.
@@ -242,6 +250,12 @@ export default function ReplyBox({
           </p>
         )}
 
+        {replyWindow && !isNote && (
+          <div className="mt-2">
+            <ReplyWindowNotice initial={replyWindow} />
+          </div>
+        )}
+
         {assignedToOther && !isNote && (
           <p className="mt-2 flex items-center gap-1.5 text-caption text-tertiary">
             <UserIcon size={12} className="flex-none" />
@@ -281,7 +295,7 @@ export default function ReplyBox({
             size="md"
             onClick={submit}
             loading={pending}
-            disabled={empty}
+            disabled={empty || socialBlocked}
             className="h-12 flex-none px-5 sm:h-9 sm:px-3.5"
           >
             {isNote ? "Add note" : "Send reply"}

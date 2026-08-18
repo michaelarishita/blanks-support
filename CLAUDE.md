@@ -306,7 +306,48 @@ switch. The genuine differences are which id column identifies the customer
 tests/meta-inbound.test.ts drives both channels through processMetaEvents with
 Supabase and the Graph API faked at the edges.
 
-Still to build: 9E outbound + the 24h window, the countdown UI.
+### 9E — outbound, and the window that will bite
+
+Both channels send through the same Send API endpoint with the Page token.
+**The sender is the BRAND, not the agent** — unlike email there is no
+per-person identity on Meta. Which agent wrote it is recorded on the message
+and shown in the thread; the customer sees one voice.
+
+**Meta's reply window** (`lib/meta/window.ts`, pure and clock-injectable
+because every interesting case is a boundary):
+
+| Since the customer's last message | What happens |
+|---|---|
+| under 24h | free-form reply |
+| 24h – 7 days | allowed, but the send must carry `HUMAN_AGENT` |
+| past 7 days | nothing can be sent until they write again |
+
+- The tag is DERIVED from the window, never a flag anyone can set — it is only
+  legitimate for a human answering a question, and applying it to an automated
+  send would be a policy violation rather than a bug.
+- **A send that cannot succeed is refused BEFORE the message is stored**, the
+  same guard as "connect your Gmail". A reply sitting in the thread looking
+  sent, which the customer never received, is the worst available outcome.
+- The window is **re-read at send time**, not trusted from the page that
+  rendered the composer: a ticket left open for an hour has a stale countdown,
+  and the send is where being wrong costs something.
+- The Send API's own "window closed" error (code 10 / subcode 2018278) is
+  named specifically, because "permission denied" would send someone to the
+  app settings for a problem that is purely about time.
+- Internal notes are never blocked. The team can still talk about a ticket
+  they cannot answer.
+- `meta_message_id` is stored from the send response, so the echo Meta returns
+  for our own reply dedupes instead of appearing in the thread twice.
+
+`mark_seen` fires when an agent opens a social ticket, fire-and-forget — a
+read receipt is a courtesy and must not delay the thread rendering.
+
+The countdown (`ReplyWindowNotice`) recomputes from the timestamp on a timer
+rather than decrementing a stored number; a laptop that slept for two hours
+would otherwise show a confidently wrong figure.
+
+Still to build: outbound image attachments, and App Review if Standard Access
+turns out to be insufficient (9A: read the actual error, do not speculate).
 
 ### Serving attachments — the guard that makes accepting any type safe
 

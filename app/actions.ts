@@ -8,6 +8,12 @@ import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
 import { syncSupportMailboxThrottled } from "@/lib/google/inbound";
 import { sendAssignmentNotification } from "@/lib/notifications/send";
 import { STATUSES_AWAITING_AGENT } from "@/lib/ticket-status";
+import {
+  currentReplyWindow,
+  deliverMetaMessage,
+  isMetaChannel,
+} from "@/lib/meta/outbound";
+import { describeWindow } from "@/lib/meta/window";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -51,6 +57,7 @@ export async function sendReply(
   // storing anything if it can't — otherwise a missing Gmail connection would
   // swallow the agent's draft into a thread as an undeliverable message.
   let willEmail = false;
+  let willSendSocial = false;
   let unassigned = false;
   if (!isNote) {
     const { data: ticket } = await supabase
@@ -69,6 +76,16 @@ export async function sendReply(
           "Connect your Gmail in Settings before replying to email tickets.",
       };
     }
+
+    willSendSocial = isMetaChannel(ticket?.channel ?? "");
+    if (willSendSocial) {
+      // Blocked BEFORE storing, exactly like the missing-Gmail case. Meta
+      // will refuse a send outside its window, and a reply that sits in the
+      // thread looking sent while the customer never received it is the worst
+      // available outcome — worse than not being able to write it.
+      const window = await currentReplyWindow(ticketId);
+      if (!window.canSend) return { error: describeWindow(window) };
+    }
   }
 
   const { data: inserted, error } = await supabase
@@ -80,7 +97,8 @@ export async function sendReply(
       agent_id: userId,
       body_text: text,
       body_html: html,
-      delivery_status: isNote ? "stored" : willEmail ? "queued" : "stored",
+      delivery_status:
+        isNote || (!willEmail && !willSendSocial) ? "stored" : "queued",
     })
     .select("id")
     .single();
@@ -89,8 +107,11 @@ export async function sendReply(
   // Send inline: an agent needs to know immediately whether their reply
   // actually left the building.
   let deliveryError: string | null = null;
-  if (willEmail && inserted) {
-    const result = await deliverMessage(inserted.id);
+  if (inserted && (willEmail || willSendSocial)) {
+    // One or the other, never both: a ticket has one channel.
+    const result = willSendSocial
+      ? await deliverMetaMessage(inserted.id)
+      : await deliverMessage(inserted.id);
     if (!result.ok) deliveryError = result.error;
   }
 

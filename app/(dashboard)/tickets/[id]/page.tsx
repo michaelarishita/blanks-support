@@ -7,6 +7,8 @@ import TicketSidePanel from "@/components/TicketSidePanel";
 import MobileContextSheet from "@/components/MobileContextSheet";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
 import { ShopifyProvider } from "@/components/ShopifyContext";
+import { isMetaChannel, currentReplyWindow } from "@/lib/meta/outbound";
+import { markMetaSeen } from "@/lib/meta/send";
 import {
   canEmail,
   reconcileStuckSends,
@@ -86,6 +88,22 @@ export default async function TicketPage({
   const nextId = nextTicketId(orderedIds, id);
   const advanceHref = nextId ? ticketHref(nextId, view) : inboxHref(view);
 
+  // Social tickets: tell Meta the message was seen, and work out how long is
+  // left to reply. Both are best-effort — neither may stop the thread
+  // rendering, which is why they are awaited separately from the data the
+  // page actually needs.
+  const replyWindowState = isMetaChannel(t.channel)
+    ? await currentReplyWindow(t.id)
+    : null;
+
+  if (isMetaChannel(t.channel)) {
+    const metaId =
+      t.channel === "instagram" ? t.customer?.ig_user_id : t.customer?.fb_psid;
+    // Fire-and-forget on purpose: a read receipt is a courtesy to the
+    // customer, and failing to set one must not delay opening a ticket.
+    if (metaId) void markMetaSeen(metaId);
+  }
+
   const [connection, { count: customerTicketCount }] = await Promise.all([
     user ? resolveSender(user.id) : Promise.resolve(null),
     supabase
@@ -130,6 +148,7 @@ export default async function TicketPage({
               ? agentDisplayName(t.assignee)
               : null
           }
+          replyWindow={replyWindowState}
         />
 
         {/* Context lives ONLY here on a phone — never as a side column. */}
