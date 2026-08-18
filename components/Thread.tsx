@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import { dayLabel } from "@/lib/format";
 import { sanitizeRichText } from "@/lib/html";
 import { splitQuotedText } from "@/lib/email/parse";
 import { agentDisplayName, messageAuthorName } from "@/lib/display";
 import Attachments from "@/components/Attachments";
+import {
+  LightboxProvider,
+  isViewable,
+  type LightboxImage,
+} from "@/components/AttachmentLightbox";
 import Link from "next/link";
 import { retryDelivery } from "@/app/actions";
 import type { Message } from "@/lib/types";
@@ -158,6 +163,21 @@ export default function Thread({
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length]);
 
+  // Flattened at the THREAD level, not per message: a customer who sends four
+  // photos of a damaged box and a fifth in a follow-up has sent five photos of
+  // one problem, and the arrows should treat them that way.
+  const lightboxImages: LightboxImage[] = useMemo(
+    () =>
+      messages.flatMap((message) =>
+        (message.attachments ?? []).filter(isViewable).map((attachment) => ({
+          id: attachment.id,
+          filename: attachment.filename,
+          sizeBytes: attachment.size_bytes,
+        }))
+      ),
+    [messages]
+  );
+
   function retry(id: string) {
     setRetryingId(id);
     startTransition(async () => {
@@ -169,6 +189,7 @@ export default function Thread({
   }
 
   return (
+    <LightboxProvider images={lightboxImages}>
     <div className="mx-auto w-full max-w-[680px] pb-2">
       {messages.map((m, i) => {
         const previous = i > 0 ? messages[i - 1] : null;
@@ -351,5 +372,6 @@ export default function Thread({
       })}
       <div ref={bottomRef} />
     </div>
+    </LightboxProvider>
   );
 }
