@@ -6,10 +6,10 @@ apps (blanks-crm, blanks-athletes-portal): Next.js 16 + React 19 + Supabase.
 
 ## Hard rules (non-negotiable)
 
-**1. The pre-commit gate is a single `&&` chain.**
+**1. The gate is a single `&&` chain, and it ends in `git push`.**
 
 ```
-npm run build && npm test && git commit ...
+npm run build && npm test && git commit ... && git push
 ```
 
 Never `npm run build; npm test && git commit`. With `;` the build's exit
@@ -18,6 +18,19 @@ happened once. The same applies to piping the build through `grep` to read its
 output: `grep`'s exit status replaces the build's, so the chain succeeds even
 when the build failed. If you need to filter build output, run the gate first
 and inspect afterwards.
+
+**A change is not done until it is pushed.** Push by default once the gate
+passes; only hold back if Michael says so. "Committed, not pushed" has cost
+three test cycles — Drop 7C, the dark widget, and the Safari upload fix — each
+time because work that looked finished in the transcript was sitting in one
+working copy where nobody on the team could reach it. A commit nobody can pull
+is indistinguishable from no commit at all, and the person who finds that out
+is whoever was waiting to test it.
+
+Two things this does NOT license: pushing work that hasn't passed the gate
+(that's what the `&&` chain is for), and pushing straight to `main` when a
+branch was asked for. And `git add -A` still sweeps up unrelated files —
+stage explicit paths, because a push makes that mistake much harder to undo.
 
 **2. Test globs must cover every extension the suite uses.**
 
