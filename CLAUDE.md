@@ -326,10 +326,49 @@ Deprecating a topic means removing it from TOPICS and LEAVING THE TAG ROW —
 deleting the row cascades through ticket_tags and rewrites history. That is
 what happened to "Ambassador / athlete" in 0012.
 
-### Customer file uploads (Drop 7, widget)
+### Customer file uploads (Drop 8A: direct to storage)
 
-Up to 3 files, 10MB each, on the public intake endpoint — the most abusable
-surface in the product.
+**The bytes never pass through a Vercel function, and they cannot.** A
+serverless function rejects request bodies over **4.5MB** at the platform
+level, before any of our code runs. Three iPhone photos exceed that. The
+original design POSTed the files inline, so uploads were refused by
+infrastructure and we mapped the resulting 413 to our own "too large" copy —
+blaming the customer for a ceiling they could not see and we could not raise.
+Raising our own limit does nothing. **Any future upload feature must go direct
+to storage too.**
+
+The flow:
+
+1. Widget POSTs names and sizes to `/api/tickets/intake/upload-url` — a few
+   hundred bytes of JSON.
+2. That route mints a Supabase **signed upload URL** per file under
+   `intake/<uuid>`, plus a **signed grant** (`lib/uploads/grant.ts`) proving we
+   minted that path. Rate-limited per IP.
+3. The browser PUTs each file straight to Supabase, with XHR so there is real
+   per-file progress. Uploads start on PICK, not on submit, so the bar runs
+   while the customer types. Submit is disabled while bytes are in flight.
+4. The form submits **grants, not files**. `/api/tickets/intake` is JSON-only.
+5. `lib/uploads/claim.ts` downloads what was actually stored and runs every
+   original protection on it — real byte length, content sniffing, EXIF
+   stripping, fail-closed — plus two the inline path never needed: the
+   signature proves we minted the path, and the object's presence proves the
+   grant is unspent. **A grant is single-use because the object is deleted when
+   claimed**, not because anything is written down.
+6. Stripped bytes are written to `<ticketId>/<messageId>/…`; the temp object is
+   deleted, never moved — the customer's original still has its EXIF.
+7. Unclaimed uploads are swept after 24h by `lib/uploads/sweep.ts`, piggybacked
+   on the daily auto-close cron so it needs no new Vercel cron entry. It only
+   ever touches `intake/`, which is the only prefix a grant can name.
+
+`accept` is `image/*,application/pdf` on purpose: naming HEIC makes iOS hand
+over the raw HEIC, while a generic `image/*` makes it transcode to JPEG. We
+want the JPEG.
+
+Verified end to end against real Supabase: 4130 bytes in with GPS EXIF, 216
+stored, GPS gone, image data intact, temp object consumed, replayed grant
+refused, forged grant refused.
+
+#### The protections themselves (unchanged since Drop 7)
 
 - **Type comes from the CONTENT** (`lib/uploads/sniff.ts`), never the
   extension or the browser's Content-Type: a caller who picks both the file

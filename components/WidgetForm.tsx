@@ -19,6 +19,7 @@ import {
   MAX_FILE_BYTES,
   formatBytes,
 } from "@/lib/uploads/limits";
+import { putWithProgress, requestUploadUrls } from "@/lib/uploads/direct";
 
 // The customer-facing support form. Embedded on blankssportsnutrition.com via
 // public/widget.js (iframe) and linked directly from the contact page, so it
@@ -37,6 +38,19 @@ const FIELD =
   "hover:border-widget-muted focus:border-widget-accent focus:outline-none";
 
 const LABEL = "mb-1.5 block text-[13px] font-medium text-widget-muted";
+
+/** One picked file and where its upload has got to. */
+interface Attachment {
+  /** Local key only. Nothing server-side ever sees it. */
+  id: number;
+  file: File;
+  /** 0-100, driven by XHR upload progress. */
+  progress: number;
+  status: "uploading" | "done" | "failed";
+  /** Signed proof the server minted this path. Present once uploaded. */
+  grant?: string;
+  error?: string;
+}
 
 export default function WidgetForm({
   parentOrigin,
@@ -59,8 +73,14 @@ export default function WidgetForm({
   );
   const [ticketNumber, setTicketNumber] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nextIdRef = useRef(0);
+
+  const uploading = attachments.some((a) => a.status === "uploading");
+  const readyGrants = attachments
+    .filter((a) => a.status === "done" && a.grant)
+    .map((a) => a.grant as string);
 
   // Starts from the server's answer so the framed layout is in the first
   // paint. The effect below catches the other case: an embed written by hand,
@@ -81,67 +101,136 @@ export default function WidgetForm({
     setForm((f) => ({ ...f, [field]: value }));
   }
 
+  function patchAttachment(id: number, patch: Partial<Attachment>) {
+    setAttachments((current) =>
+      current.map((a) => (a.id === id ? { ...a, ...patch } : a))
+    );
+  }
+
+  /**
+   * Uploads start the moment a file is PICKED, not on submit.
+   *
+   * On a phone over mobile data three photos take real time, and doing it at
+   * submit means a form that sits frozen after the one action the customer
+   * thinks finished the job. Uploading while they type the message hides
+   * nearly all of it, and submit is then instant.
+   */
+  async function beginUpload(pending: Attachment[]) {
+    const minted = await requestUploadUrls(
+      pending.map((a) => ({ name: a.file.name, size: a.file.size }))
+    );
+
+    if (!minted.ok) {
+      for (const item of pending) {
+        patchAttachment(item.id, { status: "failed", error: minted.error });
+      }
+      return;
+    }
+
+    await Promise.all(
+      pending.map(async (item, index) => {
+        const target = minted.uploads[index];
+        try {
+          await putWithProgress(target.url, item.file, (percent) =>
+            patchAttachment(item.id, { progress: percent })
+          );
+          // The grant is only worth keeping once the bytes are actually
+          // there — claiming it earlier would just fail server-side.
+          patchAttachment(item.id, {
+            status: "done",
+            progress: 100,
+            grant: target.grant,
+          });
+        } catch (error) {
+          console.error("[widget] upload failed:", error);
+          patchAttachment(item.id, {
+            status: "failed",
+            error: "That file didn't upload. Remove it and try again.",
+          });
+        }
+      })
+    );
+  }
+
   /**
    * Client-side checks are a courtesy, not a control: they save someone a
    * 10MB upload that was always going to be refused. The server re-checks
-   * every one of them, and sniffs the actual bytes besides.
+   * every one of them against the bytes that actually landed in storage.
    */
   function addFiles(chosen: FileList | null) {
     if (!chosen?.length) return;
     setError("");
 
-    const next = [...files];
+    const accepted: Attachment[] = [];
+    let count = attachments.length;
+
     for (const file of Array.from(chosen)) {
-      if (next.length >= MAX_FILES) {
+      if (count >= MAX_FILES) {
         setError(`You can attach up to ${MAX_FILES} files.`);
         break;
       }
       if (file.size > MAX_FILE_BYTES) {
-        setError(`“${file.name}” is too large — each file must be under 10MB.`);
+        setError(`\u201C${file.name}\u201D is too large \u2014 each file must be under 10MB.`);
         continue;
       }
       // Same name AND size: re-picking the same photo twice is a slip, not an
       // intent to send it twice.
-      if (next.some((f) => f.name === file.name && f.size === file.size)) continue;
-      next.push(file);
+      if (
+        attachments.some(
+          (a) => a.file.name === file.name && a.file.size === file.size
+        )
+      ) {
+        continue;
+      }
+
+      accepted.push({
+        id: nextIdRef.current++,
+        file,
+        progress: 0,
+        status: "uploading",
+      });
+      count++;
     }
 
-    setFiles(next);
+    if (accepted.length) {
+      setAttachments((current) => [...current, ...accepted]);
+      void beginUpload(accepted);
+    }
+
     // Clearing the input matters: without it, choosing the same file again
     // after removing it fires no change event and looks broken.
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  function removeFile(index: number) {
-    setFiles((current) => current.filter((_, i) => i !== index));
+  function removeFile(id: number) {
+    // The uploaded object is left for the daily sweep rather than deleted
+    // here: doing it properly would need another public endpoint that takes a
+    // grant and deletes bytes, which is a lot of new attack surface to save a
+    // few megabytes for 24 hours.
+    setAttachments((current) => current.filter((a) => a.id !== id));
     setError("");
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (uploading) return;
+
     setState("sending");
     setError("");
 
-    const hadFiles = files.length > 0;
+    const hadFiles = attachments.length > 0;
 
     try {
-      // Multipart only when there is something to carry; the JSON path stays
-      // the common case and stays exactly as it was.
-      let res: Response;
-      if (hadFiles) {
-        const payload = new FormData();
-        for (const [key, value] of Object.entries(form)) payload.append(key, value);
-        for (const file of files) payload.append("files", file);
-        // No Content-Type header on purpose — the browser has to set it to
-        // include the multipart boundary, and setting it by hand omits that.
-        res = await fetch("/api/tickets/intake", { method: "POST", body: payload });
-      } else {
-        res = await fetch("/api/tickets/intake", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        });
-      }
+      // Always JSON now, and small. The files went straight to storage when
+      // they were picked; what travels here is a signed grant per file,
+      // naming a path the server minted and can verify. This is what keeps
+      // the request under Vercel's 4.5MB function body limit — the limit that
+      // was rejecting three iPhone photos before any of our code ran.
+      const res = await fetch("/api/tickets/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, attachments: readyGrants }),
+      });
 
       // NOT res.json(). That throws the browser's own parse error on any
       // non-JSON body, and this catch used to put that string straight in
@@ -362,7 +451,7 @@ export default function WidgetForm({
                     >
                       <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                     </svg>
-                    {files.length >= MAX_FILES
+                    {attachments.length >= MAX_FILES
                       ? `${MAX_FILES} files attached`
                       : "Add a photo or file"}
                   </label>
@@ -371,41 +460,79 @@ export default function WidgetForm({
                     Up to {MAX_FILES} files, 10MB each. {ACCEPTED_DESCRIPTION}.
                   </p>
 
-                  {files.length > 0 && (
+                  {attachments.length > 0 && (
                     <ul className="mt-2 space-y-1.5">
-                      {files.map((file, index) => (
+                      {attachments.map((item) => (
                         <li
-                          key={`${file.name}-${file.size}-${index}`}
-                          className="flex items-center gap-2 rounded-lg border border-widget-border bg-widget-bg px-2.5 py-2"
+                          key={item.id}
+                          className="rounded-lg border border-widget-border bg-widget-bg px-2.5 py-2"
                         >
-                          <span className="min-w-0 flex-1 truncate text-[13px] text-widget-text">
-                            {file.name}
-                          </span>
-                          <span className="flex-none text-[12px] text-widget-muted">
-                            {formatBytes(file.size)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => removeFile(index)}
-                            aria-label={`Remove ${file.name}`}
-                            // 44px target: this sits next to a filename on a
-                            // phone, and a 16px × is a mis-tap generator.
-                            className="-my-2 -mr-1.5 flex h-11 w-11 flex-none items-center justify-center
-                              rounded-lg text-widget-muted transition-colors duration-micro ease-out
-                              hover:text-widget-danger"
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              className="h-4 w-4"
-                              aria-hidden="true"
+                          <div className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-[13px] text-widget-text">
+                              {item.file.name}
+                            </span>
+                            <span
+                              className={
+                                item.status === "failed"
+                                  ? "flex-none text-[12px] text-widget-danger"
+                                  : "flex-none text-[12px] text-widget-muted"
+                              }
                             >
-                              <path d="M18 6 6 18M6 6l12 12" />
-                            </svg>
-                          </button>
+                              {item.status === "uploading"
+                                ? `${item.progress}%`
+                                : item.status === "failed"
+                                  ? "Failed"
+                                  : formatBytes(item.file.size)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeFile(item.id)}
+                              aria-label={`Remove ${item.file.name}`}
+                              // 44px target: this sits next to a filename on a
+                              // phone, and a 16px x is a mis-tap generator.
+                              className="-my-2 -mr-1.5 flex h-11 w-11 flex-none items-center justify-center
+                                rounded-lg text-widget-muted transition-colors duration-micro ease-out
+                                hover:text-widget-danger"
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                className="h-4 w-4"
+                                aria-hidden="true"
+                              >
+                                <path d="M18 6 6 18M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+
+                          {/* A determinate bar, not a spinner: on mobile data
+                              the difference between "working" and "how much
+                              longer" is the difference between waiting and
+                              giving up. */}
+                          {item.status === "uploading" && (
+                            <div
+                              className="mt-1.5 h-1 overflow-hidden rounded-full bg-widget-field"
+                              role="progressbar"
+                              aria-valuenow={item.progress}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-label={`Uploading ${item.file.name}`}
+                            >
+                              <div
+                                className="h-full rounded-full bg-widget-accent transition-[width] duration-200 ease-out"
+                                style={{ width: `${item.progress}%` }}
+                              />
+                            </div>
+                          )}
+
+                          {item.status === "failed" && item.error && (
+                            <p className="mt-1 text-[12px] text-widget-danger">
+                              {item.error}
+                            </p>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -423,7 +550,10 @@ export default function WidgetForm({
 
                 <button
                   type="submit"
-                  disabled={state === "sending"}
+                  // Disabled while bytes are still moving: submitting now
+                  // would file the ticket without the photo the customer is
+                  // watching upload.
+                  disabled={state === "sending" || uploading}
                   // Hover DARKENS. brand-500 carries white at 5.06:1 and a
                   // lighter hover would drop it under AA — the contrast test
                   // asserts this in both directions.
@@ -432,7 +562,11 @@ export default function WidgetForm({
                     hover:bg-brand-600 active:bg-brand-700
                     disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {state === "sending" ? "Sending…" : "Send message"}
+                  {uploading
+                    ? "Uploading…"
+                    : state === "sending"
+                      ? "Sending…"
+                      : "Send message"}
                 </button>
               </form>
             </>

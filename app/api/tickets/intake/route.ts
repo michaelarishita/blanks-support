@@ -3,90 +3,35 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { corsHeaders, isOriginAllowed } from "@/lib/cors";
 import { runRulesSafely } from "@/lib/rules/engine";
 import { createRateLimiter } from "@/lib/rate-limit";
-import {
-  MAX_FILES,
-  MAX_FILE_BYTES,
-  validateUploads,
-  type AcceptedFile,
-} from "@/lib/uploads/validate";
+import { claimUploads, discardTempUploads } from "@/lib/uploads/claim";
+import type { AcceptedFile } from "@/lib/uploads/validate";
 
 // ------------------------------------------------------------
 // Public intake endpoint for the website support widget.
 //
-// Accepts JSON, or multipart/form-data when the customer attaches files:
-//   { name, email, topic, subject?, message, order_number?, website? }
+//   { name, email, topic, subject?, message, order_number?, website?,
+//     attachments?: string[] }
 // `website` is a honeypot field — real users never fill it.
+//
+// JSON ONLY, and deliberately so. This used to accept multipart/form-data
+// with the files inline, which could never work in production: a Vercel
+// serverless function rejects request bodies over 4.5MB at the platform
+// level, before any of this executes. Three iPhone photos exceed that, so the
+// upload was refused by infrastructure and we mapped the resulting 413 to our
+// own "too large" copy — blaming the customer for a limit they had no way to
+// see and we had no way to raise.
+//
+// Files now go from the browser straight to Supabase Storage. `attachments`
+// carries signed grants naming what was uploaded; the bytes never come near
+// this function. See /api/tickets/intake/upload-url and lib/uploads/claim.ts.
 // ------------------------------------------------------------
 
 /** Submissions per address per minute. Unchanged. */
 const submissionLimiter = createRateLimiter(5, 60_000);
 
-/**
- * A second, much tighter budget for submissions that CARRY FILES.
- *
- * An unauthenticated endpoint that accepts bytes and stores them is the most
- * abusable thing we run, and it is abusable at a different scale from the text
- * form: five text posts a minute is noise, five 10MB posts a minute is 50MB of
- * someone else's storage bill per minute per address.
- */
-const uploadLimiter = createRateLimiter(3, 10 * 60_000);
-
 export async function OPTIONS(request: Request) {
   const origin = request.headers.get("origin");
   return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
-}
-
-interface ParsedSubmission {
-  fields: Record<string, string>;
-  files: { name: string; bytes: Uint8Array }[];
-}
-
-/** Reads either shape into one. */
-async function parseSubmission(request: Request): Promise<ParsedSubmission | null> {
-  const contentType = request.headers.get("content-type") ?? "";
-
-  if (!contentType.toLowerCase().includes("multipart/form-data")) {
-    try {
-      const body = (await request.json()) as Record<string, unknown>;
-      const fields: Record<string, string> = {};
-      for (const [key, value] of Object.entries(body ?? {})) {
-        if (typeof value === "string") fields[key] = value;
-      }
-      return { fields, files: [] };
-    } catch {
-      return null;
-    }
-  }
-
-  try {
-    const form = await request.formData();
-    const fields: Record<string, string> = {};
-    const files: { name: string; bytes: Uint8Array }[] = [];
-
-    for (const [key, value] of form.entries()) {
-      if (typeof value === "string") {
-        fields[key] = value;
-        continue;
-      }
-      // Read the file eagerly but bail on anything oversized before doing so,
-      // rather than pulling 500MB into memory to then reject it.
-      if (value.size > MAX_FILE_BYTES) {
-        files.push({ name: value.name, bytes: new Uint8Array(MAX_FILE_BYTES + 1) });
-        continue;
-      }
-      files.push({
-        name: value.name,
-        bytes: new Uint8Array(await value.arrayBuffer()),
-      });
-      // Hard stop so a caller can't make us read a hundred files before the
-      // count check runs.
-      if (files.length > MAX_FILES) break;
-    }
-
-    return { fields, files };
-  } catch {
-    return null;
-  }
 }
 
 export async function POST(request: Request) {
@@ -108,14 +53,20 @@ export async function POST(request: Request) {
     );
   }
 
-  const submission = await parseSubmission(request);
-  if (!submission) {
+  let payload: Record<string, unknown>;
+  try {
+    payload = ((await request.json()) ?? {}) as Record<string, unknown>;
+  } catch {
     return NextResponse.json(
       { error: "Invalid request" },
       { status: 400, headers: CORS_HEADERS }
     );
   }
-  const body = submission.fields;
+
+  const body: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value === "string") body[key] = value;
+  }
 
   // honeypot: silently accept and drop
   if (body.website) {
@@ -146,35 +97,38 @@ export async function POST(request: Request) {
 
   // ---- Attachments -------------------------------------------------------
   //
-  // Validated and stripped BEFORE anything is written. A rejected file must
-  // not leave a ticket behind, or a customer who fixes their photo and
-  // resubmits ends up with two tickets and an agent has to merge them.
-  let attachments: AcceptedFile[] = [];
-  if (submission.files.length) {
-    if (!uploadLimiter.check(ip)) {
-      console.warn(`[intake] upload rate limit hit from ${ip}`);
-      return NextResponse.json(
-        { error: "Too many uploads from this connection. Please try again shortly." },
-        { status: 429, headers: CORS_HEADERS }
-      );
-    }
+  // The bytes were uploaded straight to storage; what arrives here is a list
+  // of signed grants. Claiming them downloads what was actually stored and
+  // puts it through exactly the checks the inline path used to run — size,
+  // content sniffing, EXIF stripping, fail-closed — plus two the old path
+  // never needed: the grant proves we minted that path, and the object's
+  // presence proves the grant is unspent.
+  //
+  // All of it happens BEFORE anything is written. A rejected file must not
+  // leave a ticket behind, or a customer who fixes their photo and resubmits
+  // ends up with two tickets and an agent has to merge them.
+  const { result: claimed, paths: tempPaths } = await claimUploads(
+    payload.attachments
+  );
 
-    const validated = validateUploads(submission.files);
-    if (!validated.ok) {
-      // Logged with the real reasons; the customer gets the actionable
-      // sentence. A public endpoint should not narrate which parser rejected
-      // what to whoever is probing it.
-      console.warn(
-        `[intake] rejected upload from ${ip}:`,
-        validated.rejections.map((r) => `${r.name}: ${r.reason}`).join("; ")
-      );
-      return NextResponse.json(
-        { error: validated.message },
-        { status: 400, headers: CORS_HEADERS }
-      );
-    }
-    attachments = validated.files;
+  if (!claimed.ok) {
+    // The temp objects go regardless: the customer is re-picking, and a
+    // public endpoint that keeps rejected uploads is free storage.
+    await discardTempUploads(tempPaths);
+    // Logged with the real reasons; the customer gets the actionable
+    // sentence. A public endpoint should not narrate which parser rejected
+    // what to whoever is probing it.
+    console.warn(
+      `[intake] rejected upload from ${ip}:`,
+      claimed.rejections.map((r) => `${r.name}: ${r.reason}`).join("; ")
+    );
+    return NextResponse.json(
+      { error: claimed.message },
+      { status: 400, headers: CORS_HEADERS }
+    );
   }
+
+  const attachments: AcceptedFile[] = claimed.files;
 
   const supabase = createAdminClient();
 
@@ -249,11 +203,15 @@ export async function POST(request: Request) {
     );
   }
 
+  // Written to their final home under the ticket, as the STRIPPED bytes —
+  // the object the customer uploaded still has its EXIF, which is why the
+  // temp copy is deleted rather than moved.
   const storedAttachments = await storeAttachments(
     ticket.id,
     firstMessage.id,
     attachments
   );
+  await discardTempUploads(tempPaths);
 
   // auto-apply the topic tag
   const { data: tag } = await supabase

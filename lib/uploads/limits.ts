@@ -22,12 +22,16 @@ export const ACCEPTED_DESCRIPTION = "JPEG, PNG, WebP, HEIC or PDF";
  * the customer can always choose "All files", and the server sniffs content
  * regardless of what arrives.
  *
- * image/heif rides along with image/heic because iOS reports either. Listing
- * image/jpeg first also nudges iOS into transcoding a HEIC photo to JPEG on
- * the way out, which is the outcome we want anyway.
+ * `image/*` rather than an explicit list, and that is the whole trick: naming
+ * HEIC makes iOS hand over the raw HEIC from the camera roll, while a generic
+ * image/* makes it TRANSCODE to JPEG on the way out. We would rather have the
+ * JPEG — it is the format every browser can render in a thumbnail, and the one
+ * whose EXIF we can strip cleanly instead of zeroing an item in place.
+ *
+ * HEIC is still accepted server-side, because a file dropped from a Mac
+ * arrives untranscoded.
  */
-export const ACCEPT_ATTRIBUTE =
-  "image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf,.jpg,.jpeg,.png,.webp,.heic,.pdf";
+export const ACCEPT_ATTRIBUTE = "image/*,application/pdf";
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
