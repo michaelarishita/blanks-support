@@ -197,7 +197,7 @@ const RichTextEditor = forwardRef<
 
       <div className="relative">
         {empty && placeholder && (
-          <span className="pointer-events-none absolute left-3.5 top-2.5 text-body text-tertiary">
+          <span className="pointer-events-none absolute left-3.5 top-2.5 text-[16px] text-tertiary sm:text-body">
             {placeholder}
           </span>
         )}
@@ -230,7 +230,10 @@ const RichTextEditor = forwardRef<
           }}
           className={cn(
             "scrollbar-slim max-h-64 min-h-[76px] overflow-y-auto px-3.5 py-2.5",
-            "text-body text-primary outline-none",
+            // 16px on a phone, 14 from sm up. Anything under 16px makes iOS
+            // Safari zoom the page when the field takes focus, and it does not
+            // zoom back — you are left in a magnified layout mid-reply.
+            "text-[16px] text-primary outline-none sm:text-body",
             // Lists need their markers back — Tailwind's preflight removes them.
             "[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5",
             "[&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5",

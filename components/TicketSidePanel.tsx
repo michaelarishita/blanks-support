@@ -119,6 +119,7 @@ export default function TicketSidePanel({
   isLastInView,
   allTags,
   previousTicketCount,
+  variant = "sidebar",
 }: {
   ticket: Ticket;
   agents: Agent[];
@@ -129,6 +130,8 @@ export default function TicketSidePanel({
   allTags: Tag[];
   /** Other tickets from this customer, excluding the one on screen. */
   previousTicketCount: number;
+  /** `sheet` inside the mobile bottom sheet; `sidebar` is the desktop column. */
+  variant?: "sidebar" | "sheet";
 }) {
   const [pending, startTransition] = useTransition();
   const [tagQuery, setTagQuery] = useState("");
@@ -154,7 +157,17 @@ export default function TicketSidePanel({
   }
 
   return (
-    <aside className="scrollbar-slim w-[280px] flex-none overflow-y-auto border-l border-subtle bg-panel">
+    <aside
+      className={cn(
+        "scrollbar-slim scroll-touch bg-panel",
+        // Sheet mode drops the fixed width and the left border: inside a
+        // bottom sheet those would be a 280px column floating in a 390px
+        // screen with a stray rule down one side.
+        variant === "sheet"
+          ? "w-full flex-1 overflow-y-auto pb-safe-3"
+          : "w-[280px] flex-none overflow-y-auto border-l border-subtle"
+      )}
+    >
       <Section title="Customer">
         <div className="flex items-start gap-2.5">
           <Avatar name={customerName} seed={customer?.id} size="lg" />

@@ -104,7 +104,11 @@ export default function PullToRefresh({
 
       <div
         style={{ transform: pull ? `translateY(${pull}px)` : undefined }}
-        className={cn(!pull && "transition-transform duration-panel ease-out")}
+        // h-full matters: the ticket screen is `flex h-full`, and height:100%
+        // resolves against the nearest parent with a definite height. Without
+        // it this wrapper is auto-height, the ticket layout collapses, and the
+        // thread stops filling the screen.
+        className={cn("h-full", !pull && "transition-transform duration-panel ease-out")}
       >
         {children}
       </div>

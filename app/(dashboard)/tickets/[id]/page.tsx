@@ -4,6 +4,7 @@ import Thread from "@/components/Thread";
 import ReplyBox from "@/components/ReplyBox";
 import TicketHeader from "@/components/TicketHeader";
 import TicketSidePanel from "@/components/TicketSidePanel";
+import MobileContextSheet from "@/components/MobileContextSheet";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
 import { ShopifyProvider } from "@/components/ShopifyContext";
 import {
@@ -129,6 +130,17 @@ export default async function TicketPage({
               ? agentDisplayName(t.assignee)
               : null
           }
+        />
+
+        {/* Context lives ONLY here on a phone — never as a side column. */}
+        <MobileContextSheet
+          ticket={t}
+          agents={(agents as Agent[]) ?? []}
+          currentAgentId={user?.id ?? null}
+          advanceHref={advanceHref}
+          isLastInView={!nextId}
+          allTags={(tags as Tag[]) ?? []}
+          previousTicketCount={customerTicketCount ?? 0}
         />
       </div>
 

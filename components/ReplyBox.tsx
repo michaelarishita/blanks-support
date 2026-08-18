@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useKeyboardInset } from "@/lib/use-visual-viewport";
 import { cn } from "@/lib/cn";
 import { sendReply } from "@/app/actions";
 import { isEmptyHtml } from "@/lib/html";
@@ -54,6 +55,41 @@ export default function ReplyBox({
   const [error, setError] = useState<string | null>(null);
   const editorRef = useRef<RichTextEditorHandle>(null);
   const toast = useToast();
+  const keyboardInset = useKeyboardInset();
+
+  /**
+   * Drafts survive the app being backgrounded.
+   *
+   * On a phone this is not a nicety. Answering a ticket means switching to
+   * Shopify or the camera roll and back, and iOS discards the page freely
+   * under memory pressure — losing a half-written reply each time is what
+   * makes people stop replying from their phone.
+   *
+   * Keyed per ticket AND per mode, so a note draft can't reappear as a public
+   * reply, which is the one way this could do harm.
+   */
+  const draftKey = `blanks-draft:${ticketId}:${mode}`;
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(draftKey);
+      if (saved && isEmptyHtml(body)) editorRef.current?.append(saved);
+    } catch {
+      // Private mode, or storage full. A composer that throws on load would
+      // be worse than one that forgets.
+    }
+    // Only when the ticket or mode changes — not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  useEffect(() => {
+    try {
+      if (isEmptyHtml(body)) window.localStorage.removeItem(draftKey);
+      else window.localStorage.setItem(draftKey, body);
+    } catch {
+      /* see above */
+    }
+  }, [body, draftKey]);
 
   const isNote = mode === "note";
   const empty = isEmptyHtml(body);
@@ -100,6 +136,11 @@ export default function ReplyBox({
       // Stored successfully — clear the draft even if delivery failed, since
       // resending the same text would post a duplicate to the thread.
       editorRef.current?.clear();
+      try {
+        window.localStorage.removeItem(draftKey);
+      } catch {
+        /* nothing to clean up if storage is unavailable */
+      }
       if (res?.warning) toast(res.warning, { tone: "error" });
       else if (isNote) toast("Note added", { tone: "success" });
       else
@@ -117,8 +158,12 @@ export default function ReplyBox({
 
   return (
     <div
+      // Lifted by exactly what the keyboard covers. iOS does not shrink the
+      // layout viewport for the keyboard, so without this the composer sits
+      // behind it and you type into something you cannot see.
+      style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}
       className={cn(
-        "flex-none border-t px-6 py-3 transition-colors duration-panel ease-out",
+        "pb-safe-3 sticky bottom-0 z-20 flex-none border-t px-3 pt-3 transition-colors duration-panel ease-out sm:px-6 sm:py-3",
         // The whole surface turns amber in note mode — the strongest
         // available signal that this will not reach the customer.
         isNote ? "border-warning-border bg-warning-bg" : "border-subtle bg-panel"
@@ -142,7 +187,10 @@ export default function ReplyBox({
                 aria-selected={mode === m}
                 onClick={() => setMode(m)}
                 className={cn(
-                  "flex h-6 items-center gap-1.5 rounded-[4px] px-2.5 text-caption font-medium",
+                  // 36px on a phone: this is the control that decides whether
+                  // the customer sees what you are typing, so it must not be a
+                  // 24px target next to a 44px one.
+                  "flex h-9 items-center gap-1.5 rounded-[4px] px-3 text-label font-medium sm:h-6 sm:px-2.5 sm:text-caption",
                   "transition-colors duration-micro ease-out",
                   mode === m
                     ? "bg-panel text-primary shadow-sm"
@@ -225,13 +273,16 @@ export default function ReplyBox({
             )}
           </div>
 
-          <span className="flex-none text-caption text-tertiary">⌘↵</span>
+          <span className="hidden flex-none text-caption text-tertiary sm:inline">
+            ⌘↵
+          </span>
           <Button
             variant={isNote ? "secondary" : "primary"}
             size="md"
             onClick={submit}
             loading={pending}
             disabled={empty}
+            className="h-12 flex-none px-5 sm:h-9 sm:px-3.5"
           >
             {isNote ? "Add note" : "Send reply"}
           </Button>
