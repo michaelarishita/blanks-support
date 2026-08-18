@@ -14,6 +14,9 @@ import {
   type ParsedEmail,
 } from "@/lib/email/parse";
 import { runRulesSafely } from "@/lib/rules/engine";
+import { MAX_FILE_BYTES } from "@/lib/uploads/limits";
+import { sniffFileType } from "@/lib/uploads/sniff";
+import { stripMetadata } from "@/lib/uploads/strip";
 
 // Pulls new mail from the shared support mailbox and turns it into tickets.
 // Driven by two triggers that share this one implementation: the Pub/Sub
@@ -312,8 +315,14 @@ async function upsertCustomer(parsed: ParsedEmail): Promise<string | null> {
   return created?.id ?? null;
 }
 
-/** Anything larger is left in Gmail rather than copied into storage. */
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+/**
+ * Anything larger is left in Gmail rather than copied into storage.
+ *
+ * The same cap the widget enforces, from the same constant — an emailed photo
+ * and an uploaded one are the same photo, and two limits that mean the same
+ * thing eventually disagree.
+ */
+const MAX_ATTACHMENT_BYTES = MAX_FILE_BYTES;
 
 /** Strips path separators so a crafted filename can't escape its folder. */
 function safeFilename(filename: string): string {
@@ -338,6 +347,9 @@ async function storeAttachments(
   const admin = createAdminClient();
 
   for (const attachment of parsed.attachments) {
+    // Only genuinely embedded parts are skipped — ones the HTML body points at
+    // with cid:. See isReferencedByBody: trusting the sender's own "inline"
+    // label is what dropped every photo emailed from an iPhone.
     if (attachment.inline) {
       countSkip(result, "inline image");
       continue;
@@ -353,17 +365,40 @@ async function storeAttachments(
         parsed.gmailMessageId,
         attachment.attachmentId
       );
-      const bytes = Buffer.from(data.data, "base64url");
+      let bytes = Buffer.from(data.data, "base64url");
       if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+        // Gmail's declared part size is a claim; this is the real one.
         countSkip(result, "attachment too large");
         continue;
       }
+
+      // Content decides the type, not the sender's Content-Type header —
+      // same rule as the widget. A recognised image is also stripped of its
+      // metadata: a photo emailed in carries the same GPS as one uploaded.
+      const sniffed = sniffFileType(new Uint8Array(bytes));
+      let mimeType = attachment.mimeType;
+
+      if (sniffed) {
+        mimeType = sniffed.kind;
+        const stripped = stripMetadata(sniffed.kind, new Uint8Array(bytes));
+        if (!stripped.ok) {
+          // Fail closed on THIS attachment only. The message and every other
+          // attachment still land — losing one photo is bad, losing the
+          // customer's whole email because of it is worse.
+          countSkip(result, `attachment metadata unreadable (${stripped.reason})`);
+          continue;
+        }
+        bytes = Buffer.from(stripped.bytes);
+      }
+      // An unrecognised type is still stored. Email legitimately carries a
+      // wholesale order CSV or a signed PDF form, and the bucket is private,
+      // size-capped and only ever read through a signed URL by an agent.
 
       const path = `${ticketId}/${messageId}/${safeFilename(attachment.filename)}`;
       const { error: uploadError } = await admin.storage
         .from("attachments")
         .upload(path, bytes, {
-          contentType: attachment.mimeType,
+          contentType: mimeType,
           upsert: true,
         });
       if (uploadError) {
@@ -374,7 +409,7 @@ async function storeAttachments(
       await admin.from("attachments").insert({
         message_id: messageId,
         filename: attachment.filename.slice(0, 200),
-        mime_type: attachment.mimeType,
+        mime_type: mimeType,
         size_bytes: bytes.byteLength,
         storage_path: path,
       });

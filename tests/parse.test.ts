@@ -94,7 +94,7 @@ describe("parseGmailMessage", () => {
     expect(parsed.bodyText).toBe("just a snippet");
   });
 
-  it("collects attachments and flags inline images", () => {
+  it("collects attachments", () => {
     const parsed = parseGmailMessage(
       message({
         mimeType: "multipart/mixed",
@@ -106,22 +106,120 @@ describe("parseGmailMessage", () => {
             filename: "receipt.pdf",
             body: { attachmentId: "att-1", size: 1024 },
           },
-          {
-            mimeType: "image/png",
-            filename: "logo.png",
-            headers: headers({ "Content-ID": "<logo@cid>" }),
-            body: { attachmentId: "att-2", size: 512 },
-          },
         ],
       })
     );
-    expect(parsed.attachments).toHaveLength(2);
+    expect(parsed.attachments).toHaveLength(1);
     expect(parsed.attachments[0]).toMatchObject({
       filename: "receipt.pdf",
       inline: false,
       sizeBytes: 1024,
     });
-    expect(parsed.attachments[1].inline).toBe(true);
+  });
+
+  /**
+   * Inline means "the body points at it", and nothing else.
+   *
+   * These two parts are byte-identical in their headers — same Content-ID,
+   * same disposition. The ONLY difference is whether the HTML references the
+   * cid. Judging by the headers alone is what silently threw away every photo
+   * emailed from an iPhone, because Apple Mail stamps both on real
+   * attachments.
+   */
+  it("treats a cid referenced by the HTML as inline", () => {
+    const parsed = parseGmailMessage(
+      message({
+        mimeType: "multipart/related",
+        headers: headers({ From: "jane@example.com" }),
+        parts: [
+          {
+            mimeType: "text/html",
+            body: { data: b64('<p>Regards</p><img src="cid:logo@cid">') },
+          },
+          {
+            mimeType: "image/png",
+            filename: "logo.png",
+            headers: headers({
+              "Content-ID": "<logo@cid>",
+              "Content-Disposition": "inline",
+            }),
+            body: { attachmentId: "att-2", size: 512 },
+          },
+        ],
+      })
+    );
+    expect(parsed.attachments[0].inline).toBe(true);
+  });
+
+  it("treats the same headers as a real attachment when nothing references them", () => {
+    const parsed = parseGmailMessage(
+      message({
+        mimeType: "multipart/mixed",
+        headers: headers({ From: "jane@example.com" }),
+        parts: [
+          {
+            mimeType: "text/html",
+            body: { data: b64("<p>Photo of the damage attached.</p>") },
+          },
+          {
+            mimeType: "image/jpeg",
+            filename: "IMG_0001.jpg",
+            headers: headers({
+              "Content-ID": "<A1B2C3@apple.com>",
+              "Content-Disposition": 'inline; filename="IMG_0001.jpg"',
+            }),
+            body: { attachmentId: "att-3", size: 482113 },
+          },
+        ],
+      })
+    );
+    expect(parsed.attachments[0].inline).toBe(false);
+  });
+
+  it("never treats an explicit attachment disposition as inline", () => {
+    const parsed = parseGmailMessage(
+      message({
+        mimeType: "multipart/mixed",
+        headers: headers({ From: "jane@example.com" }),
+        parts: [
+          {
+            mimeType: "text/html",
+            body: { data: b64('<img src="cid:shared@cid">') },
+          },
+          {
+            mimeType: "image/png",
+            filename: "chart.png",
+            headers: headers({
+              "Content-ID": "<shared@cid>",
+              "Content-Disposition": 'attachment; filename="chart.png"',
+            }),
+            body: { attachmentId: "att-4", size: 900 },
+          },
+        ],
+      })
+    );
+    expect(parsed.attachments[0].inline).toBe(false);
+  });
+
+  it("does not let one cid prefix-match another", () => {
+    // cid:logo must not swallow a part whose id is logo2 — that would drop a
+    // real attachment again, for a subtler reason.
+    const parsed = parseGmailMessage(
+      message({
+        mimeType: "multipart/related",
+        headers: headers({ From: "jane@example.com" }),
+        parts: [
+          { mimeType: "text/html", body: { data: b64('<img src="cid:logo">') } },
+          {
+            mimeType: "image/png",
+            filename: "photo.png",
+            headers: headers({ "Content-ID": "<logo2>" }),
+            body: { attachmentId: "att-5", size: 900 },
+          },
+        ],
+      })
+    );
+    expect(parsed.attachments[0].inline).toBe(false);
   });
 
   it("reads threading headers", () => {

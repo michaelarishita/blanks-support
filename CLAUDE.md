@@ -221,6 +221,18 @@ replies, which is the hardest kind of gap to notice.
 Consequence worth knowing: because `From` is per-agent, a Gmail thread
 belongs to whichever mailbox created it — hence `tickets.gmail_account_ref`
 and the 404-retry fallback in `deliverMessage`.
+**Attachments: "inline" means the BODY references it, and nothing else.**
+Apple Mail and iOS Mail stamp BOTH `Content-Disposition: inline` AND a
+`Content-ID` on ordinary photo attachments, because they preview them while
+composing. The original filter trusted either header, so every photo emailed
+from an iPhone was classified as a signature logo and silently dropped — the
+ticket arrived with the body and no attachment, and no error anywhere.
+`isReferencedByBody` in lib/email/parse.ts is the honest test: an explicit
+`attachment` disposition settles it, otherwise the HTML has to point at the
+Content-ID with a `cid:` URL. Emailed attachments now get the same size cap,
+content sniffing and EXIF stripping as widget uploads, and a bad one is
+skipped by name rather than failing the whole message.
+
 - Inbound: `lib/google/inbound.ts` syncs the support mailbox. Routing
   precedence is token → References → thread id → sender+subject+recency, and
   the matched path is recorded in ticket_events. Loop protection drops

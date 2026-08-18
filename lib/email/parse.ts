@@ -9,8 +9,18 @@ export interface ParsedAttachment {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  /** True for images referenced by a cid: URL in the HTML body. */
+  /**
+   * True ONLY when the HTML body actually references this part by `cid:`.
+   *
+   * Not "the sender said inline". Apple Mail and iOS Mail stamp BOTH
+   * Content-Disposition: inline AND a Content-ID on ordinary photo
+   * attachments, because they show them inline while composing. Trusting
+   * either header meant every photo emailed from an iPhone was classified as
+   * a signature logo and silently dropped.
+   */
   inline: boolean;
+  /** Raw Content-ID, kept so inline-ness can be resolved once the HTML is known. */
+  contentId: string | null;
 }
 
 export interface ParsedEmail {
@@ -199,12 +209,48 @@ function deliveryPaths(payload: GmailPart | undefined): string[] {
     .filter((email): email is string => Boolean(email));
 }
 
+/**
+ * Is this part actually embedded in the message body?
+ *
+ * The only honest test: something in the HTML has to reference its Content-ID
+ * with a `cid:` URL. A logo in a signature does; a photo of a damaged tub does
+ * not, however the sending client chose to label it.
+ *
+ * Exported so the behaviour is testable directly — it is the decision that
+ * silently threw away every emailed photo.
+ */
+export function isReferencedByBody(
+  attachment: Pick<ParsedAttachment, "contentId">,
+  bodyHtml: string | null,
+  explicitlyAttachment = false
+): boolean {
+  if (explicitlyAttachment) return false;
+  if (!attachment.contentId || !bodyHtml) return false;
+
+  // cid references appear as src="cid:x", url(cid:x), and unquoted. Matching
+  // the id after `cid:` covers all of them without parsing the HTML.
+  const id = attachment.contentId.toLowerCase();
+  const html = bodyHtml.toLowerCase();
+  const at = html.indexOf(`cid:${id}`);
+  if (at === -1) return false;
+
+  // Guard against a prefix match: cid:logo must not match a part whose id is
+  // `logo2`, which would drop a real attachment again for a subtler reason.
+  const nextChar = html[at + 4 + id.length];
+  return nextChar === undefined || !/[a-z0-9._%+-]/.test(nextChar);
+}
+
 export function parseGmailMessage(message: GmailMessage): ParsedEmail {
   const payload = message.payload;
 
   let bodyText = "";
   let bodyHtml: string | null = null;
   const attachments: ParsedAttachment[] = [];
+
+  // Two passes, because inline-ness cannot be decided while walking: it
+  // depends on the HTML body, and MIME order does not guarantee the HTML has
+  // been seen by the time an attachment part is.
+  const forcedAttachment = new Set<string>();
 
   for (const part of walkParts(payload)) {
     const mime = (part.mimeType ?? "").toLowerCase();
@@ -214,12 +260,19 @@ export function parseGmailMessage(message: GmailMessage): ParsedEmail {
     if (filename && part.body?.attachmentId) {
       const contentId = headerValue(part, "Content-ID");
       const disposition = (headerValue(part, "Content-Disposition") ?? "").toLowerCase();
+      // An explicit `attachment` disposition settles it — nothing referenced
+      // by the body is ever labelled that.
+      if (disposition.startsWith("attachment")) {
+        forcedAttachment.add(part.body.attachmentId);
+      }
       attachments.push({
         attachmentId: part.body.attachmentId,
         filename,
         mimeType: mime || "application/octet-stream",
         sizeBytes: part.body.size ?? 0,
-        inline: Boolean(contentId) || disposition.startsWith("inline"),
+        // Resolved below, once the HTML is known.
+        inline: false,
+        contentId: contentId ? contentId.replace(/[<>]/g, "").trim() : null,
       });
       continue;
     }
@@ -232,6 +285,20 @@ export function parseGmailMessage(message: GmailMessage): ParsedEmail {
     } else if (mime === "text/html" && !bodyHtml) {
       bodyHtml = decodeBase64Url(part.body.data);
     }
+  }
+
+  // Pass two: a part is inline only if the body actually points at it.
+  //
+  // This is the whole fix for "emailed photos never arrive". The old test was
+  // "does it have a Content-ID, or does the sender call it inline" — and every
+  // mail client that previews images while composing says yes to both for a
+  // perfectly ordinary attachment.
+  for (const attachment of attachments) {
+    attachment.inline = isReferencedByBody(
+      attachment,
+      bodyHtml,
+      forcedAttachment.has(attachment.attachmentId)
+    );
   }
 
   if (!bodyText && bodyHtml) bodyText = htmlPartToText(bodyHtml);
