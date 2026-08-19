@@ -32,7 +32,11 @@ export interface QueueBreakdown {
   low: number;
 }
 
-export type NotificationVariant = "assignment" | "reminder" | "escalation";
+export type NotificationVariant =
+  | "assignment"
+  | "reminder"
+  | "escalation"
+  | "new_ticket";
 
 export interface ReminderLink {
   hours: number;
@@ -61,11 +65,18 @@ export interface AssignmentContext {
   };
   /** First ~200 chars of the customer's latest message. */
   summary: string;
-  queue: {
+  /**
+   * The recipient's own outstanding work.
+   *
+   * OPTIONAL, and omitted for a new-ticket notice: that mail is about
+   * somebody else's ticket, and appending "here is your queue" to it turns a
+   * short factual notice into a nag about unrelated work.
+   */
+  queue?: {
     total: number;
     byPriority: QueueBreakdown;
     oldest: { number: number; createdAt: string } | null;
-  };
+  } | null;
   siteUrl: string;
   now?: number;
 }
@@ -76,6 +87,8 @@ function defaultLead(ctx: AssignmentContext): string {
       return `${ctx.agentName}, you asked to be reminded about this ticket.`;
     case "escalation":
       return `${ctx.agentName}, this ticket is still unanswered.`;
+    case "new_ticket":
+      return `A new ticket just came in.`;
     default:
       return `Hi ${ctx.agentName}, this ticket is now yours.`;
   }
@@ -120,7 +133,7 @@ export function renderAssignmentHtml(ctx: AssignmentContext): string {
     .map((v) => escapeHtml(String(v)))
     .join(" · ");
 
-  const q = ctx.queue.byPriority;
+  const q = ctx.queue?.byPriority;
 
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -194,10 +207,12 @@ export function renderAssignmentHtml(ctx: AssignmentContext): string {
                   : ""
               }
 
-              <tr>${cell(
-                "",
-                `padding:0 0 16px 0;border-top:1px solid ${RULE};font-size:0;line-height:0;`
-              )}</tr>
+              ${
+                ctx.queue && q
+                  ? `<tr>${cell(
+                      "",
+                      `padding:0 0 16px 0;border-top:1px solid ${RULE};font-size:0;line-height:0;`
+                    )}</tr>
 
               <tr>${cell(
                 `<span style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${MUTED};">Your outstanding queue</span>`,
@@ -235,7 +250,9 @@ export function renderAssignmentHtml(ctx: AssignmentContext): string {
               <tr>${cell(
                 `<a href="${escapeHtml(queueUrl)}" style="color:#0047c2;font-size:14px;text-decoration:underline;">See all of your tickets</a>`,
                 "padding:0;"
-              )}</tr>
+              )}</tr>`
+                  : ""
+              }
             </table>
 
           </td>
@@ -261,8 +278,6 @@ export function renderAssignmentText(ctx: AssignmentContext): string {
   const now = ctx.now ?? Date.now();
   const t = ctx.ticket;
   const base = ctx.siteUrl.replace(/\/$/, "");
-  const q = ctx.queue.byPriority;
-
   const lines = [
     ctx.lead ?? defaultLead(ctx),
     "",
@@ -275,26 +290,29 @@ export function renderAssignmentText(ctx: AssignmentContext): string {
 
   if (ctx.summary) lines.push("", `"${ctx.summary}"`);
 
-  lines.push(
-    "",
-    `Open ticket: ${base}/tickets/${t.id}`,
-    "",
-    "YOUR OUTSTANDING QUEUE",
-    `  Urgent  ${q.urgent}`,
-    `  High    ${q.high}`,
-    `  Normal  ${q.normal}`,
-    `  Low     ${q.low}`,
-    `  Total   ${ctx.queue.total}`
-  );
+  lines.push("", `Open ticket: ${base}/tickets/${t.id}`);
 
-  if (ctx.queue.oldest) {
+  if (ctx.queue) {
+    const q = ctx.queue.byPriority;
     lines.push(
       "",
-      `Oldest open: #${ctx.queue.oldest.number}, waiting ${describeAge(
-        ctx.queue.oldest.createdAt,
-        now
-      )} (${formatStamp(ctx.queue.oldest.createdAt)})`
+      "YOUR OUTSTANDING QUEUE",
+      `  Urgent  ${q.urgent}`,
+      `  High    ${q.high}`,
+      `  Normal  ${q.normal}`,
+      `  Low     ${q.low}`,
+      `  Total   ${ctx.queue.total}`
     );
+
+    if (ctx.queue.oldest) {
+      lines.push(
+        "",
+        `Oldest open: #${ctx.queue.oldest.number}, waiting ${describeAge(
+          ctx.queue.oldest.createdAt,
+          now
+        )} (${formatStamp(ctx.queue.oldest.createdAt)})`
+      );
+    }
   }
 
   if (ctx.reminderLinks?.length) {
@@ -304,6 +322,6 @@ export function renderAssignmentText(ctx: AssignmentContext): string {
     }
   }
 
-  lines.push("", `All of your tickets: ${base}/inbox?view=mine`);
+  if (ctx.queue) lines.push("", `All of your tickets: ${base}/inbox?view=mine`);
   return lines.join("\n");
 }

@@ -34,7 +34,7 @@ export default async function SettingsPage({
   const { data: me } = await supabase
     .from("agents")
     .select(
-      "id, name, display_name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled"
+      "id, name, display_name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled, watch_new_tickets"
     )
     .eq("id", user.id)
     .single();
@@ -172,7 +172,10 @@ export default async function SettingsPage({
           Email sent to you when a ticket is assigned, and for the reminders
           and chasers that follow it.
         </p>
-        <NotificationToggle enabled={me?.notifications_enabled !== false} />
+        <NotificationToggle
+          enabled={me?.notifications_enabled !== false}
+          watchNewTickets={me?.watch_new_tickets === true}
+        />
       </section>
 
       {me?.role === "admin" && (

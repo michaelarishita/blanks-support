@@ -21,6 +21,11 @@ import {
   signReminderToken,
 } from "./reminder-token";
 import { alertRecipient, sendOperationalAlert } from "@/lib/alerts";
+import {
+  newTicketSubject,
+  selectNewTicketRecipients,
+  type WatcherCandidate,
+} from "./watchers";
 
 // Sends notifications from the shared mailbox to an agent.
 //
@@ -41,7 +46,11 @@ export const NOTIFICATION_HEADERS = {
   "Auto-Submitted": "auto-generated",
 } as const;
 
-export type NotificationKind = "assignment" | "reminder" | "escalation";
+export type NotificationKind =
+  | "assignment"
+  | "reminder"
+  | "escalation"
+  | "new_ticket";
 
 export interface NotificationResult {
   sent: boolean;
@@ -270,6 +279,185 @@ export async function sendAssignmentNotification(
   return { sent: true };
 }
 
+
+export interface NewTicketResult {
+  sent: number;
+  deferred: number;
+  skipped: { agentId: string; reason: string }[];
+  error?: string;
+}
+
+/**
+ * Tells the watchers a ticket has arrived.
+ *
+ * Runs AFTER the routing rules, so that whoever a rule just assigned it to is
+ * already recorded in `notifications` and can be excluded — two emails about
+ * one ticket in the same minute is how people learn to ignore both.
+ *
+ * Threads per (watcher, ticket) through the same root as every other
+ * notification, so a later assignment or escalation about this ticket replies
+ * into the notice rather than starting a second conversation about it.
+ */
+export async function sendNewTicketNotification(
+  ticketId: string
+): Promise<NewTicketResult> {
+  const admin = createAdminClient();
+  const result: NewTicketResult = { sent: 0, deferred: 0, skipped: [] };
+
+  const { data: ticket, error: ticketError } = await admin
+    .from("tickets")
+    .select(
+      "id, number, subject, priority, channel, topic, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
+    )
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (ticketError) return { ...result, error: ticketError.message };
+  if (!ticket) return { ...result, error: "ticket not found" };
+
+  const { data: candidates, error: agentError } = await admin
+    .from("agents")
+    .select("id, email, name, display_name, is_active, watch_new_tickets");
+  if (agentError) {
+    // A missing column here means 0014 has not been run. Reported rather than
+    // swallowed: silently mailing nobody is the failure mode this whole
+    // feature exists to avoid.
+    return { ...result, error: agentError.message };
+  }
+
+  // Whoever already has mail about this ticket — in practice the assignee a
+  // rule just picked, receiving the assignment email at this same moment.
+  const { data: existing } = await admin
+    .from("notifications")
+    .select("agent_id")
+    .eq("ticket_id", ticketId);
+  const alreadyNotified = new Set(
+    (existing ?? []).map((row) => row.agent_id as string)
+  );
+
+  const selection = selectNewTicketRecipients({
+    candidates: (candidates ?? []) as WatcherCandidate[],
+    alreadyNotified,
+  });
+  result.skipped = selection.excluded.map((e) => ({
+    agentId: e.id,
+    reason: e.reason,
+  }));
+
+  if (!selection.recipients.length) return result;
+
+  const connection = await getSupportInboxConnection();
+  if (!connection) return { ...result, error: "no support mailbox connected" };
+
+  const { data: latest } = await admin
+    .from("messages")
+    .select("body_text, body_html")
+    .eq("ticket_id", ticketId)
+    .eq("direction", "inbound")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  const customer = Array.isArray(ticket.customer) ? ticket.customer[0] : ticket.customer;
+  const tags = ((ticket.ticket_tags ?? []) as { tag: { name: string } | { name: string }[] }[])
+    .map((tt) => (Array.isArray(tt.tag) ? tt.tag[0]?.name : tt.tag?.name))
+    .filter((name): name is string => Boolean(name));
+
+  const priority = ticket.priority as TicketPriority;
+  const customerName = customerDisplayName(customer);
+  const company = await getCompanySettings();
+  const summary = summarizeMessage({
+    bodyText: latest?.body_text,
+    bodyHtml: latest?.body_html,
+  });
+
+  const baseSubject = newTicketSubject({
+    number: ticket.number,
+    topic: ticket.topic,
+    customerName,
+  });
+
+  for (const watcher of selection.recipients) {
+    // Same policy as escalations: everything defers out of quiet hours except
+    // Urgent, which is the only priority loud enough to justify a 3am phone.
+    const decision = decideSendTime(priority, new Date());
+    if (!decision.sendNow && decision.scheduledFor) {
+      await admin.from("notifications").insert({
+        agent_id: watcher.id,
+        ticket_id: ticketId,
+        kind: "new_ticket",
+        scheduled_for: decision.scheduledFor.toISOString(),
+        sent_at: null,
+      });
+      result.deferred++;
+      continue;
+    }
+
+    const messageId = generateMessageId(connection.account_ref);
+    const root = await threadRoot(watcher.id, ticketId);
+    const subject = root?.subject ?? notificationSubject(baseSubject, priority);
+
+    const context: AssignmentContext = {
+      agentName: agentDisplayName(watcher),
+      variant: "new_ticket",
+      // No queue: this mail is about somebody else's ticket, and appending
+      // "here is your workload" turns a short notice into an unrelated nag.
+      queue: null,
+      ticket: {
+        id: ticket.id,
+        number: ticket.number,
+        subject: ticket.subject,
+        priority,
+        channel: ticket.channel as TicketChannel,
+        topic: ticket.topic,
+        tags,
+        customerName,
+        createdAt: ticket.created_at,
+      },
+      summary,
+      siteUrl: siteUrl(),
+    };
+
+    const raw = buildRawEmail({
+      fromEmail: connection.account_ref,
+      fromName: `${company.company_name} Support`,
+      to: watcher.email,
+      // Never hello@: replying to a notification must not open a ticket.
+      replyTo: watcher.email,
+      subject,
+      bodyText: renderAssignmentText(context),
+      bodyHtml: renderAssignmentHtml(context),
+      messageId,
+      inReplyTo: root?.messageId ?? null,
+      references: root ? [root.messageId] : undefined,
+      // The loop guard. These go from hello@ — the mailbox we watch — to
+      // internal addresses, so without these headers every new ticket would
+      // create three more.
+      extraHeaders: { ...NOTIFICATION_HEADERS },
+    });
+
+    try {
+      const accessToken = await getAccessToken(connection.id);
+      await sendGmailMessage(accessToken, { raw });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`[notifications] new-ticket send failed for ${watcher.id}:`, message);
+      result.skipped.push({ agentId: watcher.id, reason: message });
+      continue;
+    }
+
+    await admin.from("notifications").insert({
+      agent_id: watcher.id,
+      ticket_id: ticketId,
+      kind: "new_ticket",
+      thread_message_id: root?.messageId ?? messageId,
+      subject,
+      sent_at: new Date().toISOString(),
+    });
+    result.sent++;
+  }
+
+  return result;
+}
 
 /**
  * A reminder the agent asked for. THREADS into the assignment conversation:

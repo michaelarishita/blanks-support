@@ -297,6 +297,24 @@ export async function setNotificationsEnabled(enabled: boolean): Promise<ActionR
 }
 
 
+/** Opts this agent in or out of the every-new-ticket firehose. */
+export async function setWatchNewTickets(enabled: boolean): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({ watch_new_tickets: Boolean(enabled) })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save that preference.") };
+  }
+
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
+
 /**
  * The INTERNAL label — what teammates see in the dashboard. Deliberately a
  * separate action from the signature, so the two can't be edited as if they

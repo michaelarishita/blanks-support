@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runRulesSafely } from "@/lib/rules/engine";
+import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { sniffFileType, safeStoredName } from "@/lib/uploads/sniff";
 import { stripMetadata } from "@/lib/uploads/strip";
 import {
@@ -311,6 +312,10 @@ async function ingestMessage(
     for (const rule of rules.fired) {
       result.ruleHits[rule.name] = (result.ruleHits[rule.name] ?? 0) + 1;
     }
+
+    // New conversations only — an echo is ours, and a reply on an existing
+    // DM thread is not news.
+    if (ticket.created) await notifyNewTicketSafely(ticket.id);
   }
 }
 

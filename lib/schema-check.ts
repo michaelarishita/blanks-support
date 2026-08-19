@@ -194,6 +194,14 @@ const MIGRATIONS: {
         ? null
         : "column `messages.deleted_at`",
   },
+  {
+    file: "0014_new_ticket_notifications.sql",
+    title: "New-ticket watcher emails",
+    probe: async () =>
+      (await columnExists("agents", "watch_new_tickets"))
+        ? null
+        : "column `agents.watch_new_tickets`",
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

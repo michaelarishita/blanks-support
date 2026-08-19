@@ -14,6 +14,7 @@ import {
   type ParsedEmail,
 } from "@/lib/email/parse";
 import { runRulesSafely } from "@/lib/rules/engine";
+import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { MAX_FILE_BYTES } from "@/lib/uploads/limits";
 import { sniffFileType } from "@/lib/uploads/sniff";
 import { stripMetadata } from "@/lib/uploads/strip";
@@ -536,6 +537,11 @@ async function ingestMessage(
     ticketId,
     path === "new" ? "ticket_created" : "message_received"
   );
+
+  // Only for a genuinely new ticket. A reply on an existing thread is not
+  // news to the watchers, and mailing them about every customer response
+  // would be the fastest possible way to get this feature turned off.
+  if (path === "new") await notifyNewTicketSafely(ticketId);
   for (const rule of rules.fired) {
     // Surfaced in the same skip/count summary "Check mail now" already shows,
     // so a rule firing on inbound mail isn't invisible until someone opens the

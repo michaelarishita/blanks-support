@@ -255,6 +255,39 @@ skipped by name rather than failing the whole message.
 Google Cloud Pub/Sub topic + push subscription, calling users.watch, and a
 daily cron to renew it.
 
+### New-ticket notifications (Drop 10)
+
+Every new ticket, on every channel, emails the watchers from hello@.
+
+- **Per-agent toggle**, `agents.watch_new_tickets`, off by default and seeded
+  on for michael@/melissa@/harvey@ in 0014. That seed is DATA, not
+  configuration — the Settings toggle governs it from there, and the list has
+  no home in code because the team changes.
+- Deliberately a SEPARATE column from `notifications_enabled`: that one is
+  about mail concerning YOUR tickets. Someone who wants their own assignments
+  but not a firehose of everyone else's is reasonable, and conflating the two
+  would leave them no way to say so except by muting both.
+- **Runs after the routing rules**, always. If a rule assigned the ticket, the
+  assignee is already in `notifications` and gets excluded — two emails about
+  one ticket in the same minute is how people learn to ignore both. Other
+  watchers still get theirs. The exclusion is keyed on "has a notification for
+  this ticket" rather than "is the assignee", so it holds in any order and
+  covers a manual assignment made moments earlier.
+- Only for tickets that are actually NEW. A reply on an existing thread is not
+  news, and mailing everyone about every customer response is the fastest way
+  to get the feature turned off.
+- Threads per (watcher, ticket) through the same root as every other
+  notification, so a later assignment or escalation replies into the notice.
+- Quiet hours apply except for Urgent, same policy as escalations.
+- **No queue block.** The shared template's "your outstanding queue" section is
+  optional now and omitted here: this mail is about somebody else's ticket, and
+  appending your workload to it turns a short notice into an unrelated nag.
+- Loop protection is the existing three guards — X-Blanks-Notification,
+  Auto-Submitted, and the from-our-own-address rule — each of which drops it
+  independently, asserted in tests/new-ticket-notification.test.ts.
+- If volume makes this annoying, the fallback is a digest. The toggle exists
+  now; the digest waits for evidence.
+
 ### Phase 3 — Instagram + Messenger (9C/9D: webhook + Messenger inbound DONE)
 
 **One endpoint, `/api/webhooks/meta`, for both channels** — that is what 9A's

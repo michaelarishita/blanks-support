@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { corsHeaders, isOriginAllowed } from "@/lib/cors";
 import { runRulesSafely } from "@/lib/rules/engine";
+import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { createRateLimiter } from "@/lib/rate-limit";
 import { claimUploads, discardTempUploads } from "@/lib/uploads/claim";
 import type { AcceptedFile } from "@/lib/uploads/validate";
@@ -241,6 +242,12 @@ export async function POST(request: Request) {
   // would become "sometimes". runRulesSafely never throws, so a broken rule
   // cannot turn a received message into a 500 for the customer.
   await runRulesSafely(ticket.id, "ticket_created");
+
+  // AFTER the rules, always. If a rule assigned this ticket, that agent is
+  // already recorded in `notifications` and gets excluded — otherwise they
+  // receive two emails about one ticket in the same minute, which is how
+  // people learn to ignore both.
+  await notifyNewTicketSafely(ticket.id);
 
   return NextResponse.json(
     { ok: true, ticket_number: ticket.number, attachments: storedAttachments },
