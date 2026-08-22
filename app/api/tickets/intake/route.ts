@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { corsHeaders, isOriginAllowed } from "@/lib/cors";
 import { runRulesSafely } from "@/lib/rules/engine";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
+import { assessTicketRisk } from "@/lib/risk/assess";
 import { createRateLimiter } from "@/lib/rate-limit";
 import { claimUploads, discardTempUploads } from "@/lib/uploads/claim";
 import type { AcceptedFile } from "@/lib/uploads/validate";
@@ -248,6 +249,11 @@ export async function POST(request: Request) {
   // receive two emails about one ticket in the same minute, which is how
   // people learn to ignore both.
   await notifyNewTicketSafely(ticket.id);
+
+  // Advisory only, and last: it reads the attachments and the customer
+  // history, so it has to run after both exist. Nothing downstream acts on
+  // the result — it puts a sentence in front of a human.
+  await assessTicketRisk(ticket.id);
 
   return NextResponse.json(
     { ok: true, ticket_number: ticket.number, attachments: storedAttachments },

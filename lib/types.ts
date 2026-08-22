@@ -53,6 +53,10 @@ export interface Ticket {
   priority: TicketPriority;
   assignee_id: string | null;
   order_number: string | null;
+  /** Advisory only — nothing in the product acts on these. */
+  risk_score?: number;
+  risk_reasons?: { code: string; label: string; weight: number }[];
+  risk_dismissed_at?: string | null;
   first_response_at: string | null;
   resolved_at: string | null;
   last_message_at: string;

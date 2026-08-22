@@ -202,6 +202,15 @@ const MIGRATIONS: {
         ? null
         : "column `agents.watch_new_tickets`",
   },
+  {
+    file: "0015_ticket_risk.sql",
+    title: "Advisory risk flagging on tickets",
+    probe: async () =>
+      (await columnExists("tickets", "risk_score")) &&
+      (await columnExists("messages", "reply_to_email"))
+        ? null
+        : "column `tickets.risk_score` / `messages.reply_to_email`",
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

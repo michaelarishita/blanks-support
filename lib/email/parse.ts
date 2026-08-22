@@ -27,6 +27,8 @@ export interface ParsedEmail {
   gmailMessageId: string;
   gmailThreadId: string;
   rfc822MessageId: string | null;
+  /** Reply-To, when the sender set one. Null when they did not. */
+  replyToEmail: string | null;
   inReplyTo: string | null;
   references: string[];
   fromEmail: string | null;
@@ -370,6 +372,7 @@ export function parseGmailMessage(message: GmailMessage): ParsedEmail {
     gmailMessageId: message.id,
     gmailThreadId: message.threadId,
     rfc822MessageId: headerValue(payload, "Message-ID"),
+    replyToEmail: parseAddress(headerValue(payload, "Reply-To")).email,
     inReplyTo: parseReferences(headerValue(payload, "In-Reply-To"))[0] ?? null,
     references: parseReferences(headerValue(payload, "References")),
     fromEmail: from.email,

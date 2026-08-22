@@ -18,7 +18,7 @@ import Badge from "@/components/ui/Badge";
 import ChannelIcon from "@/components/ui/ChannelIcon";
 import EmptyState from "@/components/ui/EmptyState";
 import Tooltip from "@/components/ui/Tooltip";
-import { InboxIcon } from "@/components/ui/icons";
+import { AlertTriangleIcon, InboxIcon } from "@/components/ui/icons";
 
 /**
  * Only Urgent and High appear in the list. Normal and Low are the default
@@ -266,6 +266,18 @@ export default function TicketList({
                 <span className="tnum flex-none text-caption text-tertiary">
                   #{t.number}
                 </span>
+                {/* Small and unlabelled in the list on purpose: the reasons
+                    belong on the ticket, where there is room to say that
+                    these are patterns and not conclusions. */}
+                {(t.risk_score ?? 0) > 0 && !t.risk_dismissed_at && (
+                  <span
+                    className="flex-none text-warning-text"
+                    title="Review carefully — open the ticket for the reasons"
+                    aria-label="Flagged for review"
+                  >
+                    <AlertTriangleIcon size={12} />
+                  </span>
+                )}
               </div>
               <div className="mt-0.5 flex items-center gap-2 text-caption text-secondary">
                 <span className="truncate">{customerName}</span>

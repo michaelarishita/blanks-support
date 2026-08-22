@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import type { TicketStatus } from "@/lib/types";
+import type { ActionResult, TicketStatus } from "@/lib/types";
 import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
 import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
 import { syncSupportMailboxThrottled } from "@/lib/google/inbound";
@@ -243,6 +243,33 @@ export async function assignTicket(ticketId: string, assigneeId: string | null) 
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
   return notificationWarning ? { ok: true, warning: notificationWarning } : { ok: true };
+}
+
+/**
+ * Marks a risk flag as reviewed.
+ *
+ * The score and reasons are KEPT — only the dismissal is recorded. Clearing
+ * them would make "someone looked at this and judged it fine" indistinguish-
+ * able from "this was never flagged", and the first of those is exactly the
+ * evidence needed to tune the signals later.
+ */
+export async function dismissRiskFlag(ticketId: string): Promise<ActionResult> {
+  const { supabase, userId } = await requireAgent();
+
+  const { error } = await supabase
+    .from("tickets")
+    .update({
+      risk_dismissed_at: new Date().toISOString(),
+      risk_dismissed_by: userId,
+    })
+    .eq("id", ticketId);
+  if (error) return { error: error.message };
+
+  await logEvent(supabase, ticketId, userId, "risk_dismissed");
+
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  return { ok: true };
 }
 
 export async function toggleTag(ticketId: string, tagId: string, on: boolean) {

@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runRulesSafely } from "@/lib/rules/engine";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
+import { assessTicketRisk } from "@/lib/risk/assess";
 import { sniffFileType, safeStoredName } from "@/lib/uploads/sniff";
 import { stripMetadata } from "@/lib/uploads/strip";
 import {
@@ -315,7 +316,10 @@ async function ingestMessage(
 
     // New conversations only — an echo is ours, and a reply on an existing
     // DM thread is not news.
-    if (ticket.created) await notifyNewTicketSafely(ticket.id);
+    if (ticket.created) {
+      await notifyNewTicketSafely(ticket.id);
+      await assessTicketRisk(ticket.id);
+    }
   }
 }
 

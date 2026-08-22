@@ -15,6 +15,7 @@ import {
 } from "@/lib/email/parse";
 import { runRulesSafely } from "@/lib/rules/engine";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
+import { assessTicketRisk } from "@/lib/risk/assess";
 import { MAX_FILE_BYTES } from "@/lib/uploads/limits";
 import { sniffFileType } from "@/lib/uploads/sniff";
 import { stripMetadata } from "@/lib/uploads/strip";
@@ -495,6 +496,7 @@ async function ingestMessage(
       body_text: parsed.bodyText,
       gmail_message_id: parsed.gmailMessageId,
       rfc822_message_id: parsed.rfc822MessageId,
+      reply_to_email: parsed.replyToEmail,
       delivery_status: "stored",
       created_at: parsed.date.toISOString(),
     })
@@ -542,6 +544,11 @@ async function ingestMessage(
   // news to the watchers, and mailing them about every customer response
   // would be the fastest possible way to get this feature turned off.
   if (path === "new") await notifyNewTicketSafely(ticketId);
+
+  // Advisory only, and last: it reads the attachments and the customer
+  // history, so it has to run after both exist. Nothing downstream acts on
+  // the result — it puts a sentence in front of a human.
+  await assessTicketRisk(ticketId);
   for (const rule of rules.fired) {
     // Surfaced in the same skip/count summary "Check mail now" already shows,
     // so a rule firing on inbound mail isn't invisible until someone opens the

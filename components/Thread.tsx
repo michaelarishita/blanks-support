@@ -17,6 +17,7 @@ import { retryDelivery } from "@/app/actions";
 import type { Message } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import { useToast } from "@/components/ui/Toast";
+import { fileSharingLinks } from "@/lib/risk/signals";
 import {
   AlertTriangleIcon,
   CheckDoubleIcon,
@@ -103,14 +104,64 @@ function DeliveryStatus({
   );
 }
 
+/**
+ * Renders text, calling out file-sharing links rather than hiding them.
+ *
+ * These are NEVER clickable. Inbound bodies render as plain text, so nothing
+ * here linkifies anything — but an unknown file share is exactly the thing an
+ * agent opens by reflex, so it gets marked rather than left to blend in.
+ */
+function TextWithShareWarnings({ text }: { text: string }) {
+  const links = fileSharingLinks(text);
+  if (!links.length) return <>{text}</>;
+
+  // Split on the links so each can be marked without touching the rest.
+  const pattern = new RegExp(
+    `(${links.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`
+  );
+  const pieces = text.split(pattern);
+
+  return (
+    <>
+      {pieces.map((piece, index) =>
+        links.includes(piece) ? (
+          <mark
+            key={index}
+            title="External file share — verify before opening"
+            className="rounded-[3px] bg-warning-bg px-1 text-warning-text decoration-dotted underline-offset-2"
+          >
+            {piece}
+          </mark>
+        ) : (
+          <span key={index}>{piece}</span>
+        )
+      )}
+    </>
+  );
+}
+
 /** Inbound replies carry the whole thread quoted underneath; hide it. */
 function MessageBody({ text, onDark }: { text: string; onDark: boolean }) {
   const [showQuoted, setShowQuoted] = useState(false);
   const { visible, quoted } = splitQuotedText(text);
+  const shares = fileSharingLinks(visible);
 
   return (
     <>
-      <div className="whitespace-pre-wrap break-words">{visible}</div>
+      <div className="whitespace-pre-wrap break-words">
+        <TextWithShareWarnings text={visible} />
+      </div>
+      {shares.length > 0 && (
+        <p
+          className={cn(
+            "mt-1.5 flex items-center gap-1 text-caption",
+            onDark ? "text-gray-300" : "text-warning-text"
+          )}
+        >
+          <AlertTriangleIcon size={11} className="flex-none" />
+          Links to an external file share — not attached to this ticket.
+        </p>
+      )}
       {quoted && (
         <>
           <button

@@ -5,6 +5,7 @@ import ReplyBox from "@/components/ReplyBox";
 import TicketHeader from "@/components/TicketHeader";
 import TicketSidePanel from "@/components/TicketSidePanel";
 import MobileContextSheet from "@/components/MobileContextSheet";
+import RiskNotice from "@/components/RiskNotice";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
 import { ShopifyProvider } from "@/components/ShopifyContext";
 import { isMetaChannel, currentReplyWindow } from "@/lib/meta/outbound";
@@ -128,6 +129,14 @@ export default async function TicketPage({
           advanceHref={advanceHref}
           isLastInView={!nextId}
         />
+
+        {(t.risk_reasons?.length ?? 0) > 0 && (
+          <RiskNotice
+            ticketId={t.id}
+            reasons={t.risk_reasons ?? []}
+            dismissedAt={t.risk_dismissed_at ?? null}
+          />
+        )}
 
         <div className="scrollbar-slim flex-1 overflow-y-auto bg-surface px-6 py-4">
           <Thread

@@ -265,6 +265,40 @@ skipped by name rather than failing the whole message.
 Google Cloud Pub/Sub topic + push subscription, calling users.watch, and a
 daily cron to renew it.
 
+### Advisory risk flagging (Drop 11)
+
+Inbound tickets are scored at creation and, above a threshold, carry a
+"Review carefully" notice listing the reasons. `lib/risk/signals.ts` is pure;
+`lib/risk/assess.ts` gathers the facts and writes three columns.
+
+**It decides nothing.** No auto-reply, no auto-assign, no auto-resolve, no
+blocking. A test asserts that nothing outside the risk modules and the UI ever
+reads `risk_score` — if the score ever reaches an action, that is where it
+shows up first.
+
+**The wording is a requirement.** "Review carefully" with the reasons listed,
+never "fraud" or "suspicious" — asserted against the source, comments
+stripped. Legitimate customers trip these constantly, and an agent who reads
+an accusation and repeats it to a real person has done more damage than the
+heuristic could prevent. The notice says so on screen.
+
+**Never leaves the dashboard.** Internal only; a test asserts no risk wording
+reaches the outbound email template.
+
+The signal that matters most is the one that must NOT fire: a Shopify lookup
+that could not run stores `null`, not `false`. Treating "we could not check"
+as "no such customer" would put the most alarming signals we have on every
+ticket in the inbox for the length of an outage.
+
+Score and reasons are stored together so precision can be measured with
+evidence later. Dismissals are recorded rather than clearing the score —
+"somebody looked and judged it fine" is exactly the data needed to tune a
+signal, and it must stay distinguishable from "never flagged".
+
+File-sharing links in customer messages are marked in the thread and are never
+clickable — inbound bodies render as plain text, and an unknown file share is
+the thing an agent opens by reflex.
+
 ### New-ticket notifications (Drop 10)
 
 Every new ticket, on every channel, emails the watchers from hello@.

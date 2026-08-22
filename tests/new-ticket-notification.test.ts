@@ -187,7 +187,7 @@ describe("wiring", () => {
 
   it("only fires for new conversations on the social path", async () => {
     const meta = await read("../lib/meta/inbound.ts");
-    expect(meta).toContain("if (ticket.created) await notifyNewTicketSafely");
+    expect(meta).toMatch(/if \(ticket\.created\) \{[\s\S]{0,120}notifyNewTicketSafely/);
   });
 
   it("never lets a failed notification fail the ticket", async () => {
