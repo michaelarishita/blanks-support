@@ -264,11 +264,34 @@ const ENTITIES: Record<string, string> = {
   "&#39;": "'",
   "&apos;": "'",
   "&nbsp;": " ",
+  // Typographic entities, which is what real mail is actually full of. Word,
+  // Outlook and Apple Mail all emit these rather than the literal character,
+  // and without them a customer's message reads "I&rsquo;d like a refund".
+  "&rsquo;": "\u2019",
+  "&lsquo;": "\u2018",
+  "&rdquo;": "\u201d",
+  "&ldquo;": "\u201c",
+  "&mdash;": "\u2014",
+  "&ndash;": "\u2013",
+  "&hellip;": "\u2026",
+  "&bull;": "\u2022",
+  "&middot;": "\u00b7",
+  "&trade;": "\u2122",
+  "&copy;": "\u00a9",
+  "&reg;": "\u00ae",
+  "&deg;": "\u00b0",
+  "&pound;": "\u00a3",
+  "&euro;": "\u20ac",
+  "&laquo;": "\u00ab",
+  "&raquo;": "\u00bb",
 };
 
 export function decodeEntities(text: string): string {
   return text
-    .replace(/&(?:amp|lt|gt|quot|apos|nbsp|#39);/g, (m) => ENTITIES[m] ?? m)
+    // Any named entity: known ones are replaced, unknown ones left exactly as
+    // they are rather than mangled into something that looks like a decode.
+    .replace(/&[a-z]+[0-9]*;/gi, (m) => ENTITIES[m.toLowerCase()] ?? m)
+    .replace(/&#39;/g, "'")
     .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
     .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
 }

@@ -221,6 +221,16 @@ replies, which is the hardest kind of gap to notice.
 Consequence worth knowing: because `From` is per-agent, a Gmail thread
 belongs to whichever mailbox created it — hence `tickets.gmail_account_ref`
 and the 404-retry fallback in `deliverMessage`.
+**A part labelled text/plain is not necessarily plain.** Ticket #1040 arrived
+as multipart/alternative where BOTH branches were HTML, so `bodyText` was
+filled from the "plain" part, the `if (!bodyText)` guard meant the HTML→text
+conversion never ran, and the customer's message rendered as literal `<p>` and
+`<a href=...>` in the thread. The converter was never the problem. Whatever
+text we end up with is now run through `looksLikeHtml` and converted if it is
+markup, which makes it independent of whether the sender labelled their parts
+honestly. Anchor destinations are kept inline — `text (url)` — because the
+link is frequently the whole point of the message.
+
 **Attachments: "inline" means the BODY references it, and nothing else.**
 Apple Mail and iOS Mail stamp BOTH `Content-Disposition: inline` AND a
 `Content-ID` on ordinary photo attachments, because they preview them while

@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getGmailMessage } from "./gmail";
 import { getAccessToken, getSupportInboxConnection } from "./tokens";
-import { parseGmailMessage } from "@/lib/email/parse";
+import { looksLikeHtml, parseGmailMessage } from "@/lib/email/parse";
 import { storeInboundAttachments } from "./inbound";
 import type { SyncResult } from "./inbound";
 
@@ -29,6 +29,9 @@ export interface BackfillCandidate {
 
 export interface BackfillResult {
   dryRun: boolean;
+  /** Messages whose stored body still holds raw markup. */
+  bodiesToRepair: { ticketNumber: number; messageId: string }[];
+  bodiesRepaired: number;
   /** Messages inspected. */
   scanned: number;
   /** Attachments that would be (or were) pulled. */
@@ -55,6 +58,8 @@ export async function backfillAttachments({
 } = {}): Promise<BackfillResult> {
   const result: BackfillResult = {
     dryRun,
+    bodiesToRepair: [],
+    bodiesRepaired: 0,
     scanned: 0,
     candidates: [],
     totalBytes: 0,
@@ -94,13 +99,21 @@ export async function backfillAttachments({
   for (const ticket of tickets ?? []) {
     const { data: messages } = await admin
       .from("messages")
-      .select("id, gmail_message_id")
+      .select("id, gmail_message_id, body_text")
       .eq("ticket_id", ticket.id)
       .eq("direction", "inbound")
       .not("gmail_message_id", "is", null);
 
     for (const message of messages ?? []) {
       result.scanned++;
+
+      // Bodies stored before the HTML fix still hold raw markup — a mailer
+      // that labelled an HTML part text/plain meant the conversion never ran,
+      // so the customer's words are sitting in the thread as <p> and
+      // <a href=...>. Re-parsing is the same operation as re-fetching the
+      // attachments, on the same message, so it happens here.
+      const storedBody = (message.body_text as string | null) ?? "";
+      const needsBodyRepair = looksLikeHtml(storedBody);
 
       // Already restored, or never had any — either way there is nothing to
       // do, and re-uploading would duplicate the row.
@@ -109,7 +122,7 @@ export async function backfillAttachments({
         .select("id")
         .eq("message_id", message.id)
         .limit(1);
-      if (existing?.length) {
+      if (existing?.length && !needsBodyRepair) {
         result.skipped["already has attachments"] =
           (result.skipped["already has attachments"] ?? 0) + 1;
         continue;
@@ -128,8 +141,24 @@ export async function backfillAttachments({
         continue;
       }
 
+      if (needsBodyRepair && parsed.bodyText && parsed.bodyText !== storedBody) {
+        result.bodiesToRepair.push({
+          ticketNumber: ticket.number as number,
+          messageId: message.id as string,
+        });
+        if (!dryRun) {
+          const { error: bodyError } = await admin
+            .from("messages")
+            .update({ body_text: parsed.bodyText })
+            .eq("id", message.id);
+          if (bodyError) result.errors.push(bodyError.message);
+          else result.bodiesRepaired++;
+        }
+      }
+
       // The fixed classification: inline means the body references it.
       const wanted = parsed.attachments.filter((a) => !a.inline);
+      if (existing?.length) continue;
       if (!wanted.length) continue;
 
       for (const attachment of wanted) {

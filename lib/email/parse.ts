@@ -128,9 +128,49 @@ function parseReferences(value: string | null): string[] {
 }
 
 /** Crude but effective HTML → text, for messages with no text/plain part. */
+/**
+ * Does this string contain real markup?
+ *
+ * Needed because a part labelled text/plain is not necessarily plain: the
+ * mailer behind ticket #1040 sent multipart/alternative where BOTH branches
+ * were HTML, so the "plain" one went straight into the thread as literal
+ * <p> and <a href=...> tags.
+ *
+ * Deliberately matched against a list of real tag names rather than a bare
+ * angle bracket, so it does not fire on "5 < 10" or on an address written as
+ * <jane@example.com> — both of which are ordinary plain text.
+ */
+export function looksLikeHtml(text: string): boolean {
+  return /<\/?(?:p|div|br|a|span|table|tbody|tr|td|th|ul|ol|li|h[1-6]|strong|b|em|i|img|body|html|blockquote|font|pre|hr)\b[^>]*>/i.test(
+    text
+  );
+}
+
+/**
+ * Anchors, with the destination kept.
+ *
+ * Stripping tags alone turns "available <a href="https://...">here</a>" into
+ * "available here" — the customer's link, which is often the entire point of
+ * the message, silently vanishes. Run before tag stripping so the href is
+ * still there to read.
+ */
+function preserveLinks(html: string): string {
+  return html.replace(
+    /<a\b[^>]*?href\s*=\s*["']?([^"'\s>]+)["']?[^>]*>([\s\S]*?)<\/a>/gi,
+    (_whole, href: string, inner: string) => {
+      const label = decodeEntities(inner.replace(/<[^>]+>/g, "")).trim();
+      const url = decodeEntities(href).trim();
+      if (!url || url.startsWith("mailto:") || url.startsWith("#")) return label;
+      // A link whose text is already the URL does not need it twice.
+      if (!label || label === url || url.includes(label)) return url;
+      return `${label} (${url})`;
+    }
+  );
+}
+
 function htmlPartToText(html: string): string {
   return decodeEntities(
-    html
+    preserveLinks(html)
       .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, "")
       .replace(/<br\s*\/?>/gi, "\n")
       // Blocks get a blank line, matching htmlToPlainText; rows and list
@@ -302,6 +342,16 @@ export function parseGmailMessage(message: GmailMessage): ParsedEmail {
   }
 
   if (!bodyText && bodyHtml) bodyText = htmlPartToText(bodyHtml);
+
+  // The part label is a claim, not a fact.
+  //
+  // Ticket #1040 arrived as multipart/alternative whose text/plain branch was
+  // HTML — so bodyText was already set, the conversion above never ran, and
+  // the customer's message showed as raw <p> and <a href=...> in the thread.
+  // Converting whatever we ended up with makes this independent of whether
+  // the sender labelled their parts honestly.
+  if (looksLikeHtml(bodyText)) bodyText = htmlPartToText(bodyText);
+
   if (!bodyText) bodyText = message.snippet ?? "";
 
   const from = parseAddress(headerValue(payload, "From"));
