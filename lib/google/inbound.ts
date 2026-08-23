@@ -36,6 +36,15 @@ export interface SyncResult {
   skipped: Record<string, number>;
   /** Rule name → how many messages in this run it fired on. */
   ruleHits: Record<string, number>;
+  /**
+   * Messages we FAILED to store, as opposed to deliberately dropped.
+   *
+   * Kept separate from `skipped` on purpose. A guard dropping a mailing-list
+   * digest is the system working; an insert failing because a column is
+   * missing is the system broken, and collapsing the two into one counter is
+   * how a schema error reads as "nothing new today".
+   */
+  failures: string[];
   error?: string;
 }
 
@@ -45,7 +54,7 @@ const SENDER_MATCH_WINDOW_DAYS = 7;
 const DEFAULT_MAX_MESSAGES = 25;
 
 function emptyResult(): SyncResult {
-  return { checked: 0, created: 0, appended: 0, skipped: {}, ruleHits: {} };
+  return { checked: 0, created: 0, appended: 0, skipped: {}, ruleHits: {}, failures: [] };
 }
 
 function countSkip(result: SyncResult, reason: string) {
@@ -126,10 +135,21 @@ function listIdForms(address: string): string[] {
  * X-Original-To, and the group address is usually still visible in To/Cc.
  */
 export function viaTrustedForwarder(
-  parsed: Pick<ParsedEmail, "deliveredTo" | "toEmails" | "ccEmails" | "listId">,
+  // fromEmail is optional: it is one signal among several, and the existing
+  // callers that test the delivery headers alone are still valid.
+  parsed: Pick<ParsedEmail, "deliveredTo" | "toEmails" | "ccEmails" | "listId"> &
+    Partial<Pick<ParsedEmail, "fromEmail">>,
   trusted: Set<string>
 ): string | null {
   if (!trusted.size) return null;
+
+  // The strongest evidence of all: the list rewrote From to its own address,
+  // which only the list itself can do. Checked first because the delivery
+  // headers vary — Groups sets To and Delivered-To, plain forwarding sets
+  // neither — and a message that reached us THROUGH a declared forwarder
+  // should not then be judged as bulk mail from a stranger.
+  const from = parsed.fromEmail?.toLowerCase();
+  if (from && trusted.has(from)) return from;
 
   for (const address of [
     ...parsed.deliveredTo,
@@ -179,6 +199,59 @@ export interface GuardContext {
  * the group address, and support@ is in IGNORED_SENDER_EMAILS, so matching
  * them would discard group mail a second way.
  */
+export function effectiveSender(
+  parsed: Pick<ParsedEmail, "fromEmail" | "originalSender">,
+  trustedForwarders: Set<string>
+): string | null {
+  const from = parsed.fromEmail?.toLowerCase() ?? null;
+  if (!from) return null;
+
+  /**
+   * A GROUP REWRITE IS NOT AN INTERNAL SENDER.
+   *
+   * Google Groups replaces From with the group address, so a customer writing
+   * to support@ arrives as if support@ had written it. support@ is both in
+   * our own-addresses set and in IGNORED_SENDER_EMAILS, so every one of those
+   * messages was being discarded as our own mail — which is exactly what
+   * happened in production, silently, for as long as the group has existed.
+   *
+   * The substitution is deliberately narrow: only when From is an address we
+   * already declared a trusted forwarder, and only using the author the list
+   * software itself recorded. Anything else and this would become a way to
+   * bypass loop protection by setting one header.
+   */
+  if (trustedForwarders.has(from) && parsed.originalSender) {
+    return parsed.originalSender.toLowerCase();
+  }
+  return from;
+}
+
+/**
+ * The message as it should be FILED, with a group rewrite undone.
+ *
+ * The guards decide whether to keep it; this decides who it is from. Without
+ * it every customer who wrote via the group would be upserted as the single
+ * customer "support@blankssportsnutrition.com", and their tickets would all
+ * thread together into one conversation.
+ *
+ * Groups also rewrites the display name to "'Jane Doe' via support"; the
+ * author's real name is recovered from it so the ticket reads as a person.
+ */
+export function resolveAuthor(
+  parsed: ParsedEmail,
+  trustedForwarders: Set<string>
+): ParsedEmail {
+  const resolved = effectiveSender(parsed, trustedForwarders);
+  if (!resolved || resolved === parsed.fromEmail?.toLowerCase()) return parsed;
+
+  const viaName = /^'?(.+?)'? via .+$/.exec(parsed.fromName ?? "");
+  return {
+    ...parsed,
+    fromEmail: resolved,
+    fromName: viaName ? viaName[1] : (parsed.fromName ?? null),
+  };
+}
+
 export function evaluateInboundGuards(
   parsed: ParsedEmail,
   ctx: GuardContext
@@ -187,11 +260,13 @@ export function evaluateInboundGuards(
     return { rule: "no-sender", detail: "no parseable From address" };
   }
 
+  // Checked BEFORE any sender logic: our own notifications carry these, and
+  // they must be dropped whatever their headers claim about authorship.
   if (parsed.autoReplyReason) {
     return { rule: "automated", detail: parsed.autoReplyReason };
   }
 
-  const from = parsed.fromEmail.toLowerCase();
+  const from = effectiveSender(parsed, ctx.trustedForwarders) ?? "";
   if (ctx.ourAddresses.has(from)) {
     return { rule: "own-address", detail: from };
   }
@@ -509,7 +584,10 @@ async function ingestMessage(
       countSkip(result, "duplicate");
       return null;
     }
-    countSkip(result, "could not store message");
+    // NOT a skip. This is the swallow that let a schema error read as an
+    // empty mailbox: counted quietly alongside deliberate drops, cursor
+    // advanced, message gone for good.
+    result.failures.push(`could not store message: ${insertError.message}`);
     return null;
   }
 
@@ -679,17 +757,32 @@ export async function syncSupportMailbox(
         continue;
       }
 
-      await ingestMessage(accessToken, parsed, result);
+      // Filed under the real author, not the mailing list that relayed it.
+      await ingestMessage(
+        accessToken,
+        resolveAuthor(parsed, trustedForwarders),
+        result
+      );
     } catch (e) {
-      countSkip(result, e instanceof Error ? e.message : "fetch failed");
+      result.failures.push(e instanceof Error ? e.message : "fetch failed");
     }
   }
 
-  // Advance the cursor only after the batch is processed, so a crash
-  // mid-run re-reads those messages rather than losing them. Re-reading is
-  // safe — the gmail_message_id unique index dedupes.
-  if (collected.historyId) {
+  // Advance the cursor only after the batch is processed, so a crash mid-run
+  // re-reads those messages rather than losing them. Re-reading is safe — the
+  // gmail_message_id unique index dedupes.
+  //
+  // AND ONLY IF NOTHING FAILED TO STORE. Advancing past a message we could not
+  // write is what turns a transient error into permanent loss: the next sync
+  // starts after it, Gmail reports nothing new, and the mailbox looks empty
+  // forever. A deliberate guard drop is different — that message was
+  // considered and rejected, so the cursor should move past it.
+  if (collected.historyId && !result.failures.length) {
     await setLastHistoryId(connection.id, collected.historyId);
+  }
+
+  if (result.failures.length) {
+    result.error = `${result.failures.length} message(s) could not be stored — the sync cursor was held back so they are retried. First: ${result.failures[0]}`;
   }
 
   return result;
@@ -735,8 +828,17 @@ export async function syncSupportMailboxThrottled(
 
   // Stamped even on failure, so a persistently broken sync can't be retried
   // on every dashboard load by every agent.
+  //
+  // The skip and failure counts ride along so the hourly heartbeat can tell
+  // "the mailbox was quiet" from "mail arrived and we discarded all of it".
+  // Those look identical from the tickets table, and the second one is what
+  // silently ate every message forwarded through the support@ group.
   try {
-    await patchSettingsBlob({ [LAST_SYNC_KEY]: new Date().toISOString() });
+    await patchSettingsBlob({
+      [LAST_SYNC_KEY]: new Date().toISOString(),
+      inbound_last_sync_skipped: result.skipped,
+      inbound_last_sync_failures: result.failures,
+    });
   } catch (e) {
     console.error("[inbound] could not write the sync stamp:", e);
   }

@@ -34,6 +34,14 @@ export async function GET(request: NextRequest) {
       ...health.reasons.map((reason) => `  • ${reason}`),
       "",
       `Last inbound email: ${health.lastInboundAt ?? "never"}`,
+      ...(health.recentlyDropped
+        ? [
+            "",
+            "MAIL IS ARRIVING AND BEING DISCARDED — that is different from a quiet",
+            "mailbox, and it is the more likely cause:",
+            `  ${health.recentlyDropped}`,
+          ]
+        : []),
       `Gmail watch expires: ${health.watchExpiresAt ?? "not registered"}`,
       `Sync cursor last moved: ${health.historyChangedAt ?? "never"}`,
       "",

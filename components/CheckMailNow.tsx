@@ -10,6 +10,7 @@ import { RefreshIcon } from "@/components/ui/icons";
 export default function CheckMailNow({ connected }: { connected: boolean }) {
   const [pending, startTransition] = useTransition();
   const [summary, setSummary] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
   const toast = useToast();
   const router = useRouter();
 
@@ -17,7 +18,15 @@ export default function CheckMailNow({ connected }: { connected: boolean }) {
     setSummary(null);
     startTransition(async () => {
       const result = await checkMailNow();
+      setFailure(null);
+
+      // An errored sync NEVER renders as a result line. Previously the error
+      // raised a toast that vanished in four seconds and left the summary
+      // underneath reading "Checked 0 · 0 new tickets" — which is how a
+      // broken sync looked exactly like a quiet morning.
       if (result.error) {
+        setSummary(null);
+        setFailure(result.error);
         toast(result.error, { tone: "error" });
         return;
       }
@@ -74,7 +83,17 @@ export default function CheckMailNow({ connected }: { connected: boolean }) {
           Check mail now
         </Button>
       </div>
-      {summary && <p className="mt-3 text-xs text-gray-600">{summary}</p>}
+      {failure && (
+        <p
+          role="alert"
+          className="mt-3 rounded-md border border-danger-border bg-danger-bg px-3 py-2 text-xs text-danger-text"
+        >
+          <span className="font-semibold">The sync failed.</span> {failure}
+        </p>
+      )}
+      {summary && !failure && (
+        <p className="mt-3 text-xs text-gray-600">{summary}</p>
+      )}
     </div>
   );
 }

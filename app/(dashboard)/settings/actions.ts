@@ -268,6 +268,7 @@ export async function checkMailNow() {
       appended: 0,
       skipped: {},
       ruleHits: {},
+      failures: [],
       error: "Not authenticated",
     };
   }

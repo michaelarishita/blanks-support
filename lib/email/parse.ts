@@ -29,6 +29,15 @@ export interface ParsedEmail {
   rfc822MessageId: string | null;
   /** Reply-To, when the sender set one. Null when they did not. */
   replyToEmail: string | null;
+  /**
+   * The real author, when a mailing list rewrote `From` to its own address.
+   *
+   * Google Groups replaces From with the group address for DMARC reasons —
+   * `"'lawrence lucero' via support" <support@…>` — and preserves the author
+   * in X-Original-Sender / X-Original-From. Without this the sender of every
+   * group-forwarded customer email looks like the group itself.
+   */
+  originalSender: string | null;
   inReplyTo: string | null;
   references: string[];
   fromEmail: string | null;
@@ -373,6 +382,9 @@ export function parseGmailMessage(message: GmailMessage): ParsedEmail {
     gmailThreadId: message.threadId,
     rfc822MessageId: headerValue(payload, "Message-ID"),
     replyToEmail: parseAddress(headerValue(payload, "Reply-To")).email,
+    originalSender:
+      parseAddress(headerValue(payload, "X-Original-Sender")).email ??
+      parseAddress(headerValue(payload, "X-Original-From")).email,
     inReplyTo: parseReferences(headerValue(payload, "In-Reply-To"))[0] ?? null,
     references: parseReferences(headerValue(payload, "References")),
     fromEmail: from.email,

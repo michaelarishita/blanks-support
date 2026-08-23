@@ -128,6 +128,47 @@ Inbound works locally by polling. Push needs Google Cloud wiring:
 - `lib/supabase/admin.ts` (service-role, bypasses RLS) is for API
   routes/webhooks only. Never import it into anything client-reachable.
 
+### A Google Group rewrites `From`. This cost us an outage.
+
+`support@` is a Google Group forwarding to `hello@`. Groups replaces the
+**From** header with the group address for DMARC reasons —
+`"'Jane Doe' via support" <support@blankssportsnutrition.com>` — and keeps the
+author in `X-Original-Sender` / `X-Original-From` / `Reply-To`.
+
+An earlier note here asserted Groups rewrites only `Sender` and `Return-Path`.
+That was wrong, and because `support@` is in both our own-addresses set and
+`IGNORED_SENDER_EMAILS`, **every message forwarded through the group was
+discarded as our own mail** — silently, for as long as the group has existed,
+while the mailbox merely looked quiet.
+
+`effectiveSender()` substitutes the recorded author, and `resolveAuthor()`
+files the ticket under them (otherwise every group customer collapses into one
+`support@` record with one shared thread). The substitution is narrow on
+purpose — only when `From` is an address already declared in
+`TRUSTED_FORWARD_ADDRESSES` — because otherwise setting one header would be a
+way past loop protection. The auto-reply guard still runs first, so our own
+notifications are dropped whatever they claim about authorship.
+
+A From rewrite is also now the strongest evidence for suppressing the
+bulk-mail rule: only the list itself can perform it.
+
+### Two silences that made it hard to see
+
+**A store failure is not a skip.** A guard dropping a digest is the system
+working; an insert failing is the system broken. They were both `countSkip`,
+so a schema error read as "nothing new today". Failures are their own list,
+they set `result.error`, and **the cursor is held back when any occur** —
+advancing past a message we could not write is what turns a transient error
+into permanent loss.
+
+**"Check mail now" never renders a result line for a failed sync.** The error
+used to raise a toast that vanished in four seconds, leaving "Checked 0 · 0 new
+tickets" underneath — indistinguishable from a quiet morning.
+
+**The heartbeat can now tell "no mail arrived" from "mail arrived and we
+dropped all of it."** Those are identical in the tickets table and need
+opposite fixes. The sync records what it discarded; the alert names it.
+
 ### Safari / WebKit — a blind spot in the test suite
 
 Every test we run is Node or Chrome. **No test in this repo can see a WebKit

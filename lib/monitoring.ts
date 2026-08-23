@@ -24,6 +24,15 @@ export const ALERT_COOLDOWN_HOURS = 6;
 export interface InboundHealth {
   status: "healthy" | "degraded" | "unknown";
   reasons: string[];
+  /**
+   * What the last sync threw away, when it threw anything away.
+   *
+   * "No inbound email for 31h" and "31h of inbound email, all discarded by a
+   * guard" produce the same silence in the tickets table and need completely
+   * different fixes. Naming the drop counts in the alert is the difference
+   * between a day of diagnosis and a glance.
+   */
+  recentlyDropped?: string | null;
   checkedAt: string | null;
   lastInboundAt: string | null;
   watchExpiresAt: string | null;
@@ -199,9 +208,40 @@ export async function checkInboundHealth(): Promise<{
     everReceived: (emailTicketCount ?? 0) > 0,
   });
 
+  /**
+   * What the last sync discarded.
+   *
+   * Read from the settings blob the sync writes, so the heartbeat can say
+   * "mail arrived and every message was dropped" instead of "no mail
+   * arrived". Those are indistinguishable in the tickets table and need
+   * opposite fixes — the first is a bug in our guards, the second is a quiet
+   * Tuesday.
+   */
+  let recentlyDropped: string | null = null;
+  try {
+    const blob = await getSettingsBlob();
+    const skipped = (blob.inbound_last_sync_skipped ?? {}) as Record<string, number>;
+    const failures = (blob.inbound_last_sync_failures ?? []) as string[];
+    const dropped = Object.entries(skipped)
+      // Duplicates are the redelivery dedupe working, not a loss.
+      .filter(([reason]) => reason !== "duplicate")
+      .map(([reason, count]) => `${count} × ${reason}`);
+    if (failures.length) dropped.unshift(`${failures.length} failed to store`);
+    if (dropped.length) recentlyDropped = dropped.join("; ");
+  } catch {
+    // Monitoring must never be the thing that breaks.
+  }
+
+  if (recentlyDropped && evaluated.reasons.length) {
+    evaluated.reasons.push(
+      `The last sync discarded mail rather than finding none: ${recentlyDropped}.`
+    );
+  }
+
   const health: InboundHealth = {
     status: evaluated.status,
     reasons: evaluated.reasons,
+    recentlyDropped,
     checkedAt: new Date(now).toISOString(),
     lastInboundAt: (lastInbound?.created_at as string | undefined) ?? null,
     watchExpiresAt: connection?.watch_expires_at ?? null,
