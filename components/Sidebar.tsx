@@ -107,9 +107,10 @@ export default function Sidebar({
   channelCounts,
 }: {
   me: Agent | null;
-  counts: { open: number; mine: number; unassigned: number };
+  /** null when the count query FAILED — render nothing rather than zero. */
+  counts: { open: number; mine: number; unassigned: number } | null;
   /** Open tickets per channel — same new/open definition as the Open view. */
-  channelCounts: Record<TicketChannel, number>;
+  channelCounts: Record<TicketChannel, number> | null;
 }) {
   const pathname = usePathname();
   const params = useSearchParams();
@@ -125,13 +126,15 @@ export default function Sidebar({
   }
 
   const countFor = (key: string) =>
-    key === "open"
-      ? counts.open
-      : key === "mine"
-        ? counts.mine
-        : key === "unassigned"
-          ? counts.unassigned
-          : null;
+    !counts
+      ? null
+      : key === "open"
+        ? counts.open
+        : key === "mine"
+          ? counts.mine
+          : key === "unassigned"
+            ? counts.unassigned
+            : null;
 
   return (
     <aside className="flex w-[232px] flex-none flex-col border-r border-subtle bg-panel">
@@ -171,7 +174,7 @@ export default function Sidebar({
             // which is why it disappears at zero. Making it count everything
             // the destination shows would leave a permanent badge on every
             // row that has ever had a ticket.
-            count={channelCounts[c]}
+            count={channelCounts?.[c] ?? null}
           />
         ))}
       </nav>

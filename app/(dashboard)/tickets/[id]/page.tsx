@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
+import QueryError from "@/components/QueryError";
 import Thread from "@/components/Thread";
 import ReplyBox from "@/components/ReplyBox";
 import TicketHeader from "@/components/TicketHeader";
@@ -52,12 +53,18 @@ export default async function TicketPage({
     data: { user },
   } = await supabase.auth.getUser();
 
-  const [{ data: ticket }, { data: messages }, { data: agents }, { data: tags }, { data: macros }] =
+  const [
+    { data: ticket, error: ticketError },
+    { data: messages },
+    { data: agents },
+    { data: tags },
+    { data: macros },
+  ] =
     await Promise.all([
       supabase
         .from("tickets")
         .select(
-          "*, customer:customers(*), assignee:agents(*), ticket_tags(tag:tags(*))"
+          "*, customer:customers(*), assignee:agents!tickets_assignee_id_fkey(*), ticket_tags(tag:tags(*))"
         )
         .eq("id", id)
         .single(),
@@ -71,6 +78,24 @@ export default async function TicketPage({
       supabase.from("macros").select("*").order("title"),
     ]);
 
+  // A failed query is not a missing ticket. notFound() would tell an agent
+  // this conversation does not exist — the same lie as "Inbox zero" over a
+  // full inbox — so a real error is thrown and the dashboard error boundary
+  // shows it with its reason.
+  //
+  // PGRST116 is the exception: .single() reports "0 rows" as an error, and
+  // that one genuinely IS a missing ticket, so it falls through to notFound().
+  if (ticketError && ticketError.code !== "PGRST116") {
+    return (
+      <div className="mx-auto max-w-xl px-6 py-16">
+        <QueryError
+          title="Couldn't load this ticket — it has NOT been deleted."
+          reason={`${ticketError.message}${ticketError.hint ? ` — ${ticketError.hint}` : ""}`}
+          note="The conversation is still in the database. This is a read failure, not a missing ticket."
+        />
+      </div>
+    );
+  }
   if (!ticket) notFound();
 
   const t = ticket as Ticket;
@@ -80,6 +105,8 @@ export default async function TicketPage({
   // rather than round-tripping from the client.
   // The ordered ids of the view, so assigning away or resolving can advance
   // to whatever the agent would have opened next.
+  // No error branch on purpose, and the only one on this page: losing this
+  // costs the "next ticket" jump, and nothing else on screen becomes untrue.
   const { data: viewRows } = await applyTicketFilters(
     supabase.from("tickets").select("id").limit(200),
     view,

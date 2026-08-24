@@ -38,10 +38,22 @@ export default async function InboxPage({
 
   // Same builder the ticket page uses to work out what comes next, so the two
   // orderings can't drift apart.
-  const { data: tickets } = await applyTicketFilters(
+  //
+  // The error is READ, not discarded.
+  //
+  // Dropping it meant a failed query produced `data: null`, which became an
+  // empty array, which rendered "Inbox zero" over eight live tickets. That is
+  // indistinguishable from a quiet morning and it is the worst lie this
+  // product can tell.
+  const { data: tickets, error: ticketsError } = await applyTicketFilters(
     supabase
       .from("tickets")
-      .select("*, customer:customers(*), assignee:agents(*), ticket_tags(tag:tags(*))")
+      // agents!tickets_assignee_id_fkey, not agents: 0015 added
+      // tickets.risk_dismissed_by -> agents, so a bare `agents` embed is
+      // ambiguous and PostgREST answers PGRST201 for the whole query.
+      .select(
+        "*, customer:customers(*), assignee:agents!tickets_assignee_id_fkey(*), ticket_tags(tag:tags(*))"
+      )
       .limit(200),
     params,
     user?.id ?? null
@@ -75,7 +87,16 @@ export default async function InboxPage({
         channelLabel={channelLabel}
         sort={sort}
       />
-      <TicketList tickets={rows} view={view} currentAgentId={user?.id ?? null} />
+      <TicketList
+        tickets={rows}
+        view={view}
+        currentAgentId={user?.id ?? null}
+        error={
+          ticketsError
+            ? `${ticketsError.message}${ticketsError.hint ? ` — ${ticketsError.hint}` : ""}`
+            : null
+        }
+      />
     </div>
   );
 }

@@ -169,6 +169,46 @@ tickets" underneath — indistinguishable from a quiet morning.
 dropped all of it."** Those are identical in the tickets table and need
 opposite fixes. The sync records what it discarded; the alert names it.
 
+## A failure must never render as an absence
+
+The house rule, learned four times now: **an empty state, a zero, or a 404 is
+a CLAIM about the data. A failed query has not made one.** The two look
+identical on screen and need opposite responses, and the wrong one always
+looks like the calm one.
+
+- Read the error. `const { data } = await supabase...` discards it, `null`
+  becomes `[]` or a missing row, and the page says "Inbox zero" over eight
+  live tickets. Destructure `error:` on every list and count query that
+  renders something.
+- Render the reason, do not throw it. A server-component throw arrives in
+  production as a digest with the message stripped — the one useful part.
+  `components/QueryError.tsx` is the shared block; the dashboard error
+  boundary is the fallback, not the plan.
+- Order matters: the error branch goes ABOVE the empty-state branch. Below
+  it, it is unreachable for the exact case it exists to catch, because a
+  failed query returns zero rows.
+- `.single()` reports "no rows" as error `PGRST116`. That one IS a 404 and
+  must still fall through to `notFound()`.
+- Counts pass `null`, not `0`, when the query failed. The badge disappears
+  instead of lying about the number.
+
+`tests/query-error-honesty.test.ts` asserts all of this structurally, over
+the source, because "a failure never renders as an absence" is a property of
+the code's shape — calling a function that works cannot observe it.
+
+### PostgREST embeds must name their constraint
+
+Adding a second foreign key to a table we embed breaks every existing embed
+of it, and breaks the WHOLE query, not just the embed. Migration 0015 added
+`tickets.risk_dismissed_by → agents(id)`; from that moment `assignee:agents(*)`
+was ambiguous and PostgREST answered `PGRST201` for the entire inbox list.
+The counts survived only because they embed nothing.
+
+Always `assignee:agents!tickets_assignee_id_fkey(*)`. Before adding an FK,
+grep for embeds of the target table. `messages → agents` is still bare
+because messages has exactly one FK to agents — that is a fact with an
+expiry date, and the test above catches it when it expires.
+
 ### Safari / WebKit — a blind spot in the test suite
 
 Every test we run is Node or Chrome. **No test in this repo can see a WebKit

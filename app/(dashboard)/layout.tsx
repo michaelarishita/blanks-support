@@ -27,13 +27,21 @@ export default async function DashboardLayout({
     .eq("id", user.id)
     .single();
 
-  const { data: counts } = await supabase
+  const { data: counts, error: countsError } = await supabase
     .from("tickets")
     .select("status, assignee_id, channel");
+
+  // A failed count must not render as "0 open". Zero is a claim about the
+  // inbox; a failure is the absence of one, and the sidebar shows nothing at
+  // all rather than a number nobody measured.
+  if (countsError) {
+    console.error("[layout] ticket counts failed:", countsError);
+  }
 
   /** What the Open view means, in one place now that two things ask. */
   const isOpen = (status: string) => ["new", "open"].includes(status);
 
+  const measured = !countsError;
   const open = counts?.filter((t) => isOpen(t.status)).length ?? 0;
   const mine =
     counts?.filter(
@@ -69,14 +77,14 @@ export default async function DashboardLayout({
         <div className="hidden md:flex">
           <Sidebar
             me={me}
-            counts={{ open, mine, unassigned }}
-            channelCounts={byChannel}
+            counts={measured ? { open, mine, unassigned } : null}
+            channelCounts={measured ? byChannel : null}
           />
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
           <MobileTopBar
-            counts={{ open, mine, unassigned }}
-            channelCounts={byChannel}
+            counts={measured ? { open, mine, unassigned } : null}
+            channelCounts={measured ? byChannel : null}
           />
           {/* Schema first: an unrun migration explains most other symptoms. */}
           <SchemaBanner />

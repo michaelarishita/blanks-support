@@ -17,6 +17,7 @@ import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
 import ChannelIcon from "@/components/ui/ChannelIcon";
 import EmptyState from "@/components/ui/EmptyState";
+import QueryError from "@/components/QueryError";
 import Tooltip from "@/components/ui/Tooltip";
 import { AlertTriangleIcon, InboxIcon } from "@/components/ui/icons";
 
@@ -70,11 +71,19 @@ export default function TicketList({
   tickets,
   view = "open",
   currentAgentId = null,
+  error = null,
 }: {
   tickets: Ticket[];
   view?: string;
   /** Needed for Claim; null on the rare render without a session. */
   currentAgentId?: string | null;
+  /**
+   * Set when the query FAILED, as opposed to returning nothing.
+   *
+   * These are different facts and the empty state may only ever assert the
+   * second one.
+   */
+  error?: string | null;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -168,6 +177,19 @@ export default function TicketList({
       });
       router.refresh();
     });
+  }
+
+  // An error is NOT an empty inbox. Checked before the empty state, because
+  // the two are otherwise indistinguishable on screen and one of them is a
+  // lie that hides live customer tickets.
+  if (error) {
+    return (
+      <QueryError
+        title="Couldn't load the ticket list — this is NOT an empty inbox."
+        reason={error}
+        note="The counts in the sidebar come from a different query, so they may still be correct."
+      />
+    );
   }
 
   if (tickets.length === 0) {

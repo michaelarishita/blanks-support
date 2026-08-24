@@ -30,8 +30,9 @@ export default function MobileTopBar({
   counts,
   channelCounts,
 }: {
-  counts: { open: number; mine: number; unassigned: number };
-  channelCounts: Record<TicketChannel, number>;
+  /** null when the count query FAILED — render nothing rather than zero. */
+  counts: { open: number; mine: number; unassigned: number } | null;
+  channelCounts: Record<TicketChannel, number> | null;
 }) {
   const pathname = usePathname();
   const params = useSearchParams();
@@ -43,13 +44,15 @@ export default function MobileTopBar({
   if (pathname !== "/inbox") return null;
 
   const countFor = (key: string) =>
-    key === "open"
-      ? counts.open
-      : key === "mine"
-        ? counts.mine
-        : key === "unassigned"
-          ? counts.unassigned
-          : null;
+    !counts
+      ? null
+      : key === "open"
+        ? counts.open
+        : key === "mine"
+          ? counts.mine
+          : key === "unassigned"
+            ? counts.unassigned
+            : null;
 
   return (
     <div className="sticky top-0 z-30 border-b border-subtle bg-panel/95 backdrop-blur md:hidden">
@@ -90,7 +93,7 @@ export default function MobileTopBar({
             href={`/inbox?view=all&channel=${channel}`}
             active={activeChannel === channel}
             label={CHANNEL_META[channel].label}
-            count={channelCounts[channel]}
+            count={channelCounts?.[channel] ?? null}
           />
         ))}
       </div>
