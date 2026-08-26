@@ -789,6 +789,129 @@ export async function syncSupportMailbox(
 }
 
 
+/** One mailbox message, as the guards and the author resolver judge it. */
+export interface BackfillCandidate {
+  id: string;
+  fromEmail: string | null;
+  fromName: string | null;
+  subject: string;
+  /** null when it would be ingested; otherwise the rule that drops it. */
+  droppedBy: string | null;
+  alreadyStored: boolean;
+}
+
+export interface BackfillReport {
+  candidates: BackfillCandidate[];
+  ingested: number;
+  result: SyncResult;
+}
+
+/**
+ * Re-reads the mailbox and re-judges old messages against the CURRENT guard.
+ *
+ * Needed because the sync is cursor-driven: mail the broken guard discarded
+ * is behind `last_history_id` forever, so fixing the guard does not bring it
+ * back. Deliberately does NOT touch the cursor — a backfill is a repair of
+ * the past and must not move where the live sync resumes.
+ *
+ * Dry by default. `apply` requires an explicit `ids` allowlist, so a run can
+ * never sweep in more than was reviewed: the dry run IS the review, and the
+ * ids are how its verdict is carried to the write.
+ *
+ * Everything below the fetch is the live path — the same
+ * `evaluateInboundGuards`, `resolveAuthor` and `ingestMessage` the sync uses
+ * — so a dry run that says "keep" and an apply that stores something else
+ * cannot disagree.
+ */
+export async function backfillFromMailbox(options: {
+  query?: string;
+  max?: number;
+  apply?: boolean;
+  ids?: string[];
+}): Promise<BackfillReport> {
+  const result = emptyResult();
+  const apply = options.apply === true;
+  const allowlist = options.ids?.length ? new Set(options.ids) : null;
+  if (apply && !allowlist) {
+    throw new Error("backfillFromMailbox: apply requires an explicit ids allowlist");
+  }
+
+  const connection = await getSupportInboxConnection();
+  if (!connection) {
+    return { candidates: [], ingested: 0, result: { ...result, error: "No support mailbox connected." } };
+  }
+  const accessToken = await getAccessToken(connection.id);
+
+  const listed = await listGmailMessages(
+    accessToken,
+    options.query ?? "in:anywhere -in:sent -in:chats",
+    options.max ?? 200
+  );
+  const ids = [...new Set((listed.messages ?? []).map((m) => m.id))];
+
+  const admin = createAdminClient();
+  const { data: known } = await admin
+    .from("messages")
+    .select("gmail_message_id")
+    .in("gmail_message_id", ids);
+  const stored = new Set((known ?? []).map((m) => m.gmail_message_id));
+
+  const ourAddresses = await ourOwnAddresses(connection.account_ref);
+  const ignoredSenders = parseIgnoredSenders(process.env.IGNORED_SENDER_EMAILS);
+  const trustedForwarders = parseTrustedForwarders(process.env.TRUSTED_FORWARD_ADDRESSES);
+
+  const candidates: BackfillCandidate[] = [];
+  let ingested = 0;
+
+  for (const id of ids) {
+    if (allowlist && !allowlist.has(id)) continue;
+
+    // Already-stored ids are reported without a fetch. Re-reading them would
+    // triple the API calls to re-derive a verdict the unique index already
+    // enforces, and a backfill that takes minutes is one nobody runs.
+    if (stored.has(id)) {
+      candidates.push({
+        id,
+        fromEmail: null,
+        fromName: null,
+        subject: "",
+        droppedBy: null,
+        alreadyStored: true,
+      });
+      continue;
+    }
+
+    const parsed = parseGmailMessage(await getGmailMessage(accessToken, id));
+    const drop = evaluateInboundGuards(parsed, {
+      ourAddresses,
+      ignoredSenders,
+      trustedForwarders,
+    });
+    const author = drop ? parsed : resolveAuthor(parsed, trustedForwarders);
+
+    candidates.push({
+      id,
+      fromEmail: author.fromEmail,
+      fromName: author.fromName,
+      subject: author.subject,
+      droppedBy: drop ? `${drop.rule} (${drop.detail})` : null,
+      alreadyStored: false,
+    });
+
+    if (!apply || drop) continue;
+
+    result.checked++;
+    try {
+      await ingestMessage(accessToken, author, result);
+      ingested++;
+    } catch (e) {
+      result.failures.push(e instanceof Error ? e.message : "ingest failed");
+    }
+  }
+
+  return { candidates, ingested, result };
+}
+
 /** Floor between automatic syncs. Manual "Check mail now" ignores it. */
 export const SYNC_MIN_INTERVAL_MS = 60_000;
 

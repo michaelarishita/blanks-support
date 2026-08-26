@@ -13,3 +13,35 @@ describe("cursor safety", () => {
     expect(src).not.toContain('countSkip(result, `could not store message');
   });
 });
+
+describe("backfillFromMailbox", () => {
+  /**
+   * A backfill exists because the sync is cursor-driven: mail the broken
+   * guard discarded sits behind last_history_id forever, so fixing the guard
+   * does not bring it back on its own.
+   */
+  it("refuses to apply without an explicit ids allowlist", async () => {
+    const { backfillFromMailbox } = await import("@/lib/google/inbound");
+    // Without this, `apply: true` would sweep in everything the query
+    // returned — including the vendor noise the dry run was read in order to
+    // exclude. The dry run IS the review; the ids carry its verdict.
+    await expect(backfillFromMailbox({ apply: true })).rejects.toThrow(
+      /explicit ids allowlist/
+    );
+  });
+
+  it("never moves the sync cursor", () => {
+    // Structural: a repair of the past must not change where the live sync
+    // resumes, or the backfill would skip live mail as a side effect.
+    const source = readFileSync(
+      new URL("../lib/google/inbound.ts", import.meta.url),
+      "utf8"
+    );
+    const body = source.slice(
+      source.indexOf("export async function backfillFromMailbox"),
+      source.indexOf("/** Floor between automatic syncs")
+    );
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).not.toContain("setLastHistoryId");
+  });
+});
