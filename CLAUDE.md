@@ -196,6 +196,59 @@ looks like the calm one.
 the source, because "a failure never renders as an absence" is a property of
 the code's shape — calling a function that works cannot observe it.
 
+### An alarm must not look like the hundred FYIs
+
+The heartbeat was never broken. It fired four times, delivered correctly, and
+was buried: ~200 notification emails from hello@ in fourteen days, nearly all
+unread. **Delivery was not the problem; distinguishability was.**
+
+A system alert is now a ROW first (`system_alerts`) and an email second. That
+inversion is the point — a row persists until a person acknowledges it, which
+is the one thing email cannot do.
+
+- Prefix `[⚠️ BLANKS SYSTEM]`, which nothing else sends. A test asserts the
+  notification templates never use it, so filtering on it keeps working.
+- **Never threaded.** Fresh Message-ID, never In-Reply-To or References. An
+  alert threaded onto a notification inherits that thread's read state, so
+  opening an unrelated FYI marks the alarm read.
+- **Repeats escalate rather than repeat.** The subject numbers each occurrence
+  (Gmail threads on subject too, so identical subjects would collapse), and
+  after three unacknowledged occurrences severity goes critical.
+- The row is written on EVERY degraded check; only the *email* is
+  rate-limited. An alert that under-counts itself cannot escalate.
+- The banner is **acknowledged, never dismissed**, and records who and when.
+  "I saw this" and "make it go away" must be the same action.
+- `ALERT_WEBHOOK_URL` is an optional generic JSON POST (`text` + `content` —
+  Slack, Discord, ntfy, Pushover all accept it). Best-effort with a timeout:
+  it can never delay or block the email.
+
+### Vendor noise: two mechanisms, and the classifier that was fiction
+
+`ignored_senders` (table) is unioned with `IGNORED_SENDER_EMAILS` (env), so
+adding a sender is a click on the ticket instead of a deploy. Domains match
+subdomains — outreach rotates the local part, not the sending domain.
+
+`lib/vendor/outreach.ts` is the low-confidence "likely vendor outreach"
+signal. It is deliberately **not part of `risk_score`**: risk decides nothing
+and this decides the starting priority, so merging them would revoke that
+guarantee for the signals that must keep it.
+
+Its only action is Low priority, bounded three ways and all three conditions
+IN the UPDATE (`priority = normal`, `assignee_id is null`, only ever to low),
+so a human in the same second wins. Never hides, resolves or deletes.
+
+**The first version passed every hand-written fixture and scored ZERO on all
+25 real vendor emails.** The veto listed topic words ("ingredient",
+"subscription", "flavour") vendors write constantly, and the phrase list was
+a picture of what spam sounds like rather than what it says. Rebuilt from the
+corpus; those excerpts are now the test. **When a classifier's input is real
+text, invented fixtures prove nothing — measure against the database.**
+
+Two short-circuits, both absolute rather than score reductions: customer
+language, and sponsorship/wholesale/ambassador language. An athlete's
+sponsorship pitch is structurally identical to an agency's, and there is a
+live routing rule sending Sponsorship to Michael.
+
 ### PostgREST embeds must name their constraint
 
 Adding a second foreign key to a table we embed breaks every existing embed
