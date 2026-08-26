@@ -211,6 +211,25 @@ const MIGRATIONS: {
         ? null
         : "column `tickets.risk_score` / `messages.reply_to_email`",
   },
+  {
+    file: "0016_alerts_and_vendor_noise.sql",
+    title: "System alert banner and the sender ignore list",
+    probe: async () => {
+      const missing: string[] = [];
+      if (!(await columnExists("system_alerts", "kind"))) {
+        missing.push("table `system_alerts`");
+      }
+      if (!(await columnExists("ignored_senders", "value"))) {
+        missing.push("table `ignored_senders`");
+      }
+      // Probed separately from the tables: without it every inbound ticket
+      // errors at assessment time rather than merely losing the signal.
+      if (!(await columnExists("tickets", "vendor_outreach"))) {
+        missing.push("column `tickets.vendor_outreach`");
+      }
+      return missing.length ? missing.join(", ") : null;
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
 import ShortcutsOverlay from "@/components/ShortcutsOverlay";
 import MailPoller from "@/components/MailPoller";
-import HealthBanner from "@/components/HealthBanner";
+import SystemAlertBanner from "@/components/SystemAlertBanner";
 import SchemaBanner from "@/components/SchemaBanner";
 import { ToastProvider } from "@/components/ui";
 import MobileTopBar from "@/components/MobileTopBar";
@@ -88,7 +88,7 @@ export default async function DashboardLayout({
           />
           {/* Schema first: an unrun migration explains most other symptoms. */}
           <SchemaBanner />
-          <HealthBanner />
+          <SystemAlertBanner />
           <PullToRefresh className="scrollbar-slim scroll-touch flex-1 overflow-y-auto">
             {children}
           </PullToRefresh>

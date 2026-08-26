@@ -14,6 +14,7 @@ import {
   isMetaChannel,
 } from "@/lib/meta/outbound";
 import { describeWindow } from "@/lib/meta/window";
+import { humanizePostgresError } from "@/lib/supabase/errors";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -269,6 +270,33 @@ export async function dismissRiskFlag(ticketId: string): Promise<ActionResult> {
 
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
+  return { ok: true };
+}
+
+/**
+ * "I'm on it" — recorded, not merely hidden.
+ *
+ * Acknowledging stores who and when, so an alert that everyone ignored stays
+ * distinguishable from one somebody handled. It is not a mute either: the
+ * partial unique index only covers UNacknowledged rows, so if the condition
+ * recurs the next heartbeat raises a fresh alert with its own count.
+ */
+export async function acknowledgeSystemAlert(alertId: string): Promise<ActionResult> {
+  const { supabase, userId } = await requireAgent();
+
+  const { error } = await supabase
+    .from("system_alerts")
+    .update({
+      acknowledged_at: new Date().toISOString(),
+      acknowledged_by: userId,
+    })
+    .eq("id", alertId)
+    .is("acknowledged_at", null);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not acknowledge that alert.") };
+  }
+
+  revalidatePath("/inbox", "layout");
   return { ok: true };
 }
 
