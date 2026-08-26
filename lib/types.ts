@@ -57,6 +57,12 @@ export interface Ticket {
   risk_score?: number;
   risk_reasons?: { code: string; label: string; weight: number }[];
   risk_dismissed_at?: string | null;
+  /**
+   * Low-confidence vendor classification. Separate from risk_score on
+   * purpose: risk decides nothing, this decides the starting priority.
+   */
+  vendor_outreach?: boolean;
+  vendor_reasons?: { code: string; label: string; weight: number }[];
   first_response_at: string | null;
   resolved_at: string | null;
   last_message_at: string;

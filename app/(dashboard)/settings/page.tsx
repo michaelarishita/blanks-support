@@ -6,9 +6,11 @@ import QueuedReplies from "@/components/QueuedReplies";
 import SignatureEditor from "@/components/SignatureEditor";
 import CompanyBrandEditor from "@/components/CompanyBrandEditor";
 import CheckMailNow from "@/components/CheckMailNow";
+import IgnoredSenderList from "@/components/IgnoredSenderList";
 import NotificationToggle from "@/components/NotificationToggle";
 import ProfileEditor from "@/components/ProfileEditor";
 import { getCompanySettings } from "@/lib/settings";
+import { readIgnoredSenders } from "@/lib/senders/ignored";
 import {
   getConnectionForAgent,
   getSupportInboxConnection,
@@ -51,6 +53,7 @@ export default async function SettingsPage({
   const company = await getCompanySettings();
   const connection = await getConnectionForAgent(user.id);
   const supportInbox = me?.role === "admin" ? await getSupportInboxConnection() : null;
+  const ignored = await readIgnoredSenders();
 
   const { count: pendingCount } = await supabase
     .from("messages")
@@ -216,6 +219,18 @@ export default async function SettingsPage({
           </div>
         </section>
       )}
+
+      <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+          Ignored senders
+        </h2>
+        <p className="mb-4 mt-1 text-sm text-gray-600">
+          Mail from these never creates a ticket. Add them from the ticket they
+          wrote — &ldquo;Never ticket this sender again&rdquo; under the
+          customer. Removing one takes effect on the next sync.
+        </p>
+        <IgnoredSenderList entries={ignored.entries} error={ignored.error} />
+      </section>
 
       {me?.role === "admin" && (
         <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">

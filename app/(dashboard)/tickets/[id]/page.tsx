@@ -7,6 +7,7 @@ import TicketHeader from "@/components/TicketHeader";
 import TicketSidePanel from "@/components/TicketSidePanel";
 import MobileContextSheet from "@/components/MobileContextSheet";
 import RiskNotice from "@/components/RiskNotice";
+import VendorNotice from "@/components/VendorNotice";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
 import { ShopifyProvider } from "@/components/ShopifyContext";
 import { isMetaChannel, currentReplyWindow } from "@/lib/meta/outbound";
@@ -164,6 +165,8 @@ export default async function TicketPage({
             dismissedAt={t.risk_dismissed_at ?? null}
           />
         )}
+
+        {t.vendor_outreach && <VendorNotice reasons={t.vendor_reasons ?? []} />}
 
         <div className="scrollbar-slim flex-1 overflow-y-auto bg-surface px-6 py-4">
           <Thread

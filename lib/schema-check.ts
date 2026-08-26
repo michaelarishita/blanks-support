@@ -227,6 +227,9 @@ const MIGRATIONS: {
       if (!(await columnExists("tickets", "vendor_outreach"))) {
         missing.push("column `tickets.vendor_outreach`");
       }
+      if (!(await columnExists("messages", "bulk_marker"))) {
+        missing.push("column `messages.bulk_marker`");
+      }
       return missing.length ? missing.join(", ") : null;
     },
   },

@@ -86,6 +86,14 @@ export const AlertTriangleIcon = (p: IconProps) => (
   </Icon>
 );
 
+/** Neutral note, for advisory copy that is not a warning. */
+export const InfoIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M8 7.4v3.4M8 5.3h.01" />
+  </Icon>
+);
+
 export const LockIcon = (p: IconProps) => (
   <Icon {...p}>
     <rect x="3.25" y="7" width="9.5" height="6.5" rx="1.5" />

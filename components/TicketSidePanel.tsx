@@ -24,6 +24,7 @@ import Avatar from "@/components/ui/Avatar";
 import { Input } from "@/components/ui/Field";
 import Tooltip from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
+import IgnoreSender from "@/components/IgnoreSender";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -220,6 +221,9 @@ export default function TicketSidePanel({
           </Link>
         )}
 
+        {customer?.email && (
+          <IgnoreSender ticketId={ticket.id} email={customer.email} />
+        )}
       </Section>
 
       <Section title="Shopify">

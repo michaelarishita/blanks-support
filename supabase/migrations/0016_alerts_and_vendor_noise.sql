@@ -127,6 +127,16 @@ create index if not exists tickets_vendor_outreach_idx
   on tickets (created_at desc)
   where vendor_outreach;
 
+-- The bulk header the guard SAW and let through.
+--
+-- The guard already drops bulk mail unless it arrived via a trusted
+-- forwarder, so a List-Unsubscribe still attached at classification time
+-- means the message came through the support@ group — which is how vendor
+-- blasts reach us. Discarded at parse time before this, so the one place the
+-- fact existed was a local variable.
+alter table messages
+  add column if not exists bulk_marker text;
+
 
 -- ---------- SEED ----------
 --

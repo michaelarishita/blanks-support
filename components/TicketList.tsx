@@ -300,6 +300,17 @@ export default function TicketList({
                     <AlertTriangleIcon size={12} />
                   </span>
                 )}
+                {/* Text, not an icon: this one is a claim about the SENDER
+                    rather than a caution about the customer, and it is the
+                    thing an agent scanning the queue wants to skip past. */}
+                {t.vendor_outreach && (
+                  <span
+                    className="flex-none rounded-full bg-gray-100 px-1.5 text-[10px] font-medium text-tertiary"
+                    title="Likely vendor outreach — started at Low priority"
+                  >
+                    vendor?
+                  </span>
+                )}
               </div>
               <div className="mt-0.5 flex items-center gap-2 text-caption text-secondary">
                 <span className="truncate">{customerName}</span>

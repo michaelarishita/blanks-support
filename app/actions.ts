@@ -15,6 +15,7 @@ import {
 } from "@/lib/meta/outbound";
 import { describeWindow } from "@/lib/meta/window";
 import { humanizePostgresError } from "@/lib/supabase/errors";
+import { normalizeIgnoreValue } from "@/lib/senders/ignored";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -297,6 +298,73 @@ export async function acknowledgeSystemAlert(alertId: string): Promise<ActionRes
   }
 
   revalidatePath("/inbox", "layout");
+  return { ok: true };
+}
+
+/**
+ * "Never ticket this sender again."
+ *
+ * Appends to the ignore list from the ticket the agent is looking at, which
+ * is the only moment anyone actually knows a sender is cold outreach. It was
+ * an env var before, so adding one meant a deploy — and the person who can
+ * identify vendor mail is never the person with access to Vercel.
+ *
+ * It does NOT touch this ticket. Nothing is deleted, resolved or hidden: the
+ * same principle as risk flagging, which is that this system informs and the
+ * human acts. Resolving it is one more click, deliberately.
+ */
+export async function ignoreSenderFromTicket(
+  ticketId: string,
+  scope: "address" | "domain"
+): Promise<ActionResult & { value?: string }> {
+  const { supabase, userId } = await requireAgent();
+
+  const { data: ticket, error: readError } = await supabase
+    .from("tickets")
+    .select("id, customer:customers(email)")
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (readError) {
+    return { error: humanizePostgresError(readError, "Could not read that ticket.") };
+  }
+  const email = (ticket?.customer as { email?: string } | null)?.email ?? null;
+  if (!email) return { error: "That ticket has no email address to ignore." };
+
+  const parsed = normalizeIgnoreValue(scope === "domain" ? `@${email.split("@").pop()}` : email);
+  if (!parsed) return { error: `Couldn't read an address or domain from ${email}.` };
+
+  const { error } = await supabase.from("ignored_senders").insert({
+    value: parsed.value,
+    kind: parsed.kind,
+    reason: `Marked as vendor outreach from ticket ${ticketId}`,
+    added_by: userId,
+    source_ticket_id: ticketId,
+  });
+  // 23505: already listed. That is the desired end state, not a failure.
+  if (error && error.code !== "23505") {
+    return { error: humanizePostgresError(error, "Could not add that sender.") };
+  }
+
+  await logEvent(supabase, ticketId, userId, "sender_ignored", {
+    value: parsed.value,
+    kind: parsed.kind,
+  });
+
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/settings");
+  return { ok: true, value: parsed.value };
+}
+
+/** Removes an entry, so a mistake takes one click to undo. */
+export async function unignoreSender(entryId: string): Promise<ActionResult> {
+  const { supabase } = await requireAgent();
+
+  const { error } = await supabase.from("ignored_senders").delete().eq("id", entryId);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not remove that entry.") };
+  }
+
+  revalidatePath("/settings");
   return { ok: true };
 }
 

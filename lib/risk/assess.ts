@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { lookupByEmail } from "@/lib/shopify/orders";
 import { REPEAT_WINDOW_MS, assessRisk, type RiskFacts } from "./signals";
+import { assessVendorOutreach } from "@/lib/vendor/outreach";
 
 /**
  * Gathers the facts and records the assessment.
@@ -27,7 +28,7 @@ async function run(ticketId: string): Promise<void> {
 
   const { data: ticket } = await admin
     .from("tickets")
-    .select("id, subject, customer_id, created_at, customer:customers(email)")
+    .select("id, subject, customer_id, created_at, priority, customer:customers(email)")
     .eq("id", ticketId)
     .maybeSingle();
   if (!ticket) return;
@@ -39,7 +40,7 @@ async function run(ticketId: string): Promise<void> {
 
   const { data: firstMessage } = await admin
     .from("messages")
-    .select("id, body_text, reply_to_email")
+    .select("id, body_text, reply_to_email, bulk_marker")
     .eq("ticket_id", ticketId)
     .eq("direction", "inbound")
     .order("created_at", { ascending: true })
@@ -108,14 +109,64 @@ async function run(ticketId: string): Promise<void> {
 
   const assessment = assessRisk(facts);
 
+  /**
+   * Vendor outreach, scored separately and stored separately.
+   *
+   * Kept out of risk_score deliberately: risk decides nothing, and this
+   * decides the starting priority. Merging them would silently hand the risk
+   * signals an action they were designed never to have.
+   */
+  const vendor = assessVendorOutreach({
+    subject: facts.subject,
+    bodyText: facts.bodyText,
+    fromEmail: email,
+    bulkMarker: (firstMessage?.bulk_marker as string | undefined) ?? null,
+    shopifyCustomerFound,
+    priorTicketCount,
+  });
+
   await admin
     .from("tickets")
     .update({
       risk_score: assessment.score,
       risk_reasons: assessment.reasons,
       risk_assessed_at: new Date().toISOString(),
+      vendor_outreach: vendor.likely,
+      vendor_reasons: vendor.reasons,
     })
     .eq("id", ticketId);
+
+  /**
+   * The ONLY action any of this takes, and it is bounded three ways.
+   *
+   * - Only downward, and only to Low.
+   * - Only from `normal`, which is the untouched default. A rule that raised
+   *   this to High, or a human who set anything at all, is never overridden —
+   *   the condition is in the UPDATE, so a human clicking Priority in the
+   *   same second wins rather than being quietly reversed.
+   * - Never for a ticket that already has an assignee.
+   *
+   * Deprioritised, not hidden: it still appears in every view, it is still
+   * counted, and nothing is resolved or deleted. The cost of a misfire is a
+   * place in the queue.
+   */
+  if (vendor.likely) {
+    const { error: priorityError } = await admin
+      .from("tickets")
+      .update({ priority: "low" })
+      .eq("id", ticketId)
+      .eq("priority", "normal")
+      .is("assignee_id", null);
+    if (priorityError) {
+      console.warn(`[vendor] could not set Low priority on ${ticketId}:`, priorityError);
+    }
+
+    await admin.from("ticket_events").insert({
+      ticket_id: ticketId,
+      event_type: "vendor_outreach_flagged",
+      detail: { score: vendor.score, reasons: vendor.reasons },
+    });
+  }
 
   if (assessment.flagged) {
     // Recorded in the audit trail as well as on the ticket, so the history

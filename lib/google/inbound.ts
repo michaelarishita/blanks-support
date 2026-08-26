@@ -14,6 +14,7 @@ import {
   type ParsedEmail,
 } from "@/lib/email/parse";
 import { runRulesSafely } from "@/lib/rules/engine";
+import { loadIgnoreList } from "@/lib/senders/ignored";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { assessTicketRisk } from "@/lib/risk/assess";
 import { MAX_FILE_BYTES } from "@/lib/uploads/limits";
@@ -184,6 +185,14 @@ export interface GuardContext {
   ourAddresses: Set<string>;
   ignoredSenders: Set<string>;
   trustedForwarders: Set<string>;
+  /**
+   * Domains nobody should ever get a ticket for, WITHOUT the leading @.
+   *
+   * Separate from ignoredSenders because cold outreach rotates the local part
+   * — six addresses from one sending platform in a fortnight — while the
+   * sending domain stays put. Matching subdomains too, for the same reason.
+   */
+  ignoredDomains?: Set<string>;
 }
 
 /**
@@ -272,6 +281,12 @@ export function evaluateInboundGuards(
   }
   if (ctx.ignoredSenders.has(from)) {
     return { rule: "ignored-sender", detail: from };
+  }
+  const fromDomain = from.slice(from.lastIndexOf("@") + 1);
+  for (const domain of ctx.ignoredDomains ?? []) {
+    if (fromDomain === domain || fromDomain.endsWith(`.${domain}`)) {
+      return { rule: "ignored-sender", detail: `@${domain} (${from})` };
+    }
   }
 
   if (parsed.listReason) {
@@ -572,6 +587,9 @@ async function ingestMessage(
       gmail_message_id: parsed.gmailMessageId,
       rfc822_message_id: parsed.rfc822MessageId,
       reply_to_email: parsed.replyToEmail,
+      // Kept because it is evidence the vendor classifier needs later: a bulk
+      // header that survived the guard means this arrived through the group.
+      bulk_marker: parsed.listReason,
       delivery_status: "stored",
       created_at: parsed.date.toISOString(),
     })
@@ -718,10 +736,21 @@ export async function syncSupportMailbox(
 
   const admin = createAdminClient();
   const ourAddresses = await ourOwnAddresses(connection.account_ref);
-  const ignoredSenders = parseIgnoredSenders(process.env.IGNORED_SENDER_EMAILS);
   const trustedForwarders = parseTrustedForwarders(
     process.env.TRUSTED_FORWARD_ADDRESSES
   );
+  // Env ∪ the ignored_senders table. A failed read of the table falls back to
+  // the env entries and says so — letting vendor noise through is visible and
+  // recoverable, whereas failing the other way would discard customers.
+  const { list: ignoreList, error: ignoreError } = await loadIgnoreList();
+  if (ignoreError) {
+    // Reported, but NOT a message-level failure: holding the cursor back for
+    // this would stall customer mail over a list that only suppresses vendor
+    // noise. The env entries still apply, so nothing gets worse than it was
+    // before the table existed.
+    console.error("[inbound] ignore list unavailable:", ignoreError);
+    result.error = `The sender ignore list could not be read (${ignoreError}) — vendor mail may create tickets until it is.`;
+  }
 
   // Drop ids we've already stored before spending a fetch on each one.
   const uniqueIds = [...new Set(collected.ids)];
@@ -744,7 +773,8 @@ export async function syncSupportMailbox(
 
       const drop = evaluateInboundGuards(parsed, {
         ourAddresses,
-        ignoredSenders,
+        ignoredSenders: ignoreList.addresses,
+        ignoredDomains: ignoreList.domains,
         trustedForwarders,
       });
       if (drop) {
@@ -857,8 +887,8 @@ export async function backfillFromMailbox(options: {
   const stored = new Set((known ?? []).map((m) => m.gmail_message_id));
 
   const ourAddresses = await ourOwnAddresses(connection.account_ref);
-  const ignoredSenders = parseIgnoredSenders(process.env.IGNORED_SENDER_EMAILS);
   const trustedForwarders = parseTrustedForwarders(process.env.TRUSTED_FORWARD_ADDRESSES);
+  const { list: ignoreList } = await loadIgnoreList();
 
   const candidates: BackfillCandidate[] = [];
   let ingested = 0;
@@ -884,7 +914,8 @@ export async function backfillFromMailbox(options: {
     const parsed = parseGmailMessage(await getGmailMessage(accessToken, id));
     const drop = evaluateInboundGuards(parsed, {
       ourAddresses,
-      ignoredSenders,
+      ignoredSenders: ignoreList.addresses,
+      ignoredDomains: ignoreList.domains,
       trustedForwarders,
     });
     const author = drop ? parsed : resolveAuthor(parsed, trustedForwarders);
