@@ -348,9 +348,15 @@ async function readInventory(
     // been run. That is a real missing migration, and it is reported as one
     // by 0017's own entry — but it leaves us unable to check anything else,
     // which is a different sentence from "nothing else is applied".
+    // PGRST202 is "no such function". Almost always that means 0017 has not
+    // been run — but PostgREST discovers functions through the cached schema,
+    // so for a moment after you DO run it the answer is the same. 0017 ends
+    // with `notify pgrst, 'reload schema'` to close that window; the wording
+    // here covers it staying open anyway, because telling someone to run a
+    // migration they just ran is the whole failure this module is repaying.
     const reason =
       error.code === "PGRST202"
-        ? "supabase/migrations/0017_schema_inventory.sql has not been run yet"
+        ? "supabase/migrations/0017_schema_inventory.sql has not been run yet (or was run seconds ago and PostgREST has not reloaded)"
         : `${error.code ?? "error"}: ${error.message}`;
     return { unavailable: reason };
   }

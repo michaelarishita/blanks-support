@@ -92,3 +92,11 @@ $$;
 revoke all on function public.schema_inventory() from public;
 revoke all on function public.schema_inventory() from anon, authenticated;
 grant execute on function public.schema_inventory() to service_role;
+
+-- Everything above reads pg_catalog live, but PostgREST still has to know the
+-- function EXISTS before it can be called — and it learns that from the same
+-- cached schema whose lag this migration is here to stop trusting. Without
+-- this line, for a minute or so after you run the file, the banner would say
+-- "0017 has not been run yet" about the migration you just ran: the exact
+-- false alarm, in the fix for the false alarm.
+notify pgrst, 'reload schema';
