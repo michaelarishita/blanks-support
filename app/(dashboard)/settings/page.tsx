@@ -5,6 +5,8 @@ import GmailConnect from "@/components/GmailConnect";
 import QueuedReplies from "@/components/QueuedReplies";
 import SignatureEditor from "@/components/SignatureEditor";
 import CompanyBrandEditor from "@/components/CompanyBrandEditor";
+import QuarantinedMessages from "@/components/QuarantinedMessages";
+import { readQuarantined } from "@/lib/inbound/quarantine";
 import CheckMailNow from "@/components/CheckMailNow";
 import IgnoredSenderList from "@/components/IgnoredSenderList";
 import NotificationToggle from "@/components/NotificationToggle";
@@ -53,6 +55,11 @@ export default async function SettingsPage({
   const company = await getCompanySettings();
   const connection = await getConnectionForAgent(user.id);
   const supportInbox = me?.role === "admin" ? await getSupportInboxConnection() : null;
+  // Admin-only, like the mailbox block it sits in. The error is carried
+  // through rather than collapsed: "nothing is stuck" and "we could not check"
+  // are opposite claims and only one of them is reassuring.
+  const quarantined =
+    me?.role === "admin" ? await readQuarantined() : { rows: [], error: null };
   const ignored = await readIgnoredSenders();
 
   const { count: pendingCount } = await supabase
@@ -300,6 +307,13 @@ export default async function SettingsPage({
 
           <div className="mt-4 border-t border-gray-200 pt-4">
             <CheckMailNow connected={Boolean(supportInbox)} />
+          </div>
+
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <h3 className="mb-2 text-sm font-semibold text-gray-700">
+              Quarantined mail
+            </h3>
+            <QuarantinedMessages rows={quarantined.rows} error={quarantined.error} />
           </div>
         </section>
       )}

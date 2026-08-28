@@ -340,3 +340,34 @@ export async function updateDisplayName(displayName: string): Promise<ActionResu
   revalidatePath("/inbox");
   return { ok: true };
 }
+
+
+/**
+ * Puts a quarantined message back in the queue.
+ *
+ * The counterpart to giving up on it. Without a way back, quarantine is a
+ * deletion with extra steps — and the whole justification for skipping a
+ * message was that a person could still come and look at it.
+ */
+export async function releaseQuarantinedMessage(
+  gmailMessageId: string
+): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not signed in." };
+
+  const { data: agent } = await supabase
+    .from("agents")
+    .select("id")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const { releaseQuarantined } = await import("@/lib/inbound/quarantine");
+  const result = await releaseQuarantined(gmailMessageId, agent?.id ?? null);
+  if (result.error) return result;
+
+  revalidatePath("/settings");
+  return {};
+}

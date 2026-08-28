@@ -272,6 +272,14 @@ const MIGRATIONS: Migration[] = [
     unprobeableReason:
       "data-only, and a person may reverse it from Settings — nothing distinguishes that from never having run it",
   },
+  {
+    file: "0019_message_quarantine.sql",
+    title: "Inbound quarantine — one bad message can block the channel without it",
+    requires: {
+      tables: ["quarantined_messages"],
+      indexes: ["quarantined_messages_gmail_uniq"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

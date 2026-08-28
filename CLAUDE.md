@@ -235,6 +235,63 @@ drop. Both are failures now.
 the first slice, not three in total — a blocked cursor under-reports its own
 backlog, because it never gets far enough to count it.
 
+### The cursor: two opposite ways to lose mail
+
+A HELD cursor stalls the channel and is loud about it. A cursor MOVED past
+unread mail is silent — the next sync truthfully reports nothing new and the
+mailbox looks quiet. Both were live at once during the outage.
+
+- **Reconnecting the mailbox used to anchor the cursor at "now",
+  unconditionally.** Right on a first connect (otherwise the first sync turns
+  years of archive into tickets), catastrophic on a reconnect. It is what
+  consumed the 89-message backlog: somebody reconnected while trying to fix
+  inbound, and the reconnect did the one thing that made the stuck mail
+  unreachable. Guarded on `!connection.last_history_id` now, the way
+  `renew-watch` always was.
+- **`history.list`'s `historyId` is the MAILBOX's current id, not the end of
+  the page you read.** The old code flattened the feed, sliced to 25, and then
+  advanced to it — so any backlog over one run's worth lost everything past
+  the first 25. Records are kept whole now, with their own `id`, and a
+  truncated run resumes from the last record it actually consumed. A record
+  with no id leaves the cursor alone: standing still is recoverable, skipping
+  ahead is not.
+
+### Quarantine, and the guard that makes it safe rather than dangerous
+
+Holding the cursor for a failed message stays the DEFAULT. Quarantine
+(`lib/inbound/quarantine.ts`, 0019) only decides when to stop retrying, so one
+permanently-unstoreable message cannot take the channel down again.
+
+**A plain attempt counter would be an automatic data-loss machine.** A missing
+column, an RLS change, an expired key, Postgres down — these fail EVERY
+message. A counter alone would quarantine the entire mailbox three runs later,
+one batch at a time, running fastest exactly when something is most broken.
+
+So quarantine needs positive evidence that the system works and this message
+is the exception: **something else in the same run got through the same
+phase.** Fetch and store are judged separately, because a Gmail outage says
+nothing about whether Postgres accepts writes. With no such evidence nothing
+is quarantined and the cursor stays held — blocked and loud is the safe
+failure here; skipped and quiet is not.
+
+- The evidence is `storedMessages`, NOT `created + appended`. Those count
+  TICKETS, and the ticket insert happens before the message insert — so a run
+  where every message failed still had a non-zero `created` and told the guard
+  the database was healthy at the exact moment it was not. A test caught this.
+- Three attempts, across DISTINCT syncs (a message is processed at most once
+  per run), before giving up.
+- Nothing is deleted. The mail is still in Gmail; the row records that we
+  stopped, why, and how many times.
+- A failed read of the quarantine list aborts the run rather than reading as
+  "nothing is quarantined" — putting every poisoned id back in front of the
+  cursor on the one run where the database is already unhappy is how the
+  channel re-blocks itself.
+- It raises a `system_alerts` row, not an email, for the same reason
+  everything else does. Settings → Support mailbox lists them with **Try
+  again**; without a way back, quarantine is a deletion with extra steps.
+- A release resets `attempts` to 0: it is a judgement that the cause is fixed,
+  so it deserves the full three chances again.
+
 ### A migration checker that cries wolf is worse than none
 
 `columnExists` was `return !error`. Every failure — a 5xx, a blip, an expired

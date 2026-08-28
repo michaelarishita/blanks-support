@@ -24,6 +24,10 @@ interface Recorded {
 let recorded: Recorded;
 /** Table name → the error every write to it should return. */
 let insertErrors: Record<string, { code: string; message: string; details?: string; hint?: string }>;
+/** Rows a `select` should return, by table. Defaults to "nothing found". */
+let selectResults: Record<string, unknown>;
+/** gmail_message_id whose message INSERT should fail, whenever it is reached. */
+let poisonId: { current: string | null };
 let nextId = 0;
 
 class FakeQuery {
@@ -54,21 +58,41 @@ class FakeQuery {
     return this;
   }
 
-  private result() {
+  private result(single = false) {
+    if (this.op === "select" && single) {
+      return { data: selectResults[`${this.table}:one`] ?? null, error: null };
+    }
+    if (this.op === "select") {
+      // A list terminal. Arrays only — a single-row fixture belongs under
+      // `<table>:one`, and mixing them is what made this fake lie.
+      const rows = selectResults[this.table];
+      return { data: Array.isArray(rows) ? rows : null, error: null };
+    }
     if (this.op === "insert") {
-      const failure = insertErrors[this.table];
+      const rowsIn = Array.isArray(this.payload) ? this.payload : [this.payload!];
+      const failure =
+        insertErrors[this.table] ??
+        (poisonId.current &&
+        rowsIn.some((r) => r.gmail_message_id === poisonId.current)
+          ? { code: "22021", message: "invalid byte sequence" }
+          : null);
       if (failure) return { data: null, error: failure };
       const rows = Array.isArray(this.payload) ? this.payload : [this.payload!];
       const stored = rows.map((row) => ({ id: `${this.table}-${++nextId}`, ...row }));
       (recorded.tables[this.table] ??= []).push(...stored);
       return { data: stored[0], error: null };
     }
-    if (this.op === "select") return { data: null, error: null };
+    if (this.op === "update") {
+      (recorded.tables[`${this.table}:update`] ??= []).push(
+        this.payload as Record<string, unknown>
+      );
+      return { data: [], error: null };
+    }
     return { data: [], error: null };
   }
 
-  single() { return Promise.resolve(this.result()); }
-  maybeSingle() { return Promise.resolve(this.result()); }
+  single() { return Promise.resolve(this.result(true)); }
+  maybeSingle() { return Promise.resolve(this.result(true)); }
   then(onFulfilled: (value: unknown) => unknown) {
     return Promise.resolve(this.result()).then(onFulfilled);
   }
@@ -88,6 +112,14 @@ vi.mock("@/lib/senders/ignored", () => ({
   loadIgnoreList: async () => ({ list: { addresses: new Set(), domains: new Set() }, error: null }),
 }));
 vi.mock("@/lib/notifications/new-ticket", () => ({ notifyNewTicketSafely: async () => {} }));
+
+const alertsRaised = vi.hoisted(() => ({ current: [] as { kind: string }[] }));
+vi.mock("@/lib/alerts", () => ({
+  raiseSystemAlert: async (input: { kind: string }) => {
+    alertsRaised.current.push(input);
+    return { alert: null, emailed: false, webhooked: false };
+  },
+}));
 vi.mock("@/lib/risk/assess", () => ({ assessTicketRisk: async () => {} }));
 
 const cursorWrites = vi.hoisted(() => ({ current: [] as string[] }));
@@ -108,6 +140,8 @@ const gmailFailures = vi.hoisted(() => ({ current: {} as Record<string, { status
 const historyIds = vi.hoisted(() => ({ current: [] as string[] }));
 /** The mailbox's current history id — NOT the end of any one page. */
 const mailboxHead = vi.hoisted(() => ({ current: "2000" }));
+/** Whether Gmail returns per-record ids. It always does; the off case is a guard. */
+const withRecordIds = vi.hoisted(() => ({ current: true }));
 
 vi.mock("@/lib/google/gmail", async () => {
   const actual = await vi.importActual<typeof import("@/lib/google/gmail")>("@/lib/google/gmail");
@@ -118,7 +152,7 @@ vi.mock("@/lib/google/gmail", async () => {
     // move the cursor to.
     listGmailHistory: async () => ({
       history: historyIds.current.map((id, i) => ({
-        id: `h${1001 + i}`,
+        ...(withRecordIds.current ? { id: `h${1001 + i}` } : {}),
         messagesAdded: [{ message: { id, threadId: `t-${id}` } }],
       })),
       historyId: mailboxHead.current,
@@ -172,10 +206,14 @@ beforeEach(() => {
   nextId = 0;
   recorded = { tables: {}, cursorWrites: [] };
   insertErrors = {};
+  selectResults = {};
+  poisonId = { current: null };
   cursorWrites.current = [];
+  alertsRaised.current = [];
   gmailFailures.current = {};
   historyIds.current = [];
   mailboxHead.current = "2000";
+  withRecordIds.current = true;
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
@@ -327,17 +365,79 @@ describe("the cursor never moves past what was read", () => {
     // Standing still is recoverable — the next run re-reads and the unique
     // index dedupes. Skipping ahead is not recoverable at all.
     historyIds.current = Array.from({ length: 40 }, (_, i) => `m${i}`);
-    const gmail = await import("@/lib/google/gmail");
-    vi.spyOn(gmail, "listGmailHistory").mockResolvedValue({
-      history: historyIds.current.map((id) => ({
-        messagesAdded: [{ message: { id, threadId: `t-${id}` } }],
-      })),
-      historyId: "9999",
-    });
+    mailboxHead.current = "9999";
+    withRecordIds.current = false;
 
     const { syncSupportMailbox } = await import("@/lib/google/inbound");
     await syncSupportMailbox();
 
     expect(cursorWrites.current).toEqual([]);
+  });
+});
+
+
+/**
+ * Quarantine, through the real sync, because the property that matters is not
+ * "the decision function returns true" — it is that the CURSOR then moves.
+ * A quarantine that does not unblock the channel has done nothing.
+ */
+describe("giving up on a message", () => {
+  it("releases the cursor once the poison is quarantined", async () => {
+    // One message that always fails to store and one that always works. The
+    // working one is both the evidence the batch guard needs and the thing
+    // being held hostage.
+    historyIds.current = ["poison", "live-1"];
+    selectResults = { "quarantined_messages:one": { id: "q1", attempts: 2 } };
+    poisonId.current = "poison";
+
+    const { syncSupportMailbox } = await import("@/lib/google/inbound");
+    const result = await syncSupportMailbox();
+
+    // Third attempt, and something else stored in the same run.
+    expect(result.quarantined).toHaveLength(1);
+    expect(result.failures).toEqual([]);
+    expect(cursorWrites.current).toEqual(["2000"]);
+    expect(alertsRaised.current.map((a) => a.kind)).toEqual(["inbound_quarantine"]);
+  });
+
+  it("keeps holding the cursor while the message is under the threshold", async () => {
+    historyIds.current = ["poison", "live-1"];
+    selectResults = { "quarantined_messages:one": { id: "q1", attempts: 0 } };
+    poisonId.current = "poison";
+
+    const { syncSupportMailbox } = await import("@/lib/google/inbound");
+    const result = await syncSupportMailbox();
+
+    expect(result.quarantined).toEqual([]);
+    expect(result.failures).toHaveLength(1);
+    expect(cursorWrites.current).toEqual([]);
+    expect(alertsRaised.current).toEqual([]);
+  });
+
+  it("will not quarantine when EVERY message failed, however many attempts", async () => {
+    // The guard that makes this safe. A missing column fails all of them, and
+    // that is the moment discarding mail is least excusable.
+    historyIds.current = ["m1", "m2"];
+    selectResults = { "quarantined_messages:one": { id: "q1", attempts: 99 } };
+    insertErrors = { messages: { code: "42703", message: "column does not exist" } };
+
+    const { syncSupportMailbox } = await import("@/lib/google/inbound");
+    const result = await syncSupportMailbox();
+
+    expect(result.quarantined).toEqual([]);
+    expect(result.failures).toHaveLength(2);
+    expect(cursorWrites.current).toEqual([]);
+  });
+
+  it("steps over a message already quarantined instead of retrying it", async () => {
+    historyIds.current = ["old-poison"];
+    selectResults = { quarantined_messages: [{ gmail_message_id: "old-poison" }] };
+
+    const { syncSupportMailbox } = await import("@/lib/google/inbound");
+    const result = await syncSupportMailbox();
+
+    expect(result.skipped.quarantined).toBe(1);
+    expect(result.checked).toBe(0);
+    expect(cursorWrites.current).toEqual(["2000"]);
   });
 });

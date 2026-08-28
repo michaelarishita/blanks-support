@@ -184,6 +184,9 @@ export async function backfillAttachments({
         skipped: {},
         ruleHits: {},
         failures: [],
+        failedMessages: [],
+        quarantined: [],
+        storedMessages: 0,
       };
       const before = await countAttachments(message.id as string);
       await storeInboundAttachments(

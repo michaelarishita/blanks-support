@@ -22,6 +22,14 @@ import { MAX_FILE_BYTES } from "@/lib/uploads/limits";
 import { sniffFileType } from "@/lib/uploads/sniff";
 import { stripMetadata } from "@/lib/uploads/strip";
 import { storageContentType } from "@/lib/attachments";
+import {
+  alertOnQuarantine,
+  loadQuarantinedIds,
+  quarantineMessage,
+  recordAttempt,
+  shouldQuarantine,
+  type FailurePhase,
+} from "@/lib/inbound/quarantine";
 
 // Pulls new mail from the shared support mailbox and turns it into tickets.
 // Driven by two triggers that share this one implementation: the Pub/Sub
@@ -47,6 +55,22 @@ export interface SyncResult {
    * how a schema error reads as "nothing new today".
    */
   failures: string[];
+  /**
+   * The same failures, structured, because the quarantine decision needs the
+   * message id and the phase and a prose line cannot be asked for either.
+   */
+  failedMessages: { id: string; phase: FailurePhase; error: string }[];
+  /** Messages given up on this run, so the cursor could move past them. */
+  quarantined: string[];
+  /**
+   * Message rows actually written this run.
+   *
+   * Deliberately NOT `created + appended`: those count TICKETS, and the ticket
+   * insert happens before the message insert. A run where every message insert
+   * failed still had a non-zero `created`, which told the quarantine guard the
+   * database was healthy at the exact moment it was not.
+   */
+  storedMessages: number;
   error?: string;
 }
 
@@ -56,7 +80,17 @@ const SENDER_MATCH_WINDOW_DAYS = 7;
 const DEFAULT_MAX_MESSAGES = 25;
 
 function emptyResult(): SyncResult {
-  return { checked: 0, created: 0, appended: 0, skipped: {}, ruleHits: {}, failures: [] };
+  return {
+    checked: 0,
+    created: 0,
+    appended: 0,
+    skipped: {},
+    ruleHits: {},
+    failures: [],
+    failedMessages: [],
+    quarantined: [],
+    storedMessages: 0,
+  };
 }
 
 function countSkip(result: SyncResult, reason: string) {
@@ -131,12 +165,13 @@ function describePostgresFailure(
 /** Records a failure in the result AND in the log, with its full cause. */
 function countFailure(
   result: SyncResult,
-  phase: "fetch" | "store",
+  phase: FailurePhase,
   id: string,
   e: unknown
 ) {
   const described = describeFailure(phase, id, e);
   result.failures.push(described);
+  result.failedMessages.push({ id, phase, error: described });
   console.error(`[inbound] ${described}`);
 }
 
@@ -700,6 +735,10 @@ async function ingestMessage(
     return null;
   }
 
+  // The evidence the quarantine guard reads: a row went in, so the database
+  // accepts writes and the schema is right.
+  result.storedMessages++;
+
   if (parsed.attachments.length) {
     await storeInboundAttachments(accessToken, parsed, ticketId, inserted.id, result);
   }
@@ -822,6 +861,53 @@ async function collectNewMessageIds(
   };
 }
 
+/**
+ * Decides which of this run's failures we stop retrying, and removes them from
+ * `failures` so they no longer hold the cursor.
+ *
+ * Runs BEFORE the cursor decision, which is the whole ordering that matters:
+ * a message quarantined here is one the cursor is now allowed to move past.
+ */
+async function applyQuarantine(
+  result: SyncResult,
+  evidence: { fetched: number; stored: number }
+): Promise<void> {
+  if (!result.failedMessages.length) return;
+
+  const givenUp: { id: string; error: string }[] = [];
+
+  for (const failure of result.failedMessages) {
+    if (failure.id === "?") continue; // no id to key on; retried as normal
+    const attempts = await recordAttempt(failure.id, failure.phase, failure.error);
+    // A quarantine bookkeeping failure must never quarantine anything. The
+    // message keeps holding the cursor, which is the conservative outcome.
+    if (attempts === null) continue;
+
+    const verdict = shouldQuarantine({ attempts, phase: failure.phase, evidence });
+    if (!verdict.quarantine) {
+      console.info(`[inbound] ${failure.id} still retrying — ${verdict.reason}`);
+      continue;
+    }
+    if (await quarantineMessage(failure.id, verdict.reason)) {
+      givenUp.push({ id: failure.id, error: failure.error });
+    }
+  }
+
+  if (!givenUp.length) return;
+
+  const abandoned = new Set(givenUp.map((g) => g.id));
+  result.quarantined = [...abandoned];
+  // Dropped from `failures` so the cursor may advance past them; kept as a
+  // named skip so the run still reports that mail was discarded rather than
+  // absent.
+  result.failures = result.failedMessages
+    .filter((f) => !abandoned.has(f.id))
+    .map((f) => f.error);
+  result.skipped.quarantined = (result.skipped.quarantined ?? 0) + abandoned.size;
+
+  await alertOnQuarantine(givenUp);
+}
+
 export async function syncSupportMailbox(
   options: { max?: number } = {}
 ): Promise<SyncResult> {
@@ -886,7 +972,27 @@ export async function syncSupportMailbox(
     if (duplicates > 0) result.skipped.duplicate = duplicates;
   }
 
+  // Messages we have already given up on. A failed lookup returns null and is
+  // treated as "assume everything is quarantined" for this run rather than
+  // "nothing is" — putting every poisoned id back in front of the cursor on
+  // the one run where the database is already unhappy is how the channel
+  // re-blocks itself.
+  const quarantined = await loadQuarantinedIds(pending);
+  if (quarantined === null) {
+    result.error =
+      "The quarantine list could not be read, so this run was skipped rather than risk re-blocking on messages already given up on.";
+    return result;
+  }
+
+  // Evidence for the quarantine guard: what this run proved about the SYSTEM,
+  // as opposed to about any one message.
+  let fetched = 0;
+
   for (const id of pending) {
+    if (quarantined.has(id)) {
+      countSkip(result, "quarantined");
+      continue;
+    }
     result.checked++;
 
     // Fetch and store are separate phases with separate failure meanings, and
@@ -907,6 +1013,7 @@ export async function syncSupportMailbox(
       countFailure(result, "fetch", id, e);
       continue;
     }
+    fetched++;
 
     try {
       const parsed = parseGmailMessage(raw);
@@ -937,6 +1044,8 @@ export async function syncSupportMailbox(
       countFailure(result, "store", id, e);
     }
   }
+
+  await applyQuarantine(result, { fetched, stored: result.storedMessages });
 
   // Advance the cursor only after the batch is processed, so a crash mid-run
   // re-reads those messages rather than losing them. Re-reading is safe — the
