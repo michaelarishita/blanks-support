@@ -24,6 +24,33 @@ describe("cursor safety", () => {
   });
 });
 
+describe("reconnecting the mailbox", () => {
+  /**
+   * Structural, because the failure is an ABSENCE — a missing guard — and the
+   * cost is invisible: reconnecting the support mailbox used to anchor the
+   * cursor at "now" unconditionally, throwing away every message received
+   * since the last sync. The next sync then truthfully reported nothing new.
+   *
+   * It is what consumed the 89-message backlog during the inbound outage:
+   * someone reconnected the mailbox while trying to fix it, and the reconnect
+   * did the one thing that made the stuck mail unreachable.
+   */
+  const callback = readFileSync(
+    new URL("../app/api/google/callback/route.ts", import.meta.url),
+    "utf8"
+  );
+
+  it("anchors the cursor only when there isn't one", () => {
+    expect(callback).toContain("!connection.last_history_id");
+  });
+
+  it("does not anchor unconditionally", () => {
+    expect(callback).not.toContain(
+      "if (connection) await setLastHistoryId(connection.id, profile.historyId)"
+    );
+  });
+});
+
 describe("backfillFromMailbox", () => {
   /**
    * A backfill exists because the sync is cursor-driven: mail the broken

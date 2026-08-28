@@ -114,13 +114,25 @@ export async function GET(request: NextRequest) {
     });
 
     if (state.s) {
-      // Anchor incremental sync at "now". Without this the first sync has no
-      // cursor and would have to scan the whole mailbox, turning years of
-      // archived mail into tickets.
+      // Anchor incremental sync at "now" — but ONLY on a first connect.
+      //
+      // Without an anchor the first sync has no cursor and would scan the
+      // whole mailbox, turning years of archived mail into tickets. With an
+      // UNCONDITIONAL anchor, though, reconnecting the mailbox throws away
+      // every message received since the last sync: the cursor jumps to the
+      // head and the next sync truthfully reports nothing new.
+      //
+      // That is not hypothetical. It is what consumed the 89-message backlog
+      // during the inbound outage — someone reconnected the mailbox while
+      // trying to fix it, and the reconnect did the one thing guaranteed to
+      // make the stuck mail unreachable. `renew-watch` already had this guard;
+      // this path did not.
       try {
-        const profile = await getGmailProfile(tokens.access_token);
         const connection = await getSupportInboxConnection();
-        if (connection) await setLastHistoryId(connection.id, profile.historyId);
+        if (connection && !connection.last_history_id) {
+          const profile = await getGmailProfile(tokens.access_token);
+          await setLastHistoryId(connection.id, profile.historyId);
+        }
       } catch (e) {
         // Non-fatal — the first sync falls back to a recent-messages scan —
         // but log it, because a silent failure here shows up much later as

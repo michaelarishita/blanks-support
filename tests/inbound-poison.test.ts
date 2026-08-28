@@ -106,14 +106,22 @@ vi.mock("@/lib/google/tokens", () => ({
 /** Ids the fake mailbox will refuse, and how. */
 const gmailFailures = vi.hoisted(() => ({ current: {} as Record<string, { status: number; reason: string }> }));
 const historyIds = vi.hoisted(() => ({ current: [] as string[] }));
+/** The mailbox's current history id — NOT the end of any one page. */
+const mailboxHead = vi.hoisted(() => ({ current: "2000" }));
 
 vi.mock("@/lib/google/gmail", async () => {
   const actual = await vi.importActual<typeof import("@/lib/google/gmail")>("@/lib/google/gmail");
   return {
     ...actual,
+    // One record per message, each with its own id, which is how Gmail
+    // actually answers. The record id is the only thing a truncated run may
+    // move the cursor to.
     listGmailHistory: async () => ({
-      history: historyIds.current.map((id) => ({ messagesAdded: [{ message: { id, threadId: `t-${id}` } }] })),
-      historyId: "2000",
+      history: historyIds.current.map((id, i) => ({
+        id: `h${1001 + i}`,
+        messagesAdded: [{ message: { id, threadId: `t-${id}` } }],
+      })),
+      historyId: mailboxHead.current,
     }),
     listGmailMessages: async () => ({ messages: [] }),
     getGmailProfile: async () => ({ historyId: "2000" }),
@@ -167,6 +175,7 @@ beforeEach(() => {
   cursorWrites.current = [];
   gmailFailures.current = {};
   historyIds.current = [];
+  mailboxHead.current = "2000";
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
@@ -273,6 +282,62 @@ describe("what a failure says", () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0]).toContain("42501");
     expect(result.skipped["could not create ticket"]).toBeUndefined();
+    expect(cursorWrites.current).toEqual([]);
+  });
+});
+
+
+/**
+ * The second way inbound loses mail, and the more total one: the cursor is
+ * moved somewhere nothing has been read.
+ *
+ * A held cursor stalls the channel and is loud about it. A cursor moved PAST
+ * unread mail is silent — the next sync truthfully reports nothing new, and
+ * the mailbox looks quiet. Both of these were live at once during the outage.
+ */
+describe("the cursor never moves past what was read", () => {
+  it("stops at the last record it consumed when a run is capped", async () => {
+    // 40 messages, 25 per run. The old code sliced the ids to 25 and then
+    // advanced to page.historyId — the MAILBOX head — so 15 messages were
+    // skipped for good.
+    historyIds.current = Array.from({ length: 40 }, (_, i) => `m${i}`);
+    mailboxHead.current = "9999";
+
+    const { syncSupportMailbox } = await import("@/lib/google/inbound");
+    await syncSupportMailbox();
+
+    expect(cursorWrites.current).toHaveLength(1);
+    expect(cursorWrites.current[0]).not.toBe("9999");
+    // The 25th message is in record h1025; that is where the next run resumes.
+    expect(cursorWrites.current[0]).toBe("h1025");
+    expect(recorded.tables.tickets).toHaveLength(25);
+  });
+
+  it("takes the mailbox head only when the whole feed was consumed", async () => {
+    historyIds.current = ["m0", "m1", "m2"];
+    mailboxHead.current = "9999";
+
+    const { syncSupportMailbox } = await import("@/lib/google/inbound");
+    await syncSupportMailbox();
+
+    expect(cursorWrites.current).toEqual(["9999"]);
+  });
+
+  it("leaves the cursor alone rather than guessing when records carry no id", async () => {
+    // Standing still is recoverable — the next run re-reads and the unique
+    // index dedupes. Skipping ahead is not recoverable at all.
+    historyIds.current = Array.from({ length: 40 }, (_, i) => `m${i}`);
+    const gmail = await import("@/lib/google/gmail");
+    vi.spyOn(gmail, "listGmailHistory").mockResolvedValue({
+      history: historyIds.current.map((id) => ({
+        messagesAdded: [{ message: { id, threadId: `t-${id}` } }],
+      })),
+      historyId: "9999",
+    });
+
+    const { syncSupportMailbox } = await import("@/lib/google/inbound");
+    await syncSupportMailbox();
+
     expect(cursorWrites.current).toEqual([]);
   });
 });

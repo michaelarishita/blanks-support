@@ -749,22 +749,56 @@ async function collectNewMessageIds(
 ): Promise<{ ids: string[]; historyId: string | null; usedFallback: boolean }> {
   if (lastHistoryId) {
     try {
-      const ids: string[] = [];
+      // Collected per RECORD, not flattened, because the cursor may only ever
+      // be moved to a record boundary.
+      //
+      // The old code flattened, sliced to `max`, and advanced the cursor to
+      // `page.historyId` — which is the MAILBOX's current history id, not the
+      // end of what was read. A backlog bigger than one run therefore lost
+      // everything past the first 25 ids: the cursor jumped to the head, and
+      // the next sync correctly reported nothing new. Silent, total, and
+      // invisible in the tickets table.
+      const records: { historyId: string | null; ids: string[] }[] = [];
       let pageToken: string | undefined;
-      let historyId: string | null = null;
+      let mailboxHead: string | null = null;
+      let collected = 0;
 
       do {
         const page = await listGmailHistory(accessToken, lastHistoryId, pageToken);
         for (const entry of page.history ?? []) {
-          for (const added of entry.messagesAdded ?? []) {
-            ids.push(added.message.id);
-          }
+          const ids = (entry.messagesAdded ?? []).map((added) => added.message.id);
+          if (!ids.length) continue;
+          records.push({ historyId: entry.id ?? null, ids });
+          collected += ids.length;
         }
-        historyId = page.historyId ?? historyId;
+        mailboxHead = page.historyId ?? mailboxHead;
         pageToken = page.nextPageToken;
-      } while (pageToken && ids.length < max);
+      } while (pageToken && collected < max);
 
-      return { ids: ids.slice(0, max), historyId, usedFallback: false };
+      const ids: string[] = [];
+      let lastConsumed: string | null = null;
+      let truncated = Boolean(pageToken);
+
+      for (const record of records) {
+        // Whole records only. Splitting one would leave no id to resume from,
+        // and `max` is a soft cap on work per run — not a correctness bound.
+        if (ids.length >= max) {
+          truncated = true;
+          break;
+        }
+        ids.push(...record.ids);
+        lastConsumed = record.historyId ?? lastConsumed;
+      }
+
+      return {
+        ids,
+        // Only claim the mailbox head when the whole feed was consumed. A
+        // truncated run resumes from the last record it actually read, and a
+        // record with no id at all leaves the cursor where it was — standing
+        // still is recoverable, skipping ahead is not.
+        historyId: truncated ? lastConsumed : mailboxHead ?? lastConsumed,
+        usedFallback: false,
+      };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       // A cursor older than Gmail's history window (roughly a week) 404s.

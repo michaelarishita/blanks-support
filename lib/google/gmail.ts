@@ -91,7 +91,22 @@ export interface GmailMessage {
 }
 
 export interface GmailHistoryPage {
-  history?: { messagesAdded?: { message: { id: string; threadId: string } }[] }[];
+  /**
+   * Each record carries its OWN `id`. That is the only safe thing to move a
+   * cursor to when a run does not consume the whole feed — see
+   * `collectNewMessageIds`.
+   */
+  history?: {
+    id?: string;
+    messagesAdded?: { message: { id: string; threadId: string } }[];
+  }[];
+  /**
+   * The MAILBOX's current history id, not this page's end.
+   *
+   * Advancing the cursor to it is only correct once every record has been
+   * consumed. Doing it after a truncated run skips everything that was not
+   * read — silently, because the next call then reports nothing new.
+   */
   historyId?: string;
   nextPageToken?: string;
 }
