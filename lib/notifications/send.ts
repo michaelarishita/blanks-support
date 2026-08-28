@@ -155,7 +155,7 @@ export async function sendAssignmentNotification(
   const { data: ticket, error: ticketError } = await admin
     .from("tickets")
     .select(
-      "id, number, subject, priority, channel, topic, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
+      "id, number, subject, priority, channel, topic, assignee_id, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
     )
     .eq("id", ticketId)
     .maybeSingle();
@@ -307,7 +307,7 @@ export async function sendNewTicketNotification(
   const { data: ticket, error: ticketError } = await admin
     .from("tickets")
     .select(
-      "id, number, subject, priority, channel, topic, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
+      "id, number, subject, priority, channel, topic, assignee_id, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
     )
     .eq("id", ticketId)
     .maybeSingle();
@@ -316,7 +316,9 @@ export async function sendNewTicketNotification(
 
   const { data: candidates, error: agentError } = await admin
     .from("agents")
-    .select("id, email, name, display_name, is_active, watch_new_tickets");
+    .select(
+      "id, email, name, display_name, is_active, watch_new_tickets, notifications_enabled"
+    );
   if (agentError) {
     // A missing column here means 0014 has not been run. Reported rather than
     // swallowed: silently mailing nobody is the failure mode this whole
@@ -337,6 +339,13 @@ export async function sendNewTicketNotification(
   const selection = selectNewTicketRecipients({
     candidates: (candidates ?? []) as WatcherCandidate[],
     alreadyNotified,
+    ticket: {
+      priority: ticket.priority as TicketPriority,
+      // Read here rather than passed in, because the rules have already run
+      // by this point: a ticket a routing rule just claimed is assigned, and
+      // its owner is getting the assignment email instead.
+      assigned: Boolean(ticket.assignee_id),
+    },
   });
   result.skipped = selection.excluded.map((e) => ({
     agentId: e.id,
@@ -508,7 +517,7 @@ async function sendFollowUp(
   const { data: ticket, error: ticketError } = await admin
     .from("tickets")
     .select(
-      "id, number, subject, priority, channel, topic, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
+      "id, number, subject, priority, channel, topic, assignee_id, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
     )
     .eq("id", ticketId)
     .maybeSingle();

@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  GmailApiError,
   getGmailAttachment,
   getGmailMessage,
   getGmailProfile,
@@ -60,6 +61,83 @@ function emptyResult(): SyncResult {
 
 function countSkip(result: SyncResult, reason: string) {
   result.skipped[reason] = (result.skipped[reason] ?? 0) + 1;
+}
+
+/**
+ * A message id Gmail's history stream reported that Gmail will never serve.
+ *
+ * The overwhelming source is our OWN outbound: sending through the API
+ * creates a draft, the draft gets an id, `messagesAdded` records it, and the
+ * draft is destroyed the instant it becomes a sent message. The id stays in
+ * the history page forever, and `messages.get` answers 404 for it forever.
+ * Customer mail that was deleted before we read it lands here too.
+ *
+ * This is TERMINAL, and telling it apart from a transient failure is the
+ * whole point: a 404 held the cursor back, so every message behind it — 25 to
+ * a run, the same 25 every run — was never read. Retrying cannot make a
+ * message that does not exist appear, so retrying forever costs the channel.
+ */
+function isGoneFromMailbox(e: unknown): boolean {
+  return e instanceof GmailApiError && e.status === 404;
+}
+
+/** Shape of a PostgREST error, which carries far more than `.message`. */
+interface PostgresErrorish {
+  message: string;
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
+}
+
+/**
+ * Everything known about why one message could not be taken in.
+ *
+ * The old form was the bare `e.message`, which is how "3 failed to store"
+ * reached the alert banner describing three Gmail *fetch* 404s. A failure
+ * report has to name the phase (we did not even reach the database), the
+ * message (so it can be looked at), and the real cause (a Postgres code, not
+ * a prose summary of one).
+ */
+function describeFailure(phase: "fetch" | "store", id: string, e: unknown): string {
+  if (e instanceof GmailApiError) {
+    return `[${phase} ${id}] Gmail ${e.status}${e.reason ? ` (${e.reason})` : ""}: ${e.message}`;
+  }
+  const pg = e as Partial<PostgresErrorish>;
+  if (pg && typeof pg === "object" && typeof pg.message === "string" && pg.code) {
+    return describePostgresFailure(phase, id, pg as PostgresErrorish);
+  }
+  return `[${phase} ${id}] ${e instanceof Error ? e.message : String(e)}`;
+}
+
+/**
+ * A Postgres failure, with the parts that identify it.
+ *
+ * `code` is the one field worth acting on — 42703 is a missing column and
+ * means a migration was not run, 23505 is a duplicate, 42501 is RLS. Reading
+ * only `.message` throws away the difference between "run migration 0016" and
+ * "this is fine, we already have it".
+ */
+function describePostgresFailure(
+  phase: "fetch" | "store",
+  id: string,
+  e: PostgresErrorish
+): string {
+  const parts = [`[${phase} ${id}] Postgres ${e.code}: ${e.message}`];
+  if (e.details) parts.push(`details: ${e.details}`);
+  if (e.hint) parts.push(`hint: ${e.hint}`);
+  return parts.join(" — ");
+}
+
+/** Records a failure in the result AND in the log, with its full cause. */
+function countFailure(
+  result: SyncResult,
+  phase: "fetch" | "store",
+  id: string,
+  e: unknown
+) {
+  const described = describeFailure(phase, id, e);
+  result.failures.push(described);
+  console.error(`[inbound] ${described}`);
 }
 
 /** Subject with the routing token and reply prefixes removed. */
@@ -553,7 +631,15 @@ async function ingestMessage(
       .select("id")
       .single();
     if (error || !ticket) {
-      countSkip(result, "could not create ticket");
+      // The same swallow as the message insert below, one level up: a failed
+      // ticket INSERT is the system broken, not a guard doing its job. It was
+      // counted as a skip, so a missing column here read as "nothing new".
+      countFailure(
+        result,
+        "store",
+        parsed.gmailMessageId ?? "?",
+        error ?? new Error("ticket insert returned no row")
+      );
       return null;
     }
 
@@ -605,7 +691,7 @@ async function ingestMessage(
     // NOT a skip. This is the swallow that let a schema error read as an
     // empty mailbox: counted quietly alongside deliberate drops, cursor
     // advanced, message gone for good.
-    result.failures.push(`could not store message: ${insertError.message}`);
+    countFailure(result, "store", parsed.gmailMessageId ?? "?", insertError);
     return null;
   }
 
@@ -768,8 +854,28 @@ export async function syncSupportMailbox(
 
   for (const id of pending) {
     result.checked++;
+
+    // Fetch and store are separate phases with separate failure meanings, and
+    // one try around both is what let a Gmail 404 be reported as a store
+    // failure. Splitting them is not tidiness: the two need opposite cursor
+    // behaviour.
+    let raw;
     try {
-      const parsed = parseGmailMessage(await getGmailMessage(accessToken, id));
+      raw = await getGmailMessage(accessToken, id);
+    } catch (e) {
+      if (isGoneFromMailbox(e)) {
+        // Counted as a skip, because that is what it is: the message was
+        // considered and cannot be read. It must NOT hold the cursor.
+        countSkip(result, "no longer in the mailbox");
+        console.info(`[inbound] ${id} is gone from the mailbox (Gmail 404) — skipped permanently`);
+        continue;
+      }
+      countFailure(result, "fetch", id, e);
+      continue;
+    }
+
+    try {
+      const parsed = parseGmailMessage(raw);
 
       const drop = evaluateInboundGuards(parsed, {
         ourAddresses,
@@ -794,7 +900,7 @@ export async function syncSupportMailbox(
         result
       );
     } catch (e) {
-      result.failures.push(e instanceof Error ? e.message : "fetch failed");
+      countFailure(result, "store", id, e);
     }
   }
 
@@ -812,7 +918,7 @@ export async function syncSupportMailbox(
   }
 
   if (result.failures.length) {
-    result.error = `${result.failures.length} message(s) could not be stored — the sync cursor was held back so they are retried. First: ${result.failures[0]}`;
+    result.error = `${result.failures.length} message(s) failed and are RETRYABLE — the sync cursor was held back so they are tried again, which also holds every message behind them. First: ${result.failures[0]}`;
   }
 
   return result;
@@ -911,7 +1017,22 @@ export async function backfillFromMailbox(options: {
       continue;
     }
 
-    const parsed = parseGmailMessage(await getGmailMessage(accessToken, id));
+    // Unguarded, this threw out of the whole backfill on the first message
+    // that had been deleted since — and a backfill re-reads OLD mail, which is
+    // where deleted messages live. One 404 abandoned every id after it.
+    let raw;
+    try {
+      raw = await getGmailMessage(accessToken, id);
+    } catch (e) {
+      if (isGoneFromMailbox(e)) {
+        countSkip(result, "no longer in the mailbox");
+        continue;
+      }
+      countFailure(result, "fetch", id, e);
+      continue;
+    }
+
+    const parsed = parseGmailMessage(raw);
     const drop = evaluateInboundGuards(parsed, {
       ourAddresses,
       ignoredSenders: ignoreList.addresses,
@@ -936,7 +1057,7 @@ export async function backfillFromMailbox(options: {
       await ingestMessage(accessToken, author, result);
       ingested++;
     } catch (e) {
-      result.failures.push(e instanceof Error ? e.message : "ingest failed");
+      countFailure(result, "store", id, e);
     }
   }
 

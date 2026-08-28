@@ -9,8 +9,18 @@ describe("cursor safety", () => {
     expect(src).toContain("if (collected.historyId && !result.failures.length)");
   });
   it("reports a store failure as an error, not a skip", () => {
-    expect(src).toContain("result.failures.push(`could not store message");
+    // Behaviour is covered in tests/inbound-poison.test.ts; this stays
+    // structural because the failing shape is an ABSENCE — a countSkip where
+    // a failure belongs, which a passing sync cannot show you.
+    expect(src).not.toContain('countSkip(result, "could not create ticket")');
     expect(src).not.toContain('countSkip(result, `could not store message');
+  });
+
+  it("holds the cursor only for failures a retry could fix", () => {
+    // A Gmail 404 is terminal — the message does not exist. Counting it as a
+    // failure held the cursor forever and took inbound down for 31 hours.
+    expect(src).toContain("isGoneFromMailbox");
+    expect(src).toContain('countSkip(result, "no longer in the mailbox")');
   });
 });
 

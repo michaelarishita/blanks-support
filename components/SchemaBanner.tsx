@@ -31,7 +31,34 @@ export default async function SchemaBanner() {
     );
   }
 
-  if (!status.missing.length) return null;
+  if (!status.missing.length) {
+    // "We could not check" is a different sentence from "it has not been run",
+    // and printing the second when we only know the first is what sent Michael
+    // chasing three migrations that were already applied. Amber, no ordered
+    // list of files to run, and it says what failed.
+    if (status.unverified.length) {
+      return (
+        <div
+          role="status"
+          className="flex items-start gap-2.5 border-b border-warning-border bg-warning-bg px-5 py-2.5"
+        >
+          <span className="mt-0.5 flex-none text-warning-text">
+            <AlertTriangleIcon size={15} />
+          </span>
+          <p className="text-caption text-warning-text">
+            <span className="font-semibold">
+              {status.unverified.length}{" "}
+              {status.unverified.length === 1 ? "migration" : "migrations"}{" "}
+              couldn&apos;t be checked.
+            </span>{" "}
+            This is not a report that anything is missing — only that the check
+            could not run. {status.unverified[0].unverified}
+          </p>
+        </div>
+      );
+    }
+    return null;
+  }
 
   return (
     <div
@@ -74,6 +101,14 @@ export default async function SchemaBanner() {
             Supabase SQL Editor. Every migration is written to be safe to
             re-run.
           </p>
+
+          {status.unverified.length > 0 && (
+            <p className="mt-2 opacity-70">
+              {status.unverified.length} other{" "}
+              {status.unverified.length === 1 ? "migration" : "migrations"}{" "}
+              couldn&apos;t be checked — that is not a claim they are missing.
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -81,7 +81,9 @@ function WatchNewTickets({ initial }: { initial: boolean }) {
         return;
       }
       toast(
-        next ? "You'll hear about every new ticket" : "New-ticket emails off",
+        next
+          ? "You'll hear about every new ticket"
+          : "Back to unassigned High and Urgent only",
         { tone: "success" }
       );
       router.refresh();
@@ -100,8 +102,10 @@ function WatchNewTickets({ initial }: { initial: boolean }) {
       <span className="text-body text-secondary">
         Email me about every new ticket
         <span className="mt-0.5 block text-caption text-tertiary">
-          One email per ticket, whoever it ends up with. If a rule assigns it
-          to you, you get the assignment email instead — never both.
+          Off, you still hear about a new High or Urgent ticket that nobody has
+          picked up — the one nobody is acting on yet. On, you get one email per
+          ticket at any priority, whoever it ends up with. Either way, if a rule
+          assigns it to you, you get the assignment email instead — never both.
         </span>
       </span>
     </label>

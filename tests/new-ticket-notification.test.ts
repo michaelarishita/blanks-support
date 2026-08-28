@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   newTicketSubject,
   selectNewTicketRecipients,
+  type NewTicketFacts,
   type WatcherCandidate,
 } from "@/lib/notifications/watchers";
 import { NOTIFICATION_HEADERS } from "@/lib/notifications/send";
@@ -15,14 +16,21 @@ const watcher = (over: Partial<WatcherCandidate> = {}): WatcherCandidate => ({
   display_name: null,
   is_active: true,
   watch_new_tickets: true,
+  notifications_enabled: true,
   ...over,
 });
+
+/** The everyday ticket: Normal priority, nobody assigned. */
+const NORMAL: NewTicketFacts = { priority: "normal", assigned: false };
+/** The one that still earns a mail: nobody owns it and it cannot wait. */
+const URGENT_UNOWNED: NewTicketFacts = { priority: "urgent", assigned: false };
 
 describe("selectNewTicketRecipients", () => {
   it("emails everyone who opted in", () => {
     const selection = selectNewTicketRecipients({
       candidates: [watcher({ id: "a1" }), watcher({ id: "a2" })],
       alreadyNotified: new Set(),
+      ticket: NORMAL,
     });
     expect(selection.recipients.map((r) => r.id)).toEqual(["a1", "a2"]);
   });
@@ -31,15 +39,17 @@ describe("selectNewTicketRecipients", () => {
     const selection = selectNewTicketRecipients({
       candidates: [watcher({ id: "a1", watch_new_tickets: false })],
       alreadyNotified: new Set(),
+      ticket: NORMAL,
     });
     expect(selection.recipients).toEqual([]);
-    expect(selection.excluded[0]).toMatchObject({ reason: "not watching" });
+    expect(selection.excluded[0].reason).toContain("not watching everything");
   });
 
   it("skips a deactivated agent", () => {
     const selection = selectNewTicketRecipients({
       candidates: [watcher({ id: "a1", is_active: false })],
       alreadyNotified: new Set(),
+      ticket: NORMAL,
     });
     expect(selection.recipients).toEqual([]);
   });
@@ -54,6 +64,7 @@ describe("selectNewTicketRecipients", () => {
     const selection = selectNewTicketRecipients({
       candidates: [watcher({ id: "harvey" }), watcher({ id: "melissa" })],
       alreadyNotified: new Set(["harvey"]),
+      ticket: NORMAL,
     });
     expect(selection.recipients.map((r) => r.id)).toEqual(["melissa"]);
     expect(selection.excluded[0]).toMatchObject({
@@ -68,6 +79,7 @@ describe("selectNewTicketRecipients", () => {
     const selection = selectNewTicketRecipients({
       candidates: [watcher({ id: "harvey" }), watcher({ id: "michael" }), watcher({ id: "melissa" })],
       alreadyNotified: new Set(["harvey"]),
+      ticket: NORMAL,
     });
     expect(selection.recipients).toHaveLength(2);
   });
@@ -78,6 +90,96 @@ describe("selectNewTicketRecipients", () => {
     const selection = selectNewTicketRecipients({
       candidates: [watcher({ id: "someone" })],
       alreadyNotified: new Set(["someone"]),
+      ticket: NORMAL,
+    });
+    expect(selection.recipients).toEqual([]);
+  });
+});
+
+/**
+ * The cut. The broadcast sent roughly 200 emails in fourteen days, nearly all
+ * unread — the same way the heartbeat was buried, and for the same reason:
+ * mail that always arrives is mail nobody reads.
+ *
+ * What is left is the notice that asks for something nobody has done yet.
+ */
+describe("who still hears about a new ticket", () => {
+  it("tells nobody about a Normal ticket, unless they asked for everything", () => {
+    const selection = selectNewTicketRecipients({
+      candidates: [
+        watcher({ id: "quiet", watch_new_tickets: false }),
+        watcher({ id: "wants-it-all", watch_new_tickets: true }),
+      ],
+      alreadyNotified: new Set(),
+      ticket: NORMAL,
+    });
+    expect(selection.recipients.map((r) => r.id)).toEqual(["wants-it-all"]);
+  });
+
+  it("tells the team about an unassigned Urgent ticket", () => {
+    // Nobody owns it, so no assignment email covers it, and its priority is
+    // the evidence that waiting for someone to notice is not good enough.
+    const selection = selectNewTicketRecipients({
+      candidates: [watcher({ id: "quiet", watch_new_tickets: false })],
+      alreadyNotified: new Set(),
+      ticket: URGENT_UNOWNED,
+    });
+    expect(selection.recipients.map((r) => r.id)).toEqual(["quiet"]);
+  });
+
+  it("tells the team about an unassigned High ticket", () => {
+    const selection = selectNewTicketRecipients({
+      candidates: [watcher({ id: "quiet", watch_new_tickets: false })],
+      alreadyNotified: new Set(),
+      ticket: { priority: "high", assigned: false },
+    });
+    expect(selection.recipients).toHaveLength(1);
+  });
+
+  it("says nothing about a High ticket that already has an owner", () => {
+    // The owner got an assignment email. Everyone else is being told about
+    // work that is already somebody's.
+    const selection = selectNewTicketRecipients({
+      candidates: [watcher({ id: "quiet", watch_new_tickets: false })],
+      alreadyNotified: new Set(),
+      ticket: { priority: "high", assigned: true },
+    });
+    expect(selection.recipients).toEqual([]);
+    expect(selection.excluded[0].reason).toContain("assigned");
+  });
+
+  it("respects notifications_enabled for the unassigned-urgent route", () => {
+    // That route needs no new toggle, so it has to honour the existing one —
+    // otherwise turning off ticket mail would not turn off ticket mail.
+    const selection = selectNewTicketRecipients({
+      candidates: [
+        watcher({ id: "muted", watch_new_tickets: false, notifications_enabled: false }),
+      ],
+      alreadyNotified: new Set(),
+      ticket: URGENT_UNOWNED,
+    });
+    expect(selection.recipients).toEqual([]);
+    expect(selection.excluded[0]).toMatchObject({ reason: "notifications off" });
+  });
+
+  it("still sends to someone who wants everything, whatever their other toggle says", () => {
+    // watch_new_tickets is the explicit "yes, all of it" — it is not the
+    // place to second-guess them.
+    const selection = selectNewTicketRecipients({
+      candidates: [
+        watcher({ id: "all", watch_new_tickets: true, notifications_enabled: false }),
+      ],
+      alreadyNotified: new Set(),
+      ticket: NORMAL,
+    });
+    expect(selection.recipients.map((r) => r.id)).toEqual(["all"]);
+  });
+
+  it("never double-mails the assignee, on either route", () => {
+    const selection = selectNewTicketRecipients({
+      candidates: [watcher({ id: "harvey", watch_new_tickets: false })],
+      alreadyNotified: new Set(["harvey"]),
+      ticket: URGENT_UNOWNED,
     });
     expect(selection.recipients).toEqual([]);
   });

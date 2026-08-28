@@ -226,7 +226,17 @@ export async function checkInboundHealth(): Promise<{
       // Duplicates are the redelivery dedupe working, not a loss.
       .filter(([reason]) => reason !== "duplicate")
       .map(([reason, count]) => `${count} × ${reason}`);
-    if (failures.length) dropped.unshift(`${failures.length} failed to store`);
+    // The COUNT alone is what sent someone chasing three imaginary database
+    // errors: "3 failed to store" described three Gmail fetch 404s. The cause
+    // is already recorded per message — the alert has to carry one, because
+    // the alert is the only part of this anybody reads.
+    if (failures.length) {
+      dropped.unshift(
+        failures.length === 1
+          ? `1 failed and is blocking the cursor — ${failures[0]}`
+          : `${failures.length} failed and are blocking the cursor — first: ${failures[0]}`
+      );
+    }
     if (dropped.length) recentlyDropped = dropped.join("; ");
   } catch {
     // Monitoring must never be the thing that breaks.

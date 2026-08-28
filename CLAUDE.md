@@ -94,8 +94,10 @@ The plan when the owner wants to go live again:
    OAuth token becomes undecryptable and all agents must reconnect.
 7. Add the production callback to the Google OAuth client:
    https://support.blankssportsnutrition.com/api/google/callback
-8. Run migrations 0002–0011 against the production Supabase project. The
-   dashboard shows a banner listing any that are missing.
+8. Run migrations 0002–0018 against the production Supabase project. The
+   dashboard shows a banner listing any that are missing — and, since 0017,
+   a separate amber one when it could not check rather than one claiming
+   they are absent.
 
 ### Turning on inbound push (production only)
 
@@ -195,6 +197,77 @@ looks like the calm one.
 `tests/query-error-honesty.test.ts` asserts all of this structurally, over
 the source, because "a failure never renders as an absence" is a property of
 the code's shape — calling a function that works cannot observe it.
+
+### A poison message must not take the channel down with it
+
+The cursor is held back when a message fails to store. That is right, and it
+is what turned three unreadable messages into a 31-hour inbound outage.
+
+**A Gmail 404 on `messages.get` is TERMINAL, not a failure to retry.** The
+message does not exist; no number of attempts will make it appear. It is now
+`countSkip`, never `result.failures`, so it can never hold the cursor —
+`isGoneFromMailbox` in lib/google/inbound.ts.
+
+Where they come from is worth knowing, because the volume is ours: **sending
+through the Gmail API creates a draft, the draft gets a message id,
+`messagesAdded` records it, and the draft is destroyed the instant it becomes
+a sent message.** The id stays in the history page forever and 404s forever.
+37 of the 89 ids in the backlog were these — almost all of them notification
+mail we sent ourselves. More outbound meant more poison.
+
+Two things made it invisible for as long as it lasted:
+
+- **One `try` wrapped both the fetch and the store**, so a Gmail failure was
+  reported as a database one. The alert read "3 failed to store", which sent
+  someone looking for a missing column, a constraint violation and an RLS
+  problem — none of which existed. Fetch and store are separate phases with
+  opposite cursor behaviour and are now caught separately.
+- **The failure was recorded as a bare `e.message`** — no phase, no message
+  id, no Postgres code. `countFailure` records all three, and the alert now
+  carries the first real cause instead of a count of them. A count is not a
+  cause, and the alert is the only part of this anybody reads.
+
+`countSkip(result, "could not create ticket")` was the same swallow as the
+message insert, one level up: a failed ticket INSERT counted as a deliberate
+drop. Both are failures now.
+
+**Only ~25 ids are processed per run.** So the banner's "3" was three out of
+the first slice, not three in total — a blocked cursor under-reports its own
+backlog, because it never gets far enough to count it.
+
+### A migration checker that cries wolf is worse than none
+
+`columnExists` was `return !error`. Every failure — a 5xx, a blip, an expired
+key, a stale cache — rendered as "this migration has not been run", and the
+check ran fifteen sequential requests, so one bad second reported a contiguous
+RANGE of migrations as missing. That is how 0013/0014/0015 were declared
+unapplied while all three were in place, twice, and being sent to re-run
+migrations that were already there is how a person stops reading the banner
+that exists to catch the real gap.
+
+It is the house rule again, in the module whose whole job is raising alarms:
+**an "it's missing" is a CLAIM, and a failed probe has not made one.**
+
+- **Three states, never two**: `applied` / `missing` / `unverified`. Only
+  `missing` gets the red banner and the ordered list of files to run;
+  `unverified` gets amber and says the check could not run.
+- **pg_catalog, not PostgREST.** PostgREST answers from a CACHED schema that
+  lags DDL by design — so the old probe was least reliable in the minutes
+  after a migration ran, which is exactly when somebody is looking. 0017 adds
+  `schema_inventory()`, read in ONE call: one error, one honest "could not
+  check", instead of fifteen chances to accuse.
+- **Indexes and enum values are probeable now**, and that is not cosmetic.
+  0013 IS its indexes — a half-applied 0013 (column present, dedupe index
+  absent) used to report as done, and that is the state in which Meta
+  redelivery silently doubles every message. 0014's real risk is the enum
+  value, which no column probe can see. 0007 stopped being "unprobeable": a
+  function is a row in `pg_proc`, and reading it does not invoke it.
+- A migration with genuinely no evidence declares `unprobeableReason` and is
+  reported applied. **Never write a probe that cannot fail** — one that always
+  passes looks exactly like one that works, which is the more expensive
+  mistake. That is why 0018 is declared rather than probed.
+- Storage is a separate service: a failed `listBuckets()` is `null`, not an
+  empty set, so it can never read as "the bucket is gone".
 
 ### An alarm must not look like the hundred FYIs
 
@@ -437,10 +510,30 @@ the thing an agent opens by reflex.
 
 Every new ticket, on every channel, emails the watchers from hello@.
 
-- **Per-agent toggle**, `agents.watch_new_tickets`, off by default and seeded
-  on for michael@/melissa@/harvey@ in 0014. That seed is DATA, not
-  configuration — the Settings toggle governs it from there, and the list has
-  no home in code because the team changes.
+**Narrowed in 0018, because the broadcast was the firehose.** Every new
+ticket to every watcher was ~200 emails in fourteen days, nearly all unread —
+the same burial the system alert was rebuilt to escape. Two routes now, and
+they answer different questions:
+
+- **Unassigned High or Urgent** → everyone with `notifications_enabled`. No
+  new toggle: nobody owns it, so no assignment email covers it, and the
+  priority is the evidence that waiting for someone to notice is not enough.
+- **`watch_new_tickets`** → every new ticket at any priority. Unchanged
+  meaning, still in Settings, no longer the only route and no longer seeded
+  on. It was all-or-nothing before: a firehose or silence, and most people
+  want neither.
+
+Normal and Low no longer broadcast to anyone who has not explicitly asked for
+everything. **No digest** — that is a new cron and a new template for mail
+nobody reads; the toggle already covers the person who wants volume, and a
+digest waits for evidence somebody does.
+
+- **Per-agent toggle**, `agents.watch_new_tickets`, off by default. 0014
+  seeded it on for michael@/melissa@/harvey@ and 0018 clears that seed — they
+  are the only rows it was ever true for, so leaving it set would have meant
+  the narrowing changed nothing for the only people it affects. That seed is
+  DATA, not configuration — the Settings toggle governs it from there, and the
+  list has no home in code because the team changes.
 - Deliberately a SEPARATE column from `notifications_enabled`: that one is
   about mail concerning YOUR tickets. Someone who wants their own assignments
   but not a firehose of everyone else's is reasonable, and conflating the two
@@ -454,6 +547,8 @@ Every new ticket, on every channel, emails the watchers from hello@.
 - Only for tickets that are actually NEW. A reply on an existing thread is not
   news, and mailing everyone about every customer response is the fastest way
   to get the feature turned off.
+- The assigned/unassigned fact is read at send time, AFTER the routing rules,
+  so a ticket a rule just claimed counts as assigned and stays quiet.
 - Threads per (watcher, ticket) through the same root as every other
   notification, so a later assignment or escalation replies into the notice.
 - Quiet hours apply except for Urgent, same policy as escalations.
@@ -463,8 +558,7 @@ Every new ticket, on every channel, emails the watchers from hello@.
 - Loop protection is the existing three guards — X-Blanks-Notification,
   Auto-Submitted, and the from-our-own-address rule — each of which drops it
   independently, asserted in tests/new-ticket-notification.test.ts.
-- If volume makes this annoying, the fallback is a digest. The toggle exists
-  now; the digest waits for evidence.
+- Volume did make it annoying, and 0018 is the answer rather than a digest.
 
 ### Phase 3 — Instagram + Messenger (9C/9D: webhook + Messenger inbound DONE)
 
