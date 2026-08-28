@@ -1077,6 +1077,14 @@ export interface BackfillCandidate {
   /** null when it would be ingested; otherwise the rule that drops it. */
   droppedBy: string | null;
   alreadyStored: boolean;
+  /**
+   * When the mail arrived. Null for a message we did not have to fetch.
+   *
+   * Reconciliation needs it: a message that landed a minute ago and has not
+   * been synced yet is not a discrepancy, and without a date the two are
+   * indistinguishable.
+   */
+  receivedAt: string | null;
 }
 
 export interface BackfillReport {
@@ -1156,6 +1164,7 @@ export async function backfillFromMailbox(options: {
         subject: "",
         droppedBy: null,
         alreadyStored: true,
+        receivedAt: null,
       });
       continue;
     }
@@ -1191,6 +1200,7 @@ export async function backfillFromMailbox(options: {
       subject: author.subject,
       droppedBy: drop ? `${drop.rule} (${drop.detail})` : null,
       alreadyStored: false,
+      receivedAt: parsed.date.toISOString(),
     });
 
     if (!apply || drop) continue;

@@ -280,6 +280,11 @@ const MIGRATIONS: Migration[] = [
       indexes: ["quarantined_messages_gmail_uniq"],
     },
   },
+  {
+    file: "0020_unassigned_digest.sql",
+    title: "Daily unassigned digest — the safety net for narrowed new-ticket mail",
+    requires: { columns: ["agents.watch_unassigned_digest"] },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

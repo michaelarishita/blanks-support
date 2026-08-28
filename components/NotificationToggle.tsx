@@ -5,15 +5,18 @@ import { useRouter } from "next/navigation";
 import {
   setNotificationsEnabled,
   setWatchNewTickets,
+  setWatchUnassignedDigest,
 } from "@/app/(dashboard)/settings/actions";
 import { useToast } from "@/components/ui/Toast";
 
 export default function NotificationToggle({
   enabled,
   watchNewTickets,
+  watchUnassignedDigest,
 }: {
   enabled: boolean;
   watchNewTickets: boolean;
+  watchUnassignedDigest: boolean;
 }) {
   const [on, setOn] = useState(enabled);
   const [pending, startTransition] = useTransition();
@@ -61,7 +64,56 @@ export default function NotificationToggle({
         reasonable person, and conflating the two would leave them no way to
         say so except by muting both. */}
     <WatchNewTickets initial={watchNewTickets} />
+
+    {/* The safety net for what the narrowing above leaves out. A Normal
+        ticket nobody claims now arrives in total silence; this is the once-a-
+        day summary rather than a per-ticket mail, because per-ticket mail is
+        exactly what made the old broadcast unreadable. */}
+    <WatchUnassignedDigest initial={watchUnassignedDigest} />
     </div>
+  );
+}
+
+function WatchUnassignedDigest({ initial }: { initial: boolean }) {
+  const [on, setOn] = useState(initial);
+  const [pending, startTransition] = useTransition();
+  const toast = useToast();
+  const router = useRouter();
+
+  function toggle(next: boolean) {
+    setOn(next);
+    startTransition(async () => {
+      const res = await setWatchUnassignedDigest(next);
+      if (res?.error) {
+        setOn(!next);
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast(next ? "You'll get the daily digest" : "Daily digest off", {
+        tone: "success",
+      });
+      router.refresh();
+    });
+  }
+
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={pending}
+        onChange={(e) => toggle(e.target.checked)}
+        className="mt-0.5 h-4 w-4 flex-none accent-brand-500"
+      />
+      <span className="text-body text-secondary">
+        Daily digest of unassigned tickets
+        <span className="mt-0.5 block text-caption text-tertiary">
+          One email each morning: how many open tickets have nobody assigned,
+          the three that have waited longest, and anything past its response
+          threshold. Nothing is sent on a day when the queue is empty.
+        </span>
+      </span>
+    </label>
   );
 }
 

@@ -53,6 +53,13 @@ const EMPTY_HEALTH: InboundHealth = {
   lastAlertAt: null,
 };
 
+/**
+ * Reconciliation is daily, so two missed runs is the signal. One is a blip,
+ * three is a week of an unwatched gap.
+ */
+const RECONCILE_STALE_HOURS = 48;
+const RECONCILE_STALE_MS = RECONCILE_STALE_HOURS * 3_600_000;
+
 export async function readInboundHealth(): Promise<InboundHealth> {
   // Read-only and rendered in the dashboard chrome, so a failure here must
   // not blank the whole app. The cause isn't swallowed: SchemaBanner reports
@@ -246,6 +253,32 @@ export async function checkInboundHealth(): Promise<{
     evaluated.reasons.push(
       `The last sync discarded mail rather than finding none: ${recentlyDropped}.`
     );
+  }
+
+  /**
+   * Has the reconciliation itself run?
+   *
+   * Without this, a reconciler that silently stopped would look exactly like a
+   * mailbox with nothing wrong — and it is the one check whose whole value is
+   * that its silence means something. A safety net nobody verifies is a
+   * decoration.
+   */
+  try {
+    const blob = await getSettingsBlob();
+    const last = blob.inbound_last_reconcile as { at?: string | null } | undefined;
+    const at = last?.at ? Date.parse(last.at) : null;
+    if (at === null || Number.isNaN(at)) {
+      evaluated.reasons.push(
+        "The mailbox has never been reconciled, so nothing is checking for mail that went missing without a reason."
+      );
+    } else if (now - at > RECONCILE_STALE_MS) {
+      const hours = Math.floor((now - at) / 3_600_000);
+      evaluated.reasons.push(
+        `The mailbox has not been reconciled for ${hours}h (threshold ${RECONCILE_STALE_HOURS}h).`
+      );
+    }
+  } catch {
+    // Monitoring must never be the thing that breaks.
   }
 
   const health: InboundHealth = {

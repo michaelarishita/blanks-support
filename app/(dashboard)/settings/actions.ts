@@ -298,6 +298,33 @@ export async function setNotificationsEnabled(enabled: boolean): Promise<ActionR
 }
 
 
+/**
+ * Opts this agent in or out of the daily unassigned digest.
+ *
+ * A separate preference from the two above, for the same reason they are
+ * separate from each other: this one is not about a ticket at all, it is about
+ * the QUEUE. Somebody who wants their own assignments and nothing else may
+ * still want to know when nine tickets are sitting unclaimed.
+ */
+export async function setWatchUnassignedDigest(
+  enabled: boolean
+): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({ watch_unassigned_digest: Boolean(enabled) })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save that preference.") };
+  }
+
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
+
 /** Opts this agent in or out of the every-new-ticket firehose. */
 export async function setWatchNewTickets(enabled: boolean): Promise<ActionResult> {
   const me = await requireAgent();

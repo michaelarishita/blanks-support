@@ -5,6 +5,7 @@ import {
   sweepDeletedTicketFolders,
   sweepOrphanedUploads,
 } from "@/lib/uploads/sweep";
+import { runReconciliation } from "@/lib/inbound/reconcile";
 
 // Daily. Resolved tickets nobody has touched for a week become closed.
 //
@@ -39,6 +40,19 @@ export async function GET(request: NextRequest) {
     console.error("[cron] deleted-ticket sweep failed:", ticketFiles.error);
   }
 
+  // Also piggybacked, and for the same reason: daily, and a new cron entry is
+  // one more thing that can be silently absent.
+  //
+  // This is the only check that watches the OUTCOME rather than a mechanism.
+  // Every alarm we have watches something we already knew could break, and
+  // each outage found a new mechanism instead. Records a clean run too, so its
+  // silence means "checked" rather than "possibly dead" — monitoring treats a
+  // stale timestamp as its own degraded reason.
+  const reconcile = await runReconciliation();
+  if (reconcile.error) {
+    console.error("[cron] mailbox reconciliation failed:", reconcile.error);
+  }
+
   const admin = createAdminClient();
   const cutoff = new Date(Date.now() - AUTO_CLOSE_DAYS * 86_400_000).toISOString();
 
@@ -53,7 +67,7 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
   if (!stale?.length) {
-    return Response.json({ ok: true, closed: 0, uploads, ticketFiles });
+    return Response.json({ ok: true, closed: 0, uploads, ticketFiles, reconcile });
   }
 
   const ids = stale.map((ticket) => ticket.id);
@@ -80,6 +94,7 @@ export async function GET(request: NextRequest) {
     ok: true,
     uploads,
     ticketFiles,
+    reconcile,
     closed: ids.length,
     numbers: stale.map((ticket) => ticket.number),
     // Surfaced so a persistent backlog above the cap is visible rather than

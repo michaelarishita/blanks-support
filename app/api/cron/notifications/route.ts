@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { cronUnauthorized, isCronAuthorized } from "@/lib/cron-auth";
+import { sendUnassignedDigest } from "@/lib/notifications/unassigned-send";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decideEscalation } from "@/lib/notifications/escalation";
 import { decideSendTime } from "@/lib/notifications/policy";
@@ -34,7 +35,24 @@ export async function GET(request: NextRequest) {
     escalationsToAdmin: 0,
     deferredAgain: 0,
     failures: [] as string[],
+    unassignedDigest: null as Awaited<ReturnType<typeof sendUnassignedDigest>> | null,
   };
+
+  // The daily unassigned digest rides this ten-minute job rather than taking a
+  // cron entry of its own. Two reasons, and neither is laziness: a new cron is
+  // one more thing that can be silently absent, and the send is gated on the
+  // LOCAL DATE rather than on a firing — so a missed tick catches up on the
+  // next one instead of skipping the day, which is how a digest stops arriving
+  // with nothing reporting a failure.
+  try {
+    result.unassignedDigest = await sendUnassignedDigest({ now });
+    if (result.unassignedDigest.error) {
+      console.error("[cron] unassigned digest failed:", result.unassignedDigest.error);
+    }
+  } catch (e) {
+    // Never the thing that stops reminders and escalations going out.
+    console.error("[cron] unassigned digest threw:", e);
+  }
 
   // ---- 1. Anything due: reminders the agent set, and assignments that were
   //         deferred out of quiet hours.

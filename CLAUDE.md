@@ -235,6 +235,69 @@ drop. Both are failures now.
 the first slice, not three in total — a blocked cursor under-reports its own
 backlog, because it never gets far enough to count it.
 
+### Reconciliation: the one check that watches the OUTCOME
+
+Every other alarm here watches a MECHANISM — the sync ran, the cursor moved,
+the watch is alive, the schema is applied. Every outage so far found a new
+mechanism instead: a guard that discarded group mail, a 404 that held the
+cursor, a reconnect that skipped it forward. Each was invisible to the alarms
+that existed, because each alarm had been built from the previous failure.
+
+`lib/inbound/reconcile.ts` asks one question daily, and it is deliberately not
+about any mechanism: **is there mail in the mailbox we have neither stored nor
+deliberately dropped?** That question stays right regardless of what breaks
+next, which is the entire point.
+
+- **Verdicts are RE-DERIVED from the live guards**, via `backfillFromMailbox`'s
+  dry run — never read from the skip counters the sync wrote. A recorded skip
+  log is itself a mechanism; a reconciliation that trusts one is checking our
+  record against our record.
+- It must distinguish "we decided not to ticket this" from "we do not know
+  about this". Stored, guard-dropped, quarantined and gone-from-Gmail are all
+  fine. What is left is the alarm.
+- **A one-hour grace period**, because the sync is not instant and
+  reconciliation must not race it. Mail that landed a minute ago is not
+  evidence of anything.
+- **A clean run is RECORDED** (`inbound_last_reconcile` in settings, shown in
+  Settings → Support mailbox) so its silence means "checked" rather than
+  "possibly dead" — and monitoring treats a timestamp older than 48h as its
+  own degraded reason. A safety net nobody verifies is a decoration.
+- **A clean run does not EMAIL.** A daily all-clear is the hundred-FYIs problem
+  in a new place; the record is the report.
+- A run that could not complete records `at: null` and raises its own alarm. A
+  broken reconciliation reading as a healthy mailbox is the exact inversion
+  this job exists to prevent.
+- `-in:sent -in:draft` excludes our own outbound (and the drafts that generate
+  the poison ids); spam and trash are excluded because Gmail filed those, not
+  us, and treating Gmail's spam calls as our misses would make this noise.
+- No silent caps: a window that filled up says so, in the alert and on screen.
+
+### The digest 0018 said would wait for evidence
+
+The evidence arrived: eleven Normal tickets landed unassigned in one day and
+nobody was told, because narrowing new-ticket mail left an ordinary unclaimed
+ticket arriving in total silence.
+
+`agents.watch_unassigned_digest` (0020, seeded for michael@/melissa@, governed
+from Settings afterwards) — count of unassigned open tickets, the three that
+have waited longest, and everything past its priority's `ESCALATE_AFTER_HOURS`
+threshold.
+
+- **Nothing is sent when the queue is empty.** A daily "0 unassigned" is the
+  flood again.
+- Age is measured from the customer's LAST MESSAGE, matching escalation: the
+  number that matters is how long the person has been waiting.
+- Overdue is ranked by how far PAST the threshold, not by raw age — a 9h Urgent
+  needs attention before a 50h Low, and the ages say the opposite.
+- It rides the ten-minute notifications cron and is gated on the LOCAL DATE
+  rather than on a firing, so a missed tick catches up on the next one instead
+  of skipping the day. A digest that silently stops arriving is the failure
+  mode here, and "the cron fired" is not the same as "the mail went".
+- The date is stamped only when a send actually succeeded, so a bad morning is
+  retried rather than counted as done.
+- Never the `[⚠️ BLANKS SYSTEM]` prefix. That filter only keeps working while
+  nothing routine uses it, and a daily digest is as routine as mail gets.
+
 ### The cursor: two opposite ways to lose mail
 
 A HELD cursor stalls the channel and is loud about it. A cursor MOVED past

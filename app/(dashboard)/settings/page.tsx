@@ -7,6 +7,8 @@ import SignatureEditor from "@/components/SignatureEditor";
 import CompanyBrandEditor from "@/components/CompanyBrandEditor";
 import QuarantinedMessages from "@/components/QuarantinedMessages";
 import { readQuarantined } from "@/lib/inbound/quarantine";
+import ReconcileStatus, { type ReconcileSummary } from "@/components/ReconcileStatus";
+import { getSettingsBlob } from "@/lib/settings";
 import CheckMailNow from "@/components/CheckMailNow";
 import IgnoredSenderList from "@/components/IgnoredSenderList";
 import NotificationToggle from "@/components/NotificationToggle";
@@ -38,7 +40,7 @@ export default async function SettingsPage({
   const { data: me } = await supabase
     .from("agents")
     .select(
-      "id, name, display_name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled, watch_new_tickets"
+      "id, name, display_name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled, watch_new_tickets, watch_unassigned_digest"
     )
     .eq("id", user.id)
     .single();
@@ -60,6 +62,11 @@ export default async function SettingsPage({
   // are opposite claims and only one of them is reassuring.
   const quarantined =
     me?.role === "admin" ? await readQuarantined() : { rows: [], error: null };
+  const lastReconcile =
+    me?.role === "admin"
+      ? (((await getSettingsBlob()).inbound_last_reconcile as ReconcileSummary | undefined) ??
+        null)
+      : null;
   const ignored = await readIgnoredSenders();
 
   const { count: pendingCount } = await supabase
@@ -185,6 +192,7 @@ export default async function SettingsPage({
         <NotificationToggle
           enabled={me?.notifications_enabled !== false}
           watchNewTickets={me?.watch_new_tickets === true}
+          watchUnassignedDigest={me?.watch_unassigned_digest === true}
         />
       </section>
 
@@ -307,6 +315,13 @@ export default async function SettingsPage({
 
           <div className="mt-4 border-t border-gray-200 pt-4">
             <CheckMailNow connected={Boolean(supportInbox)} />
+          </div>
+
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <h3 className="mb-2 text-sm font-semibold text-gray-700">
+              Reconciliation
+            </h3>
+            <ReconcileStatus last={lastReconcile} />
           </div>
 
           <div className="mt-4 border-t border-gray-200 pt-4">
