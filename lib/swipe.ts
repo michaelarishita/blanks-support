@@ -6,6 +6,29 @@
  * but a destructive one: too eager and scrolling a list resolves tickets.
  */
 
+/**
+ * The left strip that belongs to the navigation drawer, and to nothing else.
+ *
+ * An edge-swipe to open the drawer travels RIGHT, and so does swipe-to-claim
+ * on a list row. Two handlers reading the same gesture is how you get a row
+ * sliding open behind a drawer, or a claim fired by someone reaching for the
+ * menu — and claiming a ticket by accident is a real cost, not a cosmetic one.
+ *
+ * So the contract is exclusive and lives in one place: a touch that STARTS
+ * within this many pixels of the left edge is the drawer's, and rows must
+ * ignore it. Everything to the right of it is the row's, and the drawer must
+ * ignore that. Neither side gets to decide by threshold or by timing.
+ *
+ * 24px is roughly a thumb's width and matches the iOS back-swipe zone, which
+ * is the gesture people already expect to find there.
+ */
+export const EDGE_ZONE_PX = 24;
+
+/** Does this touch belong to the drawer rather than to the row under it? */
+export function isEdgeSwipe(startX: number): boolean {
+  return startX <= EDGE_ZONE_PX;
+}
+
 /** How far before the gesture is treated as horizontal rather than a scroll. */
 export const ENGAGE_PX = 12;
 

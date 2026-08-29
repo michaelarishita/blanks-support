@@ -11,6 +11,7 @@ import { MANUAL_STATUSES, isWaitingOnCustomer } from "@/lib/ticket-status";
 import { agentDisplayName } from "@/lib/display";
 import type { ActionResult, Agent, Ticket, TicketStatus } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
+import { NavDrawerButton } from "@/components/NavDrawer";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import ChannelIcon from "@/components/ui/ChannelIcon";
@@ -139,6 +140,11 @@ export default function TicketHeader({
         </button>
       </Tooltip>
 
+      {/* The way to every other view without leaving this conversation. Back
+          returns to the list you came from; this reaches the ones you did not.
+          Phone only — the desktop sidebar is always present. */}
+      <NavDrawerButton className="-ml-1.5" />
+
       <span className="hidden flex-none text-tertiary sm:block">
         <ChannelIcon channel={ticket.channel} size={18} />
       </span>
@@ -160,7 +166,13 @@ export default function TicketHeader({
         </div>
       </div>
 
-      <div className="flex flex-none items-center gap-2">
+      {/* Hidden below sm, and not because it is unimportant — because it is
+          DUPLICATED. MobileContextSheet already carries status, assignee and
+          resolve on a phone, and squeezing a second copy into 390px pushed the
+          cluster off the right edge and printed it over the ticket subject.
+          Measured on an iPhone 13: the header overflowed and #1089's title was
+          unreadable underneath it. One copy, in the place built for it. */}
+      <div className="hidden flex-none items-center gap-2 sm:flex">
         {isWaitingOnCustomer(ticket.status) ? (
           <Tooltip content="Set when your reply went out; clears automatically when the customer answers">
             <Badge tone="warning">

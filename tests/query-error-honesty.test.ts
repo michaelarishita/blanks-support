@@ -130,9 +130,21 @@ describe("counts are never invented", () => {
 
   it("passes null rather than zero when the count failed", () => {
     // "0 open" is a claim about the inbox. A failed query has not made one.
-    const passes = layout.match(/counts=\{measured \? \{ open, mine, unassigned \} : null\}/g);
-    expect(passes?.length).toBe(2); // Sidebar and MobileTopBar
-    expect(layout).toMatch(/channelCounts=\{measured \? byChannel : null\}/);
+    //
+    // Asserted over EVERY consumer rather than by counting them. This used to
+    // expect exactly two (Sidebar and MobileTopBar) and broke when the nav
+    // drawer became a third — which is the wrong failure: the property is
+    // "nobody receives a fabricated zero", not "there are two of them", and a
+    // count would have gone green again the moment somebody deleted one.
+    const guarded = layout.match(/counts=\{measured \? \{ open, mine, unassigned \} : null\}/g) ?? [];
+    const all = layout.match(/\scounts=\{/g) ?? [];
+    expect(all.length).toBeGreaterThan(0);
+    expect(guarded.length).toBe(all.length);
+
+    const guardedChannels = layout.match(/channelCounts=\{measured \? byChannel : null\}/g) ?? [];
+    const allChannels = layout.match(/\schannelCounts=\{/g) ?? [];
+    expect(allChannels.length).toBeGreaterThan(0);
+    expect(guardedChannels.length).toBe(allChannels.length);
   });
 
   it.each(["components/Sidebar.tsx", "components/MobileTopBar.tsx"])(

@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import {
   COMMIT_PX,
   intentFor,
+  isEdgeSwipe,
   isHorizontal,
   travelFor,
   type SwipeIntent,
@@ -97,6 +98,15 @@ export default function SwipeRow({
         style={{ transform: `translateX(${offset}px)` }}
         onTouchStart={(event) => {
           const touch = event.touches[0];
+          // The left edge belongs to the navigation drawer. Without this the
+          // same rightward gesture both opens the drawer and claims the ticket
+          // underneath it — and an accidental claim is a real cost, not a
+          // cosmetic one. The zone is shared with the drawer so the two cannot
+          // disagree about where the boundary is.
+          if (isEdgeSwipe(touch.clientX)) {
+            start.current = null;
+            return;
+          }
           start.current = { x: touch.clientX, y: touch.clientY };
           engaged.current = false;
         }}

@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { CHANNEL_META, type TicketChannel } from "@/lib/types";
 import { SettingsIcon } from "@/components/ui/icons";
+import { NavDrawerButton } from "@/components/NavDrawer";
 
 /**
  * The sidebar, for a phone.
@@ -57,6 +58,7 @@ export default function MobileTopBar({
   return (
     <div className="sticky top-0 z-30 border-b border-subtle bg-panel/95 backdrop-blur md:hidden">
       <div className="px-safe flex items-center gap-2 px-3 pt-safe">
+        <NavDrawerButton className="-ml-2" />
         <div className="flex h-12 flex-1 items-center gap-2">
           <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand-600">
             Blanks

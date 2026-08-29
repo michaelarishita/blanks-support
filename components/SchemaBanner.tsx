@@ -9,7 +9,13 @@ import { AlertTriangleIcon } from "@/components/ui/icons";
  * downstream symptom, and each time the signal was somewhere nobody was
  * looking.
  */
-export default async function SchemaBanner() {
+export default async function SchemaBanner({ isAdmin }: { isAdmin: boolean }) {
+  // Migrations are run by an admin in the Supabase SQL editor. An agent shown
+  // "0019 has not been run" has been handed a task they cannot do, in the
+  // loudest colour the app has — and the cost is not the confusion, it is that
+  // the next red block is one they have learned to scroll past.
+  if (!isAdmin) return null;
+
   const status = await checkSchema();
 
   if (status.error) {

@@ -455,6 +455,83 @@ grep for embeds of the target table. `messages → agents` is still bare
 because messages has exactly one FK to agents — that is a fact with an
 expiry date, and the test above catches it when it expires.
 
+### A banner an agent cannot act on is how banners stop being read
+
+An agent testing on a phone reported "that red message up top which not sure
+what that's about". It was the inbound-down alert: a Pub/Sub diagnostic, in
+the loudest colour the app has, addressed to somebody who cannot act on it.
+
+Every system alert names an admin action — a Pub/Sub subscription, a
+migration, a mailbox reconnect. So `SystemAlertBanner` and `SchemaBanner` are
+now **admin-only**, and agents get `agentFacingNotice()`: one calm line about
+the only consequence they can observe ("Some incoming email may be delayed"),
+plus who has been told, read from the admin list rather than hardcoded.
+
+- It is `role="status"`, not `role="alert"`, and not red. There is nothing for
+  the reader to do; dressing that as an emergency is how the real ones stop
+  being read.
+- **Silence is the default for an unclassified kind.** A new alert does not
+  opt itself onto an agent's screen; somebody decides what it means for them
+  first. `inbound_reconciliation_failed` is deliberately NOT agent-facing — a
+  gap in our monitoring is not a gap in the mail, and saying "your email may
+  be delayed" when it is probably fine is the false alarm in the other
+  direction.
+- Acknowledgement stays outside the collapse. "I saw this" must not be behind
+  "show me the detail".
+
+### The mobile height budget, measured
+
+"Message visibility is cut off" was not one bug. It was the chrome budget
+being oversubscribed, with the banner as the dominant term. Measured in real
+WebKit at iPhone 13 size (664px):
+
+| | before | after |
+|---|---|---|
+| alert banner | 235px (35%) | 52px collapsed · 47px agent line |
+| thread visible | **70px** | **251px** admin · 304px agent |
+
+70px is roughly one line of one message, which is what the complaint was. The
+diagnostic detail was pushing the conversation off the screen.
+
+- The alert detail collapses to a tappable line **on a phone only** — from md
+  up there is room, and hiding it there would just make the alarm easier to
+  miss.
+- `TicketHeader`'s status/assignee/resolve cluster is `hidden sm:flex`, not
+  because it is unimportant but because it is DUPLICATED: MobileContextSheet
+  already carries all three. Two copies in 390px pushed the cluster off the
+  right edge and printed it over the ticket subject.
+- Still the biggest remaining consumer: the composer at 257px (mode tabs 40 +
+  editor 115 + assignee line 17 + send row 36) plus the context bar at 48.
+  That is 46% of the viewport and the obvious next lever — left alone for now
+  because the reported problem is fixed and shrinking the composer changes how
+  writing feels.
+
+**How to re-measure.** `safaridriver` still needs the manual toggle, but a real
+WebKit is one `npm i playwright && npx playwright install webkit` away —
+install it OUTSIDE this repo so the lockfile stays `npm ci`-clean. Drive the
+real login form, then read `clientHeight`/`scrollHeight` off the thread
+scroller. Screenshots caught the header overflow that the numbers alone did
+not; look at them.
+
+### Two gestures, one direction, one boundary
+
+Opening the nav drawer is a rightward swipe. So is swipe-to-claim on a list
+row. Both listening to the same touch gives you a row sliding open behind a
+drawer, or a ticket claimed by somebody reaching for the menu — and an
+accidental claim is a real cost, not a cosmetic one.
+
+`EDGE_ZONE_PX` in lib/swipe.ts is the single boundary, and `isEdgeSwipe()` is
+used by BOTH sides: the drawer only listens inside the strip, `SwipeRow`
+abandons the touch outright inside it (it never records a start point, so a
+fast gesture cannot engage first). Neither may hardcode its own number — a
+test asserts that, because two thresholds drifting apart is silent.
+
+The chip bar stays on the list: switching view is one tap there and two
+through a drawer, and triage switches constantly. What the chips could not do
+is exist on the ticket screen, so changing view from an open conversation
+meant navigating away from it first. That is what the drawer is for, and why
+the button is on both screens.
+
 ### Safari / WebKit — a blind spot in the test suite
 
 Every test we run is Node or Chrome. **No test in this repo can see a WebKit

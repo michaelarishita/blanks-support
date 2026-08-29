@@ -327,6 +327,67 @@ export async function raiseSystemAlert(input: {
 }
 
 /** Open alerts, worst and newest first. Read by the dashboard banner. */
+/**
+ * What an AGENT should be told about an alert, if anything.
+ *
+ * System alerts are written for whoever can fix them, and that is always an
+ * admin: Pub/Sub subscriptions, migrations, cursors. An agent shown a red
+ * block about a Pub/Sub subscription learns two things — that something is
+ * broken, and that banners in this app are not addressed to them. The second
+ * is the expensive one, because it is what makes the next banner ignorable.
+ *
+ * So an agent gets a sentence about the only thing that changes THEIR work —
+ * customer mail may be late — and nothing about the mechanism. Anything with
+ * no consequence they could notice returns null and is not shown at all.
+ *
+ * Pure, and keyed on alert KIND, so a new alert kind is silent for agents
+ * until somebody decides what it means for them. That default is deliberate:
+ * the failure mode being fixed is agents seeing alarms meant for someone else.
+ */
+export function agentFacingNotice(kinds: string[]): string | null {
+  const delayed = new Set([
+    // Inbound is down, so mail is arriving late or not at all.
+    "inbound_email_down",
+    // Specific messages were given up on, so a customer may not appear.
+    "inbound_quarantine",
+    // Mail exists in the mailbox that we have no record of deciding about.
+    "inbound_reconciliation",
+  ]);
+  // NOT here, on purpose: "inbound_reconciliation_failed" is a gap in our
+  // MONITORING, not in the mail. Nothing an agent does changes, and telling
+  // them their email may be delayed when it may well be fine is the false
+  // alarm in the other direction.
+  return kinds.some((k) => delayed.has(k))
+    ? "Some incoming email may be delayed."
+    : null;
+}
+
+/**
+ * Who an agent should be told has been notified.
+ *
+ * Read rather than hardcoded, for the same reason the notification seed lists
+ * are data: the team changes, and a banner naming somebody who left is worse
+ * than one naming nobody. Falls back to the generic phrasing whenever the
+ * lookup is unhelpful — a name is a nicety here, not the message.
+ */
+export async function alertResponderNames(): Promise<string> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("agents")
+    .select("name, display_name")
+    .eq("role", "admin")
+    .eq("is_active", true);
+  if (error || !data?.length) return "An admin has been notified";
+
+  const names = data
+    .map((a) => ((a.display_name as string) || (a.name as string) || "").split(" ")[0])
+    .filter(Boolean);
+  if (!names.length) return "An admin has been notified";
+  if (names.length === 1) return `${names[0]} has been notified`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} have been notified`;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} have been notified`;
+}
+
 export async function readOpenAlerts(): Promise<{
   alerts: SystemAlert[];
   error: string | null;

@@ -7,6 +7,7 @@ import SystemAlertBanner from "@/components/SystemAlertBanner";
 import SchemaBanner from "@/components/SchemaBanner";
 import { ToastProvider } from "@/components/ui";
 import MobileTopBar from "@/components/MobileTopBar";
+import NavDrawer from "@/components/NavDrawer";
 import PullToRefresh from "@/components/PullToRefresh";
 import type { TicketChannel } from "@/lib/types";
 
@@ -37,6 +38,8 @@ export default async function DashboardLayout({
   if (countsError) {
     console.error("[layout] ticket counts failed:", countsError);
   }
+
+  const isAdmin = me?.role === "admin";
 
   /** What the Open view means, in one place now that two things ask. */
   const isOpen = (status: string) => ["new", "open"].includes(status);
@@ -81,18 +84,29 @@ export default async function DashboardLayout({
             channelCounts={measured ? byChannel : null}
           />
         </div>
-        <div className="flex min-w-0 flex-1 flex-col">
+        {/* The drawer wraps the content column: it owns the left-edge swipe,
+            which is why the handler has to sit above every screen rather than
+            on the list alone. The chip bar stays — one tap beats two for the
+            switch triage does most — but it only exists on the list, and
+            changing view from an open ticket used to mean navigating away. */}
+        <NavDrawer
+          counts={measured ? { open, mine, unassigned } : null}
+          channelCounts={measured ? byChannel : null}
+        >
           <MobileTopBar
             counts={measured ? { open, mine, unassigned } : null}
             channelCounts={measured ? byChannel : null}
           />
-          {/* Schema first: an unrun migration explains most other symptoms. */}
-          <SchemaBanner />
-          <SystemAlertBanner />
+          {/* Schema first: an unrun migration explains most other symptoms.
+              Both are admin-only — every action they name is one only an admin
+              can take, and a red block an agent cannot act on is how a banner
+              becomes furniture. */}
+          <SchemaBanner isAdmin={isAdmin} />
+          <SystemAlertBanner isAdmin={isAdmin} />
           <PullToRefresh className="scrollbar-slim scroll-touch flex-1 overflow-y-auto">
             {children}
           </PullToRefresh>
-        </div>
+        </NavDrawer>
       </div>
       <ShortcutsOverlay />
       {/* Safety net behind Pub/Sub push; 5 min unless overridden. */}
