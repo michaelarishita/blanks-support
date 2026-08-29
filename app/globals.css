@@ -296,6 +296,12 @@ html {
   .pb-safe-3 {
     padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
   }
+  /* The tighter version, for the collapsed composer: a one-line tap target
+     does not need a full composer's breathing room around it, and every
+     pixel here is a pixel of conversation. */
+  .pb-safe-2 {
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  }
   /* Momentum scrolling, and a scroll container that doesn't hand the gesture
      to the page when it hits its own end — the cause of a sheet that scrolls
      the thread behind it. */

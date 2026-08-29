@@ -513,6 +513,43 @@ real login form, then read `clientHeight`/`scrollHeight` off the thread
 scroller. Screenshots caught the header overflow that the numbers alone did
 not; look at them.
 
+### The composer idles as one line
+
+The last of the mobile height budget. Measured in WebKit at iPhone 13 size:
+
+| | composer | thread visible |
+|---|---|---|
+| before | 257px | 251px |
+| idle | **61px** | **500px** |
+| focused | 232px | 329px |
+
+Idle it is a tap target plus a send glyph; focus expands it to the real thing.
+Desktop is untouched — there the 257px costs nobody anything, so the collapsed
+bar is `sm:hidden` and the composer is `hidden sm:block`.
+
+- **`expanded` is DERIVED, not a stored flag**:
+  `openedByTap || !isEmptyHtml(body) || Boolean(error)`. A draft or an unread
+  send error holds it open on its own, so it can never fold over text somebody
+  wrote or a message they have not read.
+- **Blur only collapses when empty, and only when focus actually left.**
+  `relatedTarget` inside the container means the tap went to Macros, the mode
+  tabs or Send — folding then would take away the control just reached for.
+- **The editor is hidden, never unmounted.** It holds the draft, and the
+  restore effect only re-runs when the ticket or mode changes, so unmounting
+  would drop text mid-sentence and not bring it back. The per-ticket,
+  per-mode `draftKey` is unchanged: a note draft reappearing as a public reply
+  is the one way this could do harm.
+- **Focus happens in an effect keyed on `expanded`**, not in the click
+  handler: focusing a `display:none` element silently does nothing, and at
+  click time the editor is still hidden.
+- The keyboard inset stays on the sticky wrapper. iOS does not shrink the
+  layout viewport for the keyboard, and the expanded composer is exactly what
+  would sit behind it.
+
+The collapsed bar shows the note placeholder and keeps the amber tint in note
+mode. Whether the customer sees what you type is the one thing that must never
+be ambiguous, collapsed or not.
+
 ### Two gestures, one direction, one boundary
 
 Opening the nav drawer is a rightward swipe. So is swipe-to-claim on a list

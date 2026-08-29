@@ -26,6 +26,7 @@ import {
   LockIcon,
   MailIcon,
   PaperclipIcon,
+  SendIcon,
   UserIcon,
 } from "@/components/ui/icons";
 
@@ -106,8 +107,44 @@ export default function ReplyBox({
   // a blank. Sending "Your order  has shipped" is worse than a visible fault.
   const unresolvedOrder = hasUnresolvedOrder(body);
 
+  /**
+   * COLLAPSED BY DEFAULT ON A PHONE.
+   *
+   * The full composer measures 257px on an iPhone 13 — mode tabs, editor,
+   * macro and attachment controls, the assignee line, the send row — against a
+   * 664px viewport. With the header and the context bar that left the thread
+   * 251px, and the thread is what people opened the ticket to read.
+   *
+   * So it idles as a single tap target and expands on focus, which is what
+   * every messaging app does and therefore what a thumb already expects.
+   * Desktop is untouched: there the 257px costs nothing.
+   *
+   * `expanded` is DERIVED, not just a flag. A draft or a failed send holds it
+   * open on its own, so the composer can never collapse over text somebody
+   * wrote or an error they have not read.
+   */
+  const [openedByTap, setOpenedByTap] = useState(false);
+  const wantsFocus = useRef(false);
+  const expanded = openedByTap || !isEmptyHtml(body) || Boolean(error);
+
+  const expand = useCallback(() => {
+    wantsFocus.current = true;
+    setOpenedByTap(true);
+  }, []);
+
+  // Focus AFTER the commit that reveals the editor. Focusing a display:none
+  // element silently does nothing, so this cannot be done in the click
+  // handler — the editor is still hidden at that point.
+  useEffect(() => {
+    if (!expanded || !wantsFocus.current) return;
+    wantsFocus.current = false;
+    editorRef.current?.focus();
+  }, [expanded]);
+
   const focusComposer = useCallback((next: Mode) => {
     setMode(next);
+    wantsFocus.current = true;
+    setOpenedByTap(true);
     // Defer so the editor has re-rendered into the new mode first.
     requestAnimationFrame(() => editorRef.current?.focus());
   }, []);
@@ -144,6 +181,9 @@ export default function ReplyBox({
       // Stored successfully — clear the draft even if delivery failed, since
       // resending the same text would post a duplicate to the thread.
       editorRef.current?.clear();
+      // Back to a single line, the way a message thread behaves once the
+      // message has gone.
+      setOpenedByTap(false);
       try {
         window.localStorage.removeItem(draftKey);
       } catch {
@@ -171,13 +211,64 @@ export default function ReplyBox({
       // behind it and you type into something you cannot see.
       style={keyboardInset ? { paddingBottom: keyboardInset } : undefined}
       className={cn(
-        "pb-safe-3 sticky bottom-0 z-20 flex-none border-t px-3 pt-3 transition-colors duration-panel ease-out sm:px-6 sm:py-3",
+        "sticky bottom-0 z-20 flex-none border-t px-3 transition-colors duration-panel ease-out sm:px-6 sm:py-3",
+        // Tighter while collapsed: a one-line target does not need a full
+        // composer's padding, and this is the row sitting on the conversation.
+        expanded ? "pb-safe-3 pt-3" : "pb-safe-2 pt-2 sm:pb-safe-3 sm:pt-3",
         // The whole surface turns amber in note mode — the strongest
         // available signal that this will not reach the customer.
         isNote ? "border-warning-border bg-warning-bg" : "border-subtle bg-panel"
       )}
+      // Focus leaving the composer entirely collapses it — but ONLY when it is
+      // empty. `relatedTarget` inside the container means the tap went to the
+      // macro picker, the mode tabs or Send, none of which should fold the
+      // thing being used. A null relatedTarget is a real exit (iOS gives that
+      // for a tap on the page background), so it collapses.
+      onBlur={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        if (isEmptyHtml(body)) setOpenedByTap(false);
+      }}
     >
-      <div className="mx-auto w-full max-w-[680px]">
+      {/* IDLE — phone only. Never rendered from sm up, where the full composer
+          is always present and this would just be a lid on an open box. */}
+      {!expanded && (
+        <button
+          type="button"
+          onClick={expand}
+          className={cn(
+            "flex h-11 w-full items-center gap-3 rounded-md border px-3 text-left sm:hidden",
+            isNote
+              ? "border-warning-border bg-panel/60"
+              : "border-subtle bg-surface"
+          )}
+        >
+          <span className="min-w-0 flex-1 truncate text-body text-tertiary">
+            {isNote ? "Internal note — only the team sees this…" : "Write a reply…"}
+          </span>
+          {/* Shown disabled rather than hidden. Collapsed implies empty, so it
+              can never be live here — but it is the landmark that says what
+              this row is for, and an empty row with only grey text reads as a
+              label rather than a control. */}
+          <span
+            aria-hidden="true"
+            className={cn(
+              "flex h-8 w-8 flex-none items-center justify-center rounded-md",
+              isNote ? "text-warning-text/50" : "text-tertiary/60"
+            )}
+          >
+            <SendIcon size={16} />
+          </span>
+        </button>
+      )}
+
+      <div
+        className={cn(
+          "mx-auto w-full max-w-[680px]",
+          // Hidden, not unmounted: the editor holds the draft, and tearing it
+          // down on every collapse would drop text mid-sentence.
+          !expanded && "hidden sm:block"
+        )}
+      >
         <div className="mb-2 flex items-center gap-2">
           {/* Segmented control */}
           <div
