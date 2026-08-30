@@ -1,8 +1,12 @@
 # Blanks Support — Claude Code briefing
 
-Natively hosted help desk for Blanks Sports Nutrition (replaces Gorgias).
-Will live at support.blankssportsnutrition.com. Built like the other Blanks
-apps (blanks-crm, blanks-athletes-portal): Next.js 16 + React 19 + Supabase.
+Natively hosted help desk for Blanks Sports Nutrition. It replaced Gorgias and
+is **live in production at support.blankssportsnutrition.com**, handling real
+customer email every day. Built like the other Blanks apps (blanks-crm,
+blanks-athletes-portal): Next.js 16 + React 19 + Supabase.
+
+Nothing in this file is a rehearsal. Local development points at the
+production database, and `main` deploys to the live site.
 
 ## Hard rules (non-negotiable)
 
@@ -20,7 +24,9 @@ when the build failed. If you need to filter build output, run the gate first
 and inspect afterwards.
 
 **A change is not done until it is pushed.** Push by default once the gate
-passes; only hold back if Michael says so. "Committed, not pushed" has cost
+passes; only hold back if Michael says so. `main` deploys to production, so a
+push is a release — which is a reason to run the gate, not a reason to sit on
+finished work. "Committed, not pushed" has cost
 three test cycles — Drop 7C, the dark widget, and the Safari upload fix — each
 time because work that looked finished in the transcript was sitting in one
 working copy where nobody on the team could reach it. A commit nobody can pull
@@ -54,11 +60,16 @@ revert — as done for the orphaned-author hydration fix.
 - `npm test` — vitest; must pass before any commit is pushed
 - Node 22+ preferred (`nvm use 22`); Node 20 works but Supabase libs warn
 
-## Current state (Phase 1 — DONE, working locally)
+## Current state — live, in daily use
+
+The help desk has replaced Gorgias and is the team's actual inbox: 86 email
+tickets and 23 from the website widget at the time of writing, five agents,
+one admin (Michael). Every phase below marked live is being used by real
+people on real customer conversations.
 
 - Website intake widget at `/widget` with topic picker → public POST
-  `/api/tickets/intake` (honeypot + naive rate limit, CORS open — tighten to
-  blankssportsnutrition.com before production embed)
+  `/api/tickets/intake` (honeypot + rate limit). Framing is restricted by
+  `WIDGET_ALLOWED_ORIGINS`; see the CSP note in next.config.mjs.
 - Dashboard: inbox views (Open / Mine / Unassigned / All / Resolved,
   channel filters), ticket thread, public replies + internal notes,
   statuses, assignment/hand-off, tags, priorities, macros with
@@ -71,49 +82,121 @@ revert — as done for the orphaned-author hydration fix.
   oauth_tokens, exports). RLS on everything; `is_agent()` / `is_admin()`
   helpers.
 
-## Deployment status — IMPORTANT
+## Deployment — LIVE IN PRODUCTION
 
-NOT currently deployed. Local-only by choice, after a painful Vercel saga.
-The plan when the owner wants to go live again:
+**support.blankssportsnutrition.com is live and handling real customer email.**
+Treat every instruction in this file as acting on a production system with real
+customers in it.
 
-1. DONE — `middleware.ts` is now `proxy.ts` (Next 16 convention). The
-   compiled proxy chunk was verified to contain no Supabase import and no
-   executable `__dirname`, which is what kept crashing Vercel before
-   (`__dirname is not defined` / MIDDLEWARE_INVOCATION_FAILED).
-2. Delete the old `blanks-support` Vercel project entirely (its build cache
-   is poisoned) and re-import fresh from GitHub.
-3. Env vars on Vercel — the authoritative list is the table in
-   DROP-5-DEPLOY-AND-META.md A1; `.env.example` documents every one.
-4. Domain support.blankssportsnutrition.com — GoDaddy CNAME already exists.
-5. Supabase Auth → URL Configuration: set Site URL to the production domain.
-6. Env vars added since Phase 2: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-   TOKEN_ENCRYPTION_KEY, SUPPORT_EMAIL, NEXT_PUBLIC_SITE_URL,
-   GMAIL_WEBHOOK_TOKEN. Do NOT set NEXT_PUBLIC_MAIL_POLL_SECONDS in
-   production — Pub/Sub replaces polling there.
-   TOKEN_ENCRYPTION_KEY must be the SAME value as local, or every stored
-   OAuth token becomes undecryptable and all agents must reconnect.
-7. Add the production callback to the Google OAuth client:
-   https://support.blankssportsnutrition.com/api/google/callback
-8. Run migrations 0002–0018 against the production Supabase project. The
-   dashboard shows a banner listing any that are missing — and, since 0017,
-   a separate amber one when it could not check rather than one claiming
-   they are absent.
+| | |
+|---|---|
+| Host | Vercel, project `blanks-support` |
+| Domain | support.blankssportsnutrition.com (GoDaddy CNAME) |
+| Database | Supabase project `blanks-support` |
+| Source | github.com/michaelarishita/blanks-support, deploys from `main` |
+| Verify what's live | `curl -s https://support.blankssportsnutrition.com/login \| grep build-sha` |
 
-### Turning on inbound push (production only)
+`/api/version` returns the same sha as JSON and is the nicer check — but it
+only works once the commit that excluded it from the proxy matcher is
+deployed. Until then it redirects to `/login`, so use the meta tag.
 
-Inbound works locally by polling. Push needs Google Cloud wiring:
+**Production can be behind `main`.** At the time of writing it was running
+`768db6f` while `main` was three commits ahead. A pushed commit is not a
+deployed commit — check the build sha before concluding a fix is live or that
+a bug still exists.
 
-1. Google Cloud console → Pub/Sub → Create topic, e.g. `gmail-inbound`.
-2. Grant `gmail-api-push@system.gserviceaccount.com` the **Pub/Sub Publisher**
-   role on that topic — without it Gmail silently can't publish.
-3. Create a **push** subscription targeting
-   `https://support.blankssportsnutrition.com/api/webhooks/gmail?token=<GMAIL_WEBHOOK_TOKEN>`.
-4. Set GMAIL_PUBSUB_TOPIC to `projects/<project>/topics/gmail-inbound`.
-5. Call `users.watch` for the support mailbox (watchGmailMailbox in
-   lib/google/gmail.ts) to start push delivery.
-6. **The watch expires every 7 days.** Add a Vercel cron (daily) that renews
-   it. If it lapses, inbound stops silently — the mailbox keeps receiving,
-   nothing errors, tickets just stop appearing.
+### Migrations are run BY HAND
+
+Nothing applies them automatically. Every `.sql` in `supabase/migrations/` is
+pasted into the Supabase SQL editor, in order, by a person — currently only
+Michael. 0001–0021 exist.
+
+**So a deploy can ship code that needs a migration nobody has run yet.** That
+is the single most common way this app breaks, which is why the schema banner
+exists and why it distinguishes "not run" from "couldn't check". When adding a
+migration, say so in the commit message and in the hand-off.
+
+### What is connected
+
+- **Gmail (Phase 2, live).** `hello@blankssportsnutrition.com` is the watched
+  support mailbox. Inbound arrives by Pub/Sub push to
+  `/api/webhooks/gmail`; the watch is renewed daily by cron and expires in
+  seven days if that stops. Agents connect their own Gmail for outbound —
+  currently Michael and Jon have; Wes, Harvey and Melissa have not, so their
+  replies fall back to the shared mailbox.
+  **`support@` is a Google Group forwarding to `hello@` and must not be
+  connected or watched by this app.**
+- **Shopify (Phase 4, live).** Store `dd0cc7-2.myshopify.com`, read-only, via
+  the client-credentials grant. The 24-hour token is cached encrypted in
+  `oauth_tokens` (provider `shopify`).
+- **Meta / Messenger (Drop 9, code shipped, NOT yet receiving).** Credentials
+  are set in Vercel; the Page is not subscribed to the webhook yet, and no
+  Meta event has ever arrived. Ticket counts by channel are the proof:
+  86 email, 23 web_form, 0 messenger, 0 instagram.
+
+### How inbound push is wired (reference, already done)
+
+Not a to-do list — this is how the live system is put together, kept because
+two of these are invisible when wrong:
+
+1. Google Cloud → Pub/Sub topic, `GMAIL_PUBSUB_TOPIC` =
+   `projects/<project>/topics/gmail-inbound`.
+2. `gmail-api-push@system.gserviceaccount.com` holds **Pub/Sub Publisher** on
+   that topic. **Without it Gmail cannot publish and says nothing** — inbound
+   simply stops.
+3. A **push** subscription targets
+   `/api/webhooks/gmail?token=<GMAIL_WEBHOOK_TOKEN>`.
+4. `users.watch` is called for `hello@` (`watchGmailMailbox` in
+   lib/google/gmail.ts). **The watch expires every 7 days** and is renewed by
+   the daily cron; if that lapses the mailbox keeps receiving and tickets just
+   stop appearing.
+
+The Meta webhook is the equivalent for Messenger and is **not yet wired** —
+the Page has never been subscribed. Steps are in RUNBOOK.md.
+
+### Cron jobs (vercel.json — that file is the source of truth)
+
+| Schedule | Path | What breaks without it |
+|---|---|---|
+| `*/10 * * * *` | `/api/cron/notifications` | reminders, escalations, the daily unassigned digest |
+| `0 * * * *` | `/api/cron/inbound-heartbeat` | nobody learns inbound has stopped; the Meta queue stops self-healing |
+| `20 * * * *` | `/api/cron/retry-sends` | failed replies are never retried |
+| `0 4 * * *` | `/api/cron/renew-watch` | the Gmail watch lapses and inbound dies silently after 7 days |
+| `30 4 * * *` | `/api/cron/auto-close` | no auto-close, no upload sweep, no reconciliation |
+
+All are authorised by `CRON_SECRET`.
+
+### Environment
+
+`.env.example` documents every variable and is the list to check against.
+Two that carry teeth:
+
+- **`TOKEN_ENCRYPTION_KEY` must never change.** Every stored OAuth token
+  becomes undecryptable if it does, and every agent has to reconnect.
+- **Do not set `NEXT_PUBLIC_MAIL_POLL_SECONDS` in production.** Pub/Sub push
+  replaces polling there; setting it adds a redundant poll on every dashboard.
+
+### LOCAL DEVELOPMENT USES THE PRODUCTION DATABASE
+
+`.env.local` points at the same Supabase project as production. There is no
+staging database and no seed data.
+
+This is worth saying plainly because nothing on screen distinguishes them:
+running the app locally reads and writes **real customer tickets**, a local
+"Check mail now" consumes the **real Gmail cursor**, and a script that deletes
+rows deletes them for everybody. When probing, create and remove your own
+records rather than editing existing ones, and prefer read-only queries.
+
+### If production is broken
+
+`RUNBOOK.md` is the procedure — start there, not here. It is written for
+whoever is on hand rather than for whoever wrote the code.
+
+**Do not delete or re-create the Vercel project.** An earlier version of this
+file recommended exactly that as a recovery step, from a time when the app was
+not deployed. It would now destroy a live system's environment variables,
+domain binding and cron schedule, and none of those are reproducible from this
+repository alone.
 
 ## Hard-won gotchas (do not re-learn these)
 
@@ -752,9 +835,23 @@ symptom points at the parser, not at the proxy.
   RealtimeRefresher (subscribes to tickets/messages, router.refresh())
 - `lib/types.ts` — shared types, TOPICS list, status/channel metadata
 
-## Roadmap (build in order; schema already supports all of it)
+## Roadmap
 
-### Phase 2 — Gmail (DONE, local only)
+Status per phase, because the sections below mix shipped work with plans:
+
+| | |
+|---|---|
+| Phase 1 — ticketing, widget, dashboard | **live** |
+| Phase 2 — Gmail in and out | **live** |
+| Phase 3 — Messenger / Instagram | code shipped, **not receiving** — the Page is not subscribed |
+| Phase 4 — Shopify sidebar, rules engine, shortcuts | **live** |
+| Phase 4 — SLA timers, snooze, merge, search, collision | **not built** |
+| Phase 5 — CSAT, reporting, Ike export | **not started** |
+
+The schema anticipates all of it; the schema existing is not the feature
+existing.
+
+### Phase 2 — Gmail (LIVE)
 Replies send as real email from the responding agent's own Gmail, and mail to
 hello@blankssportsnutrition.com becomes tickets.
 
@@ -823,13 +920,15 @@ skipped by name rather than failing the whole message.
   address, so matching those would drop group mail a second way. The unique
   index on gmail_message_id absorbs Pub/Sub redelivery. Every skip is counted
   by named rule and shown by "Check mail now".
-- Dev vs prod: locally the dashboard polls (NEXT_PUBLIC_MAIL_POLL_SECONDS) and
-  Settings has "Check mail now". Production uses Pub/Sub push to
-  `/api/webhooks/gmail`. Same sync either way.
+- Dev vs prod: production uses Pub/Sub push to `/api/webhooks/gmail`; locally
+  the dashboard can poll (NEXT_PUBLIC_MAIL_POLL_SECONDS) and Settings has
+  "Check mail now". Same sync either way — and because local points at the
+  production database, a local "Check mail now" moves the real cursor.
 
-**Still to do before inbound works in production** (see Deployment):
-Google Cloud Pub/Sub topic + push subscription, calling users.watch, and a
-daily cron to renew it.
+**Inbound push is ON in production.** The Pub/Sub topic, the push
+subscription and `users.watch` are all in place, and the watch is renewed by
+the daily `renew-watch` cron. If that cron stops, inbound dies silently seven
+days later — which is what the heartbeat exists to catch.
 
 ### Advisory risk flagging (Drop 11)
 
@@ -919,7 +1018,7 @@ digest waits for evidence somebody does.
   independently, asserted in tests/new-ticket-notification.test.ts.
 - Volume did make it annoying, and 0018 is the answer rather than a digest.
 
-### Phase 3 — Instagram + Messenger (9C/9D: webhook + Messenger inbound DONE)
+### Phase 3 — Instagram + Messenger (code shipped; NOT yet receiving)
 
 **One endpoint, `/api/webhooks/meta`, for both channels** — that is what 9A's
 choice of Facebook Login for Business buys: one app, one token store, one
@@ -1143,7 +1242,16 @@ Reply + mark-seen via Send API using the stored page token. Enforce the
 Permissions (App Review): pages_messaging, instagram_manage_messages,
 instagram_basic, pages_manage_metadata, Human Agent.
 
-### Phase 4 — Shopify sidebar + power features
+### Phase 4 — Shopify sidebar (LIVE) + power features (mostly NOT built)
+
+**Built and live:** the Shopify sidebar, `{{order.*}}` macro variables, the
+routing rules engine, and keyboard shortcuts.
+
+**Not built**, despite being listed below and in places stubbed in the UI:
+SLA timers, snooze (the button exists and is deliberately disabled), merge,
+full-text search, and collision detection. Do not read the paragraph below as
+a description of what exists — it is the plan.
+
 Read-only Shopify Admin API app, created in the **Dev Dashboard** — custom
 apps can no longer be made in the Shopify admin and there is no static
 `shpat_` token. Env is SHOPIFY_SHOP_DOMAIN / SHOPIFY_CLIENT_ID /
@@ -1157,7 +1265,7 @@ order number. Macro variables {{order.*}}. Then: SLA timers, snooze, merge,
 full-text search (Postgres FTS), collision detection (Supabase Presence),
 keyboard shortcuts.
 
-**Rules engine (Drop 7C — DONE, local only).** DROP-7-SPEC said the `rules`
+**Rules engine (Drop 7C — live).** DROP-7-SPEC said the `rules`
 table already existed. It did not; `0011_rules.sql` creates it, along with
 `messages.is_automated`.
 
@@ -1290,7 +1398,11 @@ refused, forged grant refused.
   thumbnailed** — Chrome and Firefox can't decode it, so an `<img>` would show
   a broken-image icon.
 
-### Phase 5 — CSAT, reporting, Ike export
+### Phase 5 — CSAT, reporting, Ike export (NOT started)
+
+Nothing in this section exists. The `exports` table is in the schema from
+0001 and has never been written to.
+
 CSAT email on resolve (1–5 one-tap). Analytics dashboard (volume by
 channel/topic, first-response & resolution times, per-agent, CSAT trend).
 Admin-only "Export for Ike": resolved tickets → PII-scrubbed JSONL Q&A
