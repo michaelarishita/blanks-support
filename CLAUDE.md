@@ -608,9 +608,35 @@ both leave it resolved.
 **`pending` is now written by nothing.** It stays in the enum because live rows
 hold it and every reader still handles it — the reopen trigger pulls it back,
 escalation suppresses it, and a reply resolves it, so the rows drain through
-the ordinary flow instead of needing a migration. `isWaitingOnCustomer` and the
-"Waiting on customer" badge are therefore describing a set that can only
-shrink; when it reaches zero they can go together.
+the ordinary flow instead of needing a migration.
+
+**DECIDED (2026-08-30), so nobody re-opens it as a tidy-up:**
+
+- **No cleanup migration.** Rewriting those rows would have to claim something
+  false about them — `resolved` says they were answered and finished,
+  `open` says nobody replied. Leaving the value is the only honest option, and
+  each row leaves on its own the next time anybody touches the ticket.
+- **When the count reaches zero, DELETE the badge — do not reword it.** The
+  tempting move is to point "Waiting on customer" at `resolved` and say
+  something like "Answered — waiting to hear back". That is worse than
+  nothing: it puts a passive badge on the state that now ends most tickets,
+  which is the visual noise resolve-on-reply exists to remove. The Resolved
+  badge already says everything true, and "we're waiting on them" is now the
+  DEFAULT meaning of resolved rather than a condition worth marking.
+- `isWaitingOnCustomer`, the badge, and the enum value go together in one
+  migration, or not at all — a half-removal leaves a reader for a state
+  nothing can produce.
+- If the distinction is ever wanted back (answered-and-expecting-a-reply vs
+  answered-and-done), it needs a signal an agent sets DELIBERATELY — a
+  follow-up flag or a snooze — not a status the system infers. That is what
+  `pending` was pretending to be and never was.
+
+The check, when the fortnight is up:
+
+```sql
+select count(*) from tickets where status = 'pending';
+-- 5 on 2026-08-30, and it can only fall
+```
 
 ### The composer idles as one line
 
