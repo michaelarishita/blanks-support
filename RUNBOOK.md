@@ -37,11 +37,16 @@ check vercel.com → Deployments. A red deploy → open it, read the build log.
 **2. What build is live?**
 
 ```bash
-curl -s https://support.blankssportsnutrition.com/login | grep build-sha
+curl -s https://support.blankssportsnutrition.com/api/version
+# {"buildId":"a1b2c3d…"}
 ```
 
-Compare to the latest commit on GitHub. A stale deploy and a broken feature
-look identical from the outside — this distinguishes them in one step.
+That is the commit sha the server is running. Compare it to the latest commit
+on GitHub: a stale deploy and a broken feature look identical from the
+outside, and this distinguishes them in one step.
+
+The same value is stamped on every page as `data-dpl-id` on the `<html>`
+element, which is how a browser tab knows whether it is out of date.
 
 **3. Read the banner.** A red banner at the top of the dashboard names the
 problem. It is accurate and it is not decoration. Two kinds:
@@ -49,6 +54,11 @@ problem. It is accurate and it is not decoration. Two kinds:
 - **Migration missing** → run the named `.sql` files from
   `supabase/migrations/` in Supabase → SQL Editor → New query.
 - **Inbound email may be down** → see below.
+
+Agents (non-admins) do not see these: every one of them names something only
+an admin can do. They see a single calm line instead. If an agent reports "a
+red message I don't understand", it is almost certainly the stale-tab screen
+below, not a banner.
 
 ---
 
@@ -82,6 +92,35 @@ anything urgent by hand. Tickets can catch up; customers can't.
 
 **Recovery of missed mail** is a backfill, not a re-sync — the sync only
 looks forward from its cursor. That needs Claude Code.
+
+---
+
+## "Server Action ... was not found on the server"
+
+**This is a stale browser tab, not an outage.** Nobody needs to be paged and
+nothing needs to be checked in the database.
+
+It happens when a tab was opened before a new version shipped. The JavaScript
+in that tab refers to server functions the new build no longer has, so the
+next action — sending a reply, changing a status — fails. Everyone else, and
+that same person in a fresh tab, is fine.
+
+**The fix is to reload the page.** The app now says so itself: the error
+screen reads "A new version was released — reload to continue", and a tab
+that notices the change before anything fails shows a quiet "A new version
+was released" bar with a Reload button.
+
+**Nothing typed is lost.** Replies are saved to the browser as they are
+typed, per ticket, and come back after the reload.
+
+How to tell it apart from a real outage in one step:
+
+```bash
+curl -s https://support.blankssportsnutrition.com/api/version
+```
+
+If that answers, the server is up and this is a stale tab. If it does not,
+you have a real problem — start at the top of this page.
 
 ---
 

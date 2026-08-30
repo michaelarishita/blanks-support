@@ -513,6 +513,57 @@ real login form, then read `clientHeight`/`scrollHeight` off the thread
 scroller. Screenshots caught the header overflow that the numbers alone did
 not; look at them.
 
+### A stale tab is not an outage
+
+A tab open across a deploy holds client JavaScript referring to Server Action
+ids the new build has never heard of. The next action fails with
+`Server Action "…" was not found on the server`, the error boundary shows it,
+and it reads as the app being broken. It is one stale tab; a reload fixes it.
+
+- **Detection matches on `error.name === "UnrecognizedActionError"`, with the
+  message as a fallback.** Next ships `unstable_isUnrecognizedActionError` for
+  exactly this, but in 16.3.0 it is not re-exported from any public entry —
+  reaching it means a deep path into `next/dist/client/components/`. `name`
+  survives an error crossing a boundary; the message survives a class rename;
+  `instanceof` would be the most precise and the most brittle, failing
+  silently whenever two copies of the module exist.
+- The stale-tab screen shows **no framework text and no "Try again"**. The
+  message is true and useless to the reader, and `reset()` re-renders the same
+  stale bundle, so it would fail again identically. Only a reload helps.
+- **`deploymentId` is set in next.config** from VERCEL_GIT_COMMIT_SHA. Next
+  uses it for version-skew protection: `?dpl=` on assets, and a mismatched
+  client navigation becomes a hard reload. Undefined in local dev on purpose.
+
+**React strips server-rendered attributes on hydration, silently.** The
+obvious way to know which build a tab loaded — read the sha the server put on
+`<html>` — does not work. `data-dpl-id` (from deploymentId) and `data-build`
+(from app/layout.tsx) are both in the served HTML, which is what makes
+`curl … | grep build-sha` work, and both are GONE by the time any effect can
+read them, because the client render does not produce them. Verified in
+WebKit: present before hydration, `null` after.
+
+So `VersionWatcher` takes its baseline from the FIRST answer of `/api/version`
+rather than from the DOM. It needs no agreement between the server and client
+bundles, and a change between two answers is exactly the thing being detected.
+A null answer is never stored as a baseline — "we could not tell you" is not a
+version, and storing it would make the next real id look like a deploy.
+
+`/api/version` is excluded from the proxy matcher for the manifest's reason:
+it exists to be polled, and a 307 to an HTML login page is a 200 that is not
+JSON.
+
+**Drafts already survive this** — the composer writes to localStorage per
+ticket and per mode on every keystroke, so the reload the screen asks for
+costs nothing. Verified end to end in WebKit rather than assumed.
+
+**The migration hint is now conditional.** The error page used to tell
+everybody "if this mentions a missing table or column, a migration hasn't been
+run" — on every error, whatever it was. That sent somebody to the Supabase
+dashboard hunting a problem that did not exist. `looksLikeSchemaError` gates
+it: Postgres codes first, then the phrasings PostgREST and Postgres actually
+produce. A pointer that is sometimes right teaches you to distrust it when it
+is right.
+
 ### A public reply resolves
 
 Most replies are terminal answers. Parking every one in `pending` filled the

@@ -8,6 +8,7 @@ import SchemaBanner from "@/components/SchemaBanner";
 import { ToastProvider } from "@/components/ui";
 import MobileTopBar from "@/components/MobileTopBar";
 import NavDrawer from "@/components/NavDrawer";
+import VersionWatcher from "@/components/VersionWatcher";
 import PullToRefresh from "@/components/PullToRefresh";
 import type { TicketChannel } from "@/lib/types";
 
@@ -101,6 +102,9 @@ export default async function DashboardLayout({
               Both are admin-only — every action they name is one only an admin
               can take, and a red block an agent cannot act on is how a banner
               becomes furniture. */}
+          {/* Before the banners: a stale tab explains symptoms the others
+              would otherwise be blamed for. */}
+          <VersionWatcher />
           <SchemaBanner isAdmin={isAdmin} />
           <SystemAlertBanner isAdmin={isAdmin} />
           <PullToRefresh className="scrollbar-slim scroll-touch flex-1 overflow-y-auto">

@@ -62,6 +62,13 @@ export const config = {
     // The intake route needs no proxy anyway: it is in the isPublic list, and
     // it does its own origin check, honeypot, rate limiting and content
     // validation. Excluding it means the body is never buffered at all.
-    "/((?!_next/static|_next/image|favicon.ico|widget.js|robots.txt|manifest.webmanifest|api/tickets/intake|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    //
+    // api/version is excluded for the manifest's reason, sharpened: it exists
+    // to be polled for "which build is the server running", and a 307 to an
+    // HTML login page is a 200 that is not JSON. The caller would then have to
+    // tell a redirect apart from an answer, which is precisely the confusion
+    // this endpoint exists to remove. It reveals a commit sha that is already
+    // in every asset URL, and touches no database.
+    "/((?!_next/static|_next/image|favicon.ico|widget.js|robots.txt|manifest.webmanifest|api/tickets/intake|api/version|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

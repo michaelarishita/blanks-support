@@ -39,8 +39,26 @@ export function frameAncestors() {
   return ["'self'", ...origins].join(" ");
 }
 
+/**
+ * The build identifier, and the reason the app can tell a stale tab from an
+ * outage.
+ *
+ * Next uses this for version-skew protection: it stamps `data-dpl-id` on the
+ * <html> element, appends `?dpl=` to asset URLs, and turns a mismatched
+ * client-side navigation into a full reload. We read the same attribute to
+ * warn BEFORE an action fails.
+ *
+ * Undefined in ordinary local development on purpose. With no id there is
+ * nothing to compare, so the version watcher stays quiet instead of announcing
+ * a new release every time the dev server restarts. Set NEXT_PUBLIC_BUILD_ID
+ * by hand to exercise it.
+ */
+export const BUILD_ID =
+  process.env.NEXT_PUBLIC_BUILD_ID || process.env.VERCEL_GIT_COMMIT_SHA || undefined;
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  deploymentId: BUILD_ID,
   async headers() {
     return [
       {
