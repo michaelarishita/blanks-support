@@ -31,11 +31,18 @@ describe("the status model keeps all five states", () => {
 });
 
 describe("an agent's public reply", () => {
-  it.each(STATUSES_AWAITING_AGENT)("moves %s to pending", (status) => {
-    expect(nextStatusAfterAgentReply(status)).toBe("pending");
+  // Changed deliberately: a reply RESOLVES. Most replies are terminal answers,
+  // and parking them in `pending` filled the queue with tickets that were
+  // finished in every sense but the recorded one.
+  it.each(STATUSES_AWAITING_AGENT)("moves %s to resolved", (status) => {
+    expect(nextStatusAfterAgentReply(status)).toBe("resolved");
   });
 
-  it.each(["pending", "resolved", "closed"] as TicketStatus[])(
+  it("drains a legacy pending row the same way", () => {
+    expect(nextStatusAfterAgentReply("pending")).toBe("resolved");
+  });
+
+  it.each(["resolved", "closed"] as TicketStatus[])(
     "leaves %s alone",
     (status) => {
       expect(nextStatusAfterAgentReply(status)).toBeNull();
@@ -61,28 +68,35 @@ describe("a customer's message", () => {
   });
 });
 
-/** The round trip the UI change must not break. */
-describe("reply → pending → customer replies → open", () => {
+/**
+ * The round trip, and the reason resolving on reply is safe rather than
+ * optimistic: the customer's own message corrects it.
+ */
+describe("reply → resolved → customer replies → open", () => {
   it("completes the cycle", () => {
     let status: TicketStatus = "open";
 
     status = nextStatusAfterAgentReply(status) ?? status;
-    expect(status).toBe("pending");
-    expect(isWaitingOnCustomer(status)).toBe(true);
+    expect(status).toBe("resolved");
 
     status = nextStatusAfterCustomerMessage(status) ?? status;
     expect(status).toBe("open");
-    expect(isWaitingOnCustomer(status)).toBe(false);
   });
 
   it("survives repeated rounds", () => {
     let status: TicketStatus = "new";
     for (let i = 0; i < 3; i++) {
       status = nextStatusAfterAgentReply(status) ?? status;
-      expect(status).toBe("pending");
+      expect(status).toBe("resolved");
       status = nextStatusAfterCustomerMessage(status) ?? status;
       expect(status).toBe("open");
     }
+  });
+
+  it("does not leave the ticket waiting-on-customer any more", () => {
+    // The badge described `pending`, which this cycle no longer passes
+    // through. It survives only for rows written before the change.
+    expect(isWaitingOnCustomer("resolved")).toBe(false);
   });
 });
 
@@ -117,8 +131,8 @@ describe("the auto-reopen trigger in 0001_init.sql", () => {
   });
 });
 
-describe("escalation suppression still keys off pending", () => {
-  it("suppresses while waiting on the customer", () => {
+describe("escalation suppression", () => {
+  it("still suppresses the legacy waiting-on-customer rows", () => {
     expect(suppressesEscalation("pending")).toBe(true);
   });
 
@@ -130,11 +144,18 @@ describe("escalation suppression still keys off pending", () => {
     expect(suppressesEscalation(status)).toBe(false);
   });
 
-  // If pending stopped being set, every replied-to ticket would be chased.
-  it("means a replied-to ticket is not chased", () => {
-    const afterReply = nextStatusAfterAgentReply("open");
-    expect(afterReply).toBe("pending");
-    expect(suppressesEscalation(afterReply!)).toBe(true);
+  /**
+   * The invariant, unchanged by the move from pending to resolved: whatever a
+   * reply sets, escalation must not then chase the ticket. Written against
+   * nextStatusAfterAgentReply rather than a literal so it keeps holding if the
+   * destination changes again.
+   */
+  it("means a replied-to ticket is never chased", () => {
+    for (const from of ["new", "open", "pending"] as TicketStatus[]) {
+      const afterReply = nextStatusAfterAgentReply(from);
+      expect(afterReply).not.toBeNull();
+      expect(suppressesEscalation(afterReply!)).toBe(true);
+    }
   });
 });
 

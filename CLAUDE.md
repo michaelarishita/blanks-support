@@ -513,6 +513,54 @@ real login form, then read `clientHeight`/`scrollHeight` off the thread
 scroller. Screenshots caught the header overflow that the numbers alone did
 not; look at them.
 
+### A public reply resolves
+
+Most replies are terminal answers. Parking every one in `pending` filled the
+queue with tickets that were finished in every sense except the recorded one,
+and nobody ever revisited them.
+
+**This is only safe because of the other half, which was already true**: the
+`on_message_insert` trigger reopens a resolved ticket the moment the customer
+writes back. Being wrong therefore costs nothing — the customer's own reply
+corrects it. Verified against the live database, not assumed: resolved →
+inbound message → open, while our own outbound reply and an internal note
+both leave it resolved.
+
+- **Public replies only.** A note is the team talking to itself; resolving on
+  one would resolve a ticket without answering anybody.
+- **Status alone decides it**, so every channel behaves identically — a test
+  asserts no channel name appears in the rule.
+- **The escape hatch is the point.** A reply that ASKS the customer something
+  is the case where resolving is wrong: the ticket leaves the queue and nobody
+  returns to it. The send toast says "Reply sent · ticket resolved" and offers
+  **Keep open** for 12s rather than the usual 8 — a decision needs longer than
+  an undo. `keepTicketOpen` is conditional on the ticket still being resolved,
+  because in those seconds the customer may already have replied and the
+  trigger may already have moved it; writing `open` unconditionally would
+  stamp over a state that had moved on.
+- **Auto-close now runs from `resolved_at`, not `last_message_at`.** These
+  diverge by days in real rows — one resolved on the 28th had a last message
+  from the 23rd, which is two days of grace instead of seven. Latent before,
+  load-bearing now that the reply's own timestamp is what usually makes them
+  coincide. `on_ticket_update` is an UPDATE trigger, so a row INSERTed straight
+  to resolved carries no stamp — hence the `last_message_at` fallback, without
+  which such a row would never auto-close at all.
+- **A reopened ticket restarts the escalation ladder.** The clock already
+  measured from the customer's last message; the RUNG did not reset, and each
+  repeat needs `threshold * nextCount`. A ticket chased three times, resolved,
+  then reopened would have waited 192h for a Normal ticket before anyone was
+  chased again — and gone straight to an admin. `escalationsSinceCustomerMessage`
+  counts only the rungs of the current round. That was a pre-existing quirk;
+  resolve-on-reply turned reopen from occasional into the normal end of every
+  exchange, which is what made it matter.
+
+**`pending` is now written by nothing.** It stays in the enum because live rows
+hold it and every reader still handles it — the reopen trigger pulls it back,
+escalation suppresses it, and a reply resolves it, so the rows drain through
+the ordinary flow instead of needing a migration. `isWaitingOnCustomer` and the
+"Waiting on customer" badge are therefore describing a set that can only
+shrink; when it reaches zero they can go together.
+
 ### The composer idles as one line
 
 The last of the mobile height budget. Measured in WebKit at iPhone 13 size:

@@ -23,6 +23,33 @@ export const ESCALATE_AFTER_HOURS: Record<TicketPriority, number> = {
  */
 export const MAX_ESCALATIONS = 3;
 
+/**
+ * How many times we have chased THIS round of the conversation.
+ *
+ * The count must not carry across a customer reply. Each repeat needs its own
+ * interval (`threshold * nextCount`), so a ticket chased three times, resolved,
+ * and then reopened by the customer would need four thresholds — 192h for a
+ * Normal ticket — before anyone was chased again, and would go straight to an
+ * admin when they were. The customer asked a new question; the ladder starts
+ * from the bottom.
+ *
+ * This became load-bearing when a public reply started resolving the ticket:
+ * reopen went from an occasional event to the normal end of every exchange.
+ */
+export function escalationsSinceCustomerMessage(
+  rows: { kind: string; sent_at?: string | null }[],
+  lastCustomerMessageAt: string | Date | null
+): number {
+  const since = toMillis(lastCustomerMessageAt);
+  return rows.filter((row) => {
+    if (row.kind !== "escalation") return false;
+    // Never sent — it cannot have chased anybody, so it is not a rung.
+    if (!row.sent_at) return false;
+    if (since === null) return true;
+    return Date.parse(row.sent_at) > since;
+  }).length;
+}
+
 export interface EscalationInput {
   priority: TicketPriority;
   status: TicketStatus;

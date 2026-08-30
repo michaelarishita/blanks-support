@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useKeyboardInset } from "@/lib/use-visual-viewport";
 import { cn } from "@/lib/cn";
-import { sendReply } from "@/app/actions";
+import { keepTicketOpen, sendReply } from "@/app/actions";
 import { isEmptyHtml } from "@/lib/html";
 import { useHotkey } from "@/lib/shortcuts";
 import RichTextEditor, {
@@ -189,12 +189,46 @@ export default function ReplyBox({
       } catch {
         /* nothing to clean up if storage is unavailable */
       }
-      if (res?.warning) toast(res.warning, { tone: "error" });
+      /**
+       * THE ESCAPE HATCH from resolve-on-reply.
+       *
+       * A reply that asks the customer a question is the case where resolving
+       * is wrong — the ticket leaves the queue and nobody comes back to it.
+       * So the confirmation names what happened ("Reply sent · resolved")
+       * rather than just confirming the send, and offers the way back.
+       *
+       * 12 seconds, not the 8 an action normally gets: this is a decision, not
+       * an undo of a mistake, and the reader has to notice the ticket changed
+       * state before deciding whether they meant it.
+       */
+      const keepOpen = res?.resolved
+        ? {
+            duration: 12000,
+            action: {
+              label: "Keep open",
+              onClick: () => {
+                keepTicketOpen(ticketId).then((r) => {
+                  if (r?.error) toast(r.error, { tone: "error" });
+                  else toast("Kept open", { tone: "info" });
+                });
+              },
+            },
+          }
+        : {};
+
+      if (res?.warning) toast(res.warning, { tone: "error", ...keepOpen });
       else if (isNote) toast("Note added", { tone: "success" });
       else
-        toast(emailCapable ? "Reply sent" : "Reply saved to thread", {
-          tone: "success",
-        });
+        toast(
+          res?.resolved
+            ? emailCapable
+              ? "Reply sent · ticket resolved"
+              : "Reply saved · ticket resolved"
+            : emailCapable
+              ? "Reply sent"
+              : "Reply saved to thread",
+          { tone: "success", ...keepOpen }
+        );
 
       // Surfaced separately so the assignment isn't a silent side effect of
       // hitting send.

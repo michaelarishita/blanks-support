@@ -7,7 +7,7 @@ import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
 import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
 import { syncSupportMailboxThrottled } from "@/lib/google/inbound";
 import { sendAssignmentNotification } from "@/lib/notifications/send";
-import { STATUSES_AWAITING_AGENT } from "@/lib/ticket-status";
+import { STATUSES_A_REPLY_RESOLVES } from "@/lib/ticket-status";
 import {
   currentReplyWindow,
   deliverMetaMessage,
@@ -138,16 +138,31 @@ export async function sendReply(
     }
   }
 
+  // Did this reply actually resolve the ticket? The toast only offers "Keep
+  // open" when it did — an escape hatch from something that did not happen
+  // reads as a bug.
+  let resolved = false;
   if (!isNote) {
-    // A public reply moves the ticket to "waiting on customer". This is the
-    // only place `pending` is set by hand, and 6E's escalation suppression
-    // depends on it — the status list comes from lib/ticket-status so the
-    // rule and its tests share one source.
-    await supabase
+    // A PUBLIC REPLY RESOLVES. Most replies are terminal answers, and parking
+    // them in `pending` filled the queue with tickets that were finished in
+    // every sense but the recorded one. Safe because the reopen trigger pulls
+    // a resolved ticket straight back to open when the customer writes again.
+    //
+    // The status list lives in lib/ticket-status so this rule and its tests
+    // share one source — and so the DB trigger's half stays visible beside it.
+    const { data: moved } = await supabase
       .from("tickets")
-      .update({ status: "pending" })
+      .update({ status: "resolved" })
       .eq("id", ticketId)
-      .in("status", STATUSES_AWAITING_AGENT);
+      .in("status", STATUSES_A_REPLY_RESOLVES)
+      .select("id");
+    resolved = Boolean(moved?.length);
+    if (resolved) {
+      await logEvent(supabase, ticketId, userId, "status_changed", {
+        status: "resolved",
+        by: "public reply",
+      });
+    }
   } else {
     await logEvent(supabase, ticketId, userId, "note_added");
   }
@@ -161,10 +176,11 @@ export async function sendReply(
     return {
       ok: true,
       claimed,
+      resolved,
       warning: `Saved, but the email didn't send: ${deliveryError}`,
     };
   }
-  return { ok: true, claimed };
+  return { ok: true, claimed, resolved };
 }
 
 /** Re-attempts delivery of a reply that failed to send. */
@@ -200,6 +216,45 @@ export async function setStatus(ticketId: string, status: TicketStatus) {
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
   return { ok: true };
+}
+
+/**
+ * The escape hatch from resolve-on-reply.
+ *
+ * A reply that ASKS the customer something is the case where resolving is
+ * wrong: the ticket leaves the queue and nobody ever comes back to it. So the
+ * send toast offers this, and it reverts to open.
+ *
+ * Conditional on the ticket still being resolved, unlike `setStatus`. In the
+ * seconds this toast is on screen the customer may already have replied — the
+ * trigger will have pulled the ticket to open, and an unconditional write
+ * would set it to open again on top of a state that had moved on, discarding
+ * whatever else happened. Being a no-op there is the correct outcome: the
+ * ticket is already back in the queue, which is all this was asking for.
+ */
+export async function keepTicketOpen(ticketId: string) {
+  const { supabase, userId } = await requireAgent();
+
+  const { data: moved, error } = await supabase
+    .from("tickets")
+    .update({ status: "open" })
+    .eq("id", ticketId)
+    .eq("status", "resolved")
+    .select("id");
+  if (error) return { error: error.message };
+
+  // Recorded only when it actually changed something, so the timeline does not
+  // claim a status change that did not happen.
+  if (moved?.length) {
+    await logEvent(supabase, ticketId, userId, "status_changed", {
+      status: "open",
+      by: "kept open after replying",
+    });
+  }
+
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  return { ok: true, changed: Boolean(moved?.length) };
 }
 
 export async function assignTicket(ticketId: string, assigneeId: string | null) {

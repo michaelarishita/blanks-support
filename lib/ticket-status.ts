@@ -9,21 +9,43 @@ import type { TicketStatus } from "@/lib/types";
  *
  *   new       automatic  · created, nobody has replied yet
  *   open      MANUAL     · being worked
- *   pending   automatic  · an agent replied, we're waiting on the customer
- *   resolved  MANUAL     · done
+ *   pending   LEGACY     · nothing writes this any more — see below
+ *   resolved  automatic + MANUAL · a public reply, or an agent saying so
  *   closed    automatic  · resolved and untouched for 7 days (auto-close cron)
  *
- * `pending` matters beyond display: escalation suppression keys off it, so a
- * ticket waiting on a customer isn't chased. Removing it from the UI must not
- * remove it from the lifecycle.
+ * A PUBLIC REPLY NOW RESOLVES. Most replies are terminal answers, and the old
+ * behaviour parked every one of them in `pending` — a state nobody revisits,
+ * so the queue filled with tickets that were finished in every sense except
+ * the one the software recorded.
+ *
+ * The other half was already true: the `on_message_insert` trigger reopens a
+ * resolved ticket the moment the customer writes back. That is what makes
+ * resolving-on-reply safe rather than optimistic — being wrong costs nothing,
+ * because the customer's own reply corrects it.
+ *
+ * `pending` is now WRITTEN BY NOTHING. It is kept in the enum because live
+ * rows still hold it, and every reader still handles it: the reopen trigger
+ * pulls it back to open, escalation still suppresses it, and a reply still
+ * resolves it — so the remaining rows drain through the normal flow rather
+ * than needing a migration.
  */
 
 /** The only statuses an agent sets directly. */
 export const MANUAL_STATUSES = ["open", "resolved"] as const;
 export type ManualStatus = (typeof MANUAL_STATUSES)[number];
 
-/** Statuses where the ball is in our court, so an agent reply moves it on. */
+/** Statuses where the ball is in our court — the unassigned queue's meaning. */
 export const STATUSES_AWAITING_AGENT: TicketStatus[] = ["new", "open"];
+
+/**
+ * Statuses a public reply moves to resolved.
+ *
+ * Includes `pending` so the rows left behind by the old behaviour drain
+ * through the ordinary flow instead of sitting in a state nothing writes any
+ * more. Deliberately EXCLUDES `closed`: replying to a closed ticket should not
+ * quietly un-close it, and `resolved` is already the destination.
+ */
+export const STATUSES_A_REPLY_RESOLVES: TicketStatus[] = ["new", "open", "pending"];
 
 /** Statuses a customer message pulls back into the queue. */
 export const STATUSES_REOPENED_BY_CUSTOMER: TicketStatus[] = ["pending", "resolved"];
@@ -34,11 +56,15 @@ export const CLOSED_STATUSES: TicketStatus[] = ["resolved", "closed"];
 /**
  * What an agent's public reply does to the status.
  * Returns null when nothing should change.
+ *
+ * An INTERNAL NOTE is not a reply and never reaches here — a note is the team
+ * talking to itself, and resolving a ticket because somebody wrote a note
+ * would resolve it without answering anybody.
  */
 export function nextStatusAfterAgentReply(
   current: TicketStatus
 ): TicketStatus | null {
-  return STATUSES_AWAITING_AGENT.includes(current) ? "pending" : null;
+  return STATUSES_A_REPLY_RESOLVES.includes(current) ? "resolved" : null;
 }
 
 /**
@@ -55,7 +81,14 @@ export function nextStatusAfterCustomerMessage(
   return STATUSES_REOPENED_BY_CUSTOMER.includes(current) ? "open" : null;
 }
 
-/** True while we're waiting on the customer — shown passively, never a button. */
+/**
+ * True while we're waiting on the customer — shown passively, never a button.
+ *
+ * Only ever true for LEGACY rows now. Nothing writes `pending`, so this
+ * describes a state that can only shrink. Kept rather than deleted because
+ * the rows exist and the badge is still accurate for them; when the count
+ * reaches zero this and the badge can go together.
+ */
 export function isWaitingOnCustomer(status: TicketStatus): boolean {
   return status === "pending";
 }

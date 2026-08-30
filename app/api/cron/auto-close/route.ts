@@ -56,11 +56,26 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient();
   const cutoff = new Date(Date.now() - AUTO_CLOSE_DAYS * 86_400_000).toISOString();
 
+  // Seven days FROM THE RESOLVE, not from the last message.
+  //
+  // These diverge, and by days: a ticket resolved on the 28th whose last
+  // message was the 23rd would have been closed on the 30th — two days of
+  // grace instead of seven. That was always wrong and became load-bearing
+  // when a public reply started resolving, because the reply's own timestamp
+  // is what makes the two coincide in the common case and nothing else does.
+  //
+  // resolved_at is stamped by the on_ticket_update trigger on every entry
+  // into resolved, so a reopened-and-resolved-again ticket gets a fresh
+  // seven days. last_message_at remains the fallback for any row predating
+  // the stamp — never absent in practice, but a null here would otherwise
+  // exclude a ticket from auto-close forever.
   const { data: stale, error } = await admin
     .from("tickets")
     .select("id, number")
     .eq("status", "resolved")
-    .lt("last_message_at", cutoff)
+    .or(
+      `resolved_at.lt.${cutoff},and(resolved_at.is.null,last_message_at.lt.${cutoff})`
+    )
     .limit(MAX_PER_RUN);
 
   if (error) {

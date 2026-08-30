@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { cronUnauthorized, isCronAuthorized } from "@/lib/cron-auth";
 import { sendUnassignedDigest } from "@/lib/notifications/unassigned-send";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { decideEscalation } from "@/lib/notifications/escalation";
+import { escalationsSinceCustomerMessage, decideEscalation } from "@/lib/notifications/escalation";
 import { decideSendTime } from "@/lib/notifications/policy";
 import {
   sendAssignmentNotification,
@@ -140,7 +140,12 @@ export async function GET(request: NextRequest) {
       .eq("agent_id", agentId);
 
     const rows = history ?? [];
-    const escalationCount = rows.filter((r) => r.kind === "escalation").length;
+    // Counted SINCE the customer last wrote, not for all time. A reopened
+    // ticket starts the ladder again — see escalationsSinceCustomerMessage.
+    const escalationCount = escalationsSinceCustomerMessage(
+      rows as { kind: string; sent_at?: string | null }[],
+      (lastCustomer?.created_at as string) ?? null
+    );
     const pendingReminder = rows.find(
       (r) => r.kind === "reminder" && !r.sent_at && r.scheduled_for
     );
