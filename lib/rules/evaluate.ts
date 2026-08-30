@@ -68,7 +68,26 @@ export function conditionMatches(
     case "body":
       return keywordMatch(facts.body, value, condition.operator);
     case "email_domain": {
-      const hit = emailDomain(facts.customerEmail) === normalizeDomain(value);
+      const domain = emailDomain(facts.customerEmail);
+      /**
+       * NO EMAIL MATCHES NOTHING — not even a negative condition.
+       *
+       * A Messenger customer has no address at all, so `is_not gmail.com` was
+       * vacuously TRUE for every social ticket, and any exclusion rule anybody
+       * writes would fire on all of them. The failure is silent: the ticket is
+       * assigned or re-prioritised by a rule that was never about it.
+       *
+       * This is the same call already made for a blank condition VALUE above.
+       * The difference is which side is missing, and the answer is the same:
+       * a comparison that cannot be made is not a match, in either direction.
+       *
+       * Note the asymmetry with `topic`, which is deliberate. A null topic is
+       * a fact about the ticket — it genuinely has no topic — so "topic is not
+       * Orders" is honestly true. A null email on Messenger is not a fact
+       * about the customer; it is a field that does not exist on that channel.
+       */
+      if (!domain) return false;
+      const hit = domain === normalizeDomain(value);
       return condition.operator === "is_not" ? !hit : hit;
     }
     default:

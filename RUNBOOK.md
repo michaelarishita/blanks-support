@@ -124,6 +124,36 @@ you have a real problem — start at the top of this page.
 
 ---
 
+## Facebook Messenger has stopped
+
+Symptoms: DMs to the Blanks Page don't become tickets.
+
+**The most likely cause is that Meta unsubscribed us**, and it tells nobody.
+An app that fails to answer its webhook for an hour is dropped; the Page keeps
+receiving messages and we simply never hear about them. From the inside it
+looks exactly like a quiet week.
+
+1. **Settings → Facebook Messenger** shows all four facts: subscription,
+   token, last event received, and signature failures. Check it first — it
+   asks Meta directly rather than reading our own records.
+2. **If the subscription is gone**: developers.facebook.com → the app →
+   Webhooks → Page → Subscribe, with `messages` and `message_echoes` ticked.
+3. **If the token is invalid**: it is a System User token and does not expire,
+   so an invalid one has been revoked. Regenerate in Business settings →
+   System users → the Blanks user → Generate token, and update
+   `META_PAGE_ACCESS_TOKEN` in Vercel.
+4. **If signature failures are climbing**, compare `META_APP_SECRET` against
+   the app's secret BEFORE assuming an attack. And check whether the failures
+   are all on non-ASCII bodies — the log records `ascii=false` — which is a
+   known Meta quirk about emoji, not a key problem. CLAUDE.md has the detail.
+5. **Events queued but not processing**: the hourly heartbeat drains them. If
+   the count is not falling, check Vercel logs for `[meta]`.
+
+Nothing is lost while this is broken: the messages stay in the Page inbox, and
+the daily reconciliation reports anything we never stored.
+
+---
+
 ## Replies aren't sending
 
 Almost always: **that agent hasn't connected their Gmail.** Settings →
@@ -162,6 +192,9 @@ carry a real reason.
 - **Migrations** — every `.sql` in `supabase/migrations/` must be run in
   order. The banner tracks which are outstanding and distinguishes "not run"
   from "couldn't check".
+- **Meta webhook** — no renewal needed (the System User token does not
+  expire), but the heartbeat checks hourly that the Page is still subscribed,
+  because Meta drops a failing app without telling anyone.
 
 ---
 

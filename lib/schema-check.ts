@@ -285,6 +285,14 @@ const MIGRATIONS: Migration[] = [
     title: "Daily unassigned digest — the safety net for narrowed new-ticket mail",
     requires: { columns: ["agents.watch_unassigned_digest"] },
   },
+  {
+    file: "0021_meta_webhook_events.sql",
+    title: "Meta webhook event log — the endpoint cannot answer fast without it",
+    requires: {
+      tables: ["meta_webhook_events"],
+      indexes: ["meta_webhook_events_pending_idx"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

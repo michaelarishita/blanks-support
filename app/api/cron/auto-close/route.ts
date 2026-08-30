@@ -6,6 +6,7 @@ import {
   sweepOrphanedUploads,
 } from "@/lib/uploads/sweep";
 import { runReconciliation } from "@/lib/inbound/reconcile";
+import { runMessengerReconciliation } from "@/lib/meta/reconcile";
 
 // Daily. Resolved tickets nobody has touched for a week become closed.
 //
@@ -53,6 +54,20 @@ export async function GET(request: NextRequest) {
     console.error("[cron] mailbox reconciliation failed:", reconcile.error);
   }
 
+  // Messenger's half, on the same daily cadence and for the same reason: it
+  // is the only Meta check that watches the OUTCOME rather than a mechanism.
+  // Wrapped, because a Graph API failure must not stop the auto-close it is
+  // riding on.
+  let metaReconcile;
+  try {
+    metaReconcile = await runMessengerReconciliation();
+    if (metaReconcile.error) {
+      console.error("[cron] Messenger reconciliation failed:", metaReconcile.error);
+    }
+  } catch (e) {
+    console.error("[cron] Messenger reconciliation threw:", e);
+  }
+
   const admin = createAdminClient();
   const cutoff = new Date(Date.now() - AUTO_CLOSE_DAYS * 86_400_000).toISOString();
 
@@ -82,7 +97,7 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
   if (!stale?.length) {
-    return Response.json({ ok: true, closed: 0, uploads, ticketFiles, reconcile });
+    return Response.json({ ok: true, closed: 0, uploads, ticketFiles, reconcile, metaReconcile });
   }
 
   const ids = stale.map((ticket) => ticket.id);
@@ -110,6 +125,7 @@ export async function GET(request: NextRequest) {
     uploads,
     ticketFiles,
     reconcile,
+    metaReconcile,
     closed: ids.length,
     numbers: stale.map((ticket) => ticket.number),
     // Surfaced so a persistent backlog above the cap is visible rather than

@@ -8,6 +8,7 @@ import CompanyBrandEditor from "@/components/CompanyBrandEditor";
 import QuarantinedMessages from "@/components/QuarantinedMessages";
 import { readQuarantined } from "@/lib/inbound/quarantine";
 import ReconcileStatus, { type ReconcileSummary } from "@/components/ReconcileStatus";
+import MessengerStatus from "@/components/MessengerStatus";
 import { getSettingsBlob } from "@/lib/settings";
 import CheckMailNow from "@/components/CheckMailNow";
 import IgnoredSenderList from "@/components/IgnoredSenderList";
@@ -315,6 +316,13 @@ export default async function SettingsPage({
 
           <div className="mt-4 border-t border-gray-200 pt-4">
             <CheckMailNow connected={Boolean(supportInbox)} />
+          </div>
+
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <h3 className="mb-2 text-sm font-semibold text-gray-700">
+              Facebook Messenger
+            </h3>
+            <MessengerStatus />
           </div>
 
           <div className="mt-4 border-t border-gray-200 pt-4">

@@ -970,6 +970,91 @@ switch. The genuine differences are which id column identifies the customer
 tests/meta-inbound.test.ts drives both channels through processMetaEvents with
 Supabase and the Graph API faked at the edges.
 
+### Meta's five-second deadline drives the whole architecture
+
+Meta requires a 200 within **five seconds**. It retries immediately on
+failure, alerts after fifteen minutes, and **UNSUBSCRIBES THE APP after an
+hour of them** — which is a silent inbound outage with no signal of its own:
+the Page keeps receiving messages, we keep not hearing about them, and the
+ticket table looks like a quiet week.
+
+So the endpoint does exactly two things before answering: check the signature,
+and write the row. `meta_webhook_events` (0021) is the landing pad;
+`lib/meta/queue.ts` drains it from `after()` once the response has gone.
+Profile fetches and media downloads are Graph API calls whose latency is not
+ours, and none of them may sit between the request and the response any more.
+
+- **The one case worth a non-200** is failing to write the row. We do not have
+  the event, so a retry is genuinely useful, and the unique index on
+  `meta_message_id` makes redelivery safe.
+- **A refused signature is still recorded.** A run of them is either somebody
+  probing the endpoint or our own secret being wrong, and those need opposite
+  responses — a count nobody kept cannot tell them apart.
+- **The drain also runs on the hourly heartbeat**, which is what makes it
+  self-healing: an event whose `after()` never finished — function killed,
+  deploy rolled — is picked up within the hour rather than sitting forever.
+- Attempts are capped, like the inbound quarantine. Nothing blocks behind a
+  bad event here (there is no cursor), so it is a cost control rather than an
+  outage guard — but a row at the limit is counted and the heartbeat says so.
+
+### The emoji gotcha, before you rotate the secret
+
+Meta documents the X-Hub-Signature-256 as computed over the payload in its
+**escaped-unicode form** with lowercase hex. Hashing raw UTF-8 bytes — what we
+do, and what every sane library does — agrees for any pure-ASCII payload and
+disagrees for anything carrying an emoji or non-Latin text.
+
+DM traffic is mostly emoji. So the failure will not look random: every message
+with a 👍 fails while the plain ones keep working, which reads exactly like an
+intermittent key problem and is not one.
+
+The refusal log records `ascii=true|false`. **If failures are all ascii=false,
+that is this quirk** — fix it by hashing the escaped form, not by rotating the
+secret and not by weakening the check.
+
+### No email is a real state now, and it broke a routing rule
+
+Every path in this codebase was written when a customer had an email. The
+schema always allowed null; nothing exercised it until Messenger.
+
+**The bug this found:** `email_domain` with `is_not` was vacuously TRUE for a
+customer with no address, so every "domain is not X" rule fired on every
+social ticket — silently, changing assignment and priority on tickets the rule
+was never about. A comparison that cannot be made is not a match, in either
+direction. Same call already made for a blank condition VALUE; this was the
+other side missing.
+
+Deliberately NOT changed: `topic` behaves the same way and is left alone. A
+null topic is a fact about the ticket — it genuinely has no topic — where a
+null email on Messenger is a field that does not exist on that channel.
+
+Everything else degrades correctly, and `tests/no-email-customer.test.ts`
+holds the line: `canEmail` is false on channel alone, `customerDisplayName`
+falls back rather than printing null, macros substitute
+`[NO ORDER — CHECK BEFORE SENDING]`, risk scores an impossible Shopify lookup
+as UNKNOWN rather than "no such customer" (or the most alarming signal we have
+would be on every social ticket forever), and resolve-on-reply never reads an
+address at all.
+
+### Watching Messenger: three questions, all of them silent
+
+- **Is the app still subscribed?** Checked on every heartbeat against
+  `/{page-id}/subscribed_apps`, because Meta unsubscribing us is the failure
+  with no other signal anywhere.
+- **Is the token still valid?** A System User token that does not expire —
+  so a validity CHECK, deliberately no refresh flow. It can still be revoked.
+- **Are signatures failing?** Counted over 24h from our own log.
+
+A failed Graph call reports `unknown`, never `broken`. Telling somebody the
+subscription is gone when the API merely timed out sends them to re-subscribe
+a Page that was fine.
+
+`lib/meta/reconcile.ts` is the outcome-watching half, on the daily cron: list
+the Page's conversations through the Graph API and report any message we
+neither stored nor deliberately dropped. Built on the Graph API rather than
+the webhook log ON PURPOSE — reconciling our record against our record would
+find nothing.
+
 ### 9E — outbound, and the window that will bite
 
 Both channels send through the same Send API endpoint with the Page token.

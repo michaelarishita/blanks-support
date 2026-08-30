@@ -172,6 +172,29 @@ describe("both channels use the same plumbing", () => {
     expect(recorded.tables.customers[0]).toMatchObject({ name: "@jane_lifts" });
   });
 
+  it("still creates the ticket when the profile fetch fails", async () => {
+    // Degrade, never drop. A Graph outage must cost us a NAME, not a customer
+    // message — and the PSID is still on the customer row, so the person is
+    // traceable and the name backfills on their next message.
+    profile.current = { name: null, username: null, avatarUrl: null };
+    const result = await process(dm("page", { mid: "m_noprofile", text: "where is my order" }));
+
+    expect(result.created).toBe(1);
+    expect(recorded.tables.tickets).toHaveLength(1);
+    expect(recorded.tables.customers[0]).toMatchObject({ fb_psid: "CUSTOMER", name: null });
+    // And the message itself is there — the point of not dropping it.
+    expect(recorded.tables.messages[0]).toMatchObject({ body_text: "where is my order" });
+  });
+
+  it("gives a nameless customer something sayable on screen", async () => {
+    // customerDisplayName is what the ticket header and every notification
+    // use. A ticket headed "null" is worse than one headed "Customer".
+    const { customerDisplayName } = await import("@/lib/display");
+    const name = customerDisplayName({ name: null, email: null });
+    expect(name).toBeTruthy();
+    expect(name.toLowerCase()).not.toContain("null");
+  });
+
   it("keeps the two channels' conversations apart for identical ids", async () => {
     await process(dm("page", { mid: "m_4", text: "a" }));
     const messenger = recorded.tables.tickets[0].meta_conversation_id;
