@@ -105,6 +105,30 @@ deployed. Until then it redirects to `/login`, so use the meta tag.
 deployed commit — check the build sha before concluding a fix is live or that
 a bug still exists.
 
+### Do not carry "run migration NNNN" forward without re-checking
+
+It happened: 0021 was reported as outstanding after it had already been run.
+The cause was not a false negative — the banner was correct throughout — it
+was that the instruction was written when the migration was authored and then
+repeated later as a standing to-do that nobody re-verified.
+
+**A migration instruction is a claim about the database, and it goes stale the
+moment somebody acts on it.** Writing "0021 needs running" in a commit message
+is fine — that is a note about a moment. Repeating it in a later summary is a
+fresh claim, and it needs a fresh check:
+
+```
+select count(*) from pg_class where relname = '<the table it creates>';
+```
+
+or, from the app, `checkSchema(true)` — which is the same thing the banner
+does and takes one call.
+
+Passing a test in `tests/schema-check.test.ts` is NOT that check. Those tests
+compare the checker's list against the migrations directory; **none of them
+touches the database**, and a green run says nothing about what has been
+applied.
+
 ### Migrations are run BY HAND
 
 Nothing applies them automatically. Every `.sql` in `supabase/migrations/` is
@@ -465,6 +489,21 @@ It is the house rule again, in the module whose whole job is raising alarms:
   redelivery silently doubles every message. 0014's real risk is the enum
   value, which no column probe can see. 0007 stopped being "unprobeable": a
   function is a row in `pg_proc`, and reading it does not invoke it.
+- **PGRST202 is two different facts, and time is the only way to tell them
+  apart.** PostgREST answers it both for "no such function" and for "my schema
+  cache has not caught up", with the same code and the same message — and
+  `information_schema` is NOT reachable through PostgREST (PGRST106), so there
+  is no second oracle. The bootstrap check was therefore the one place this
+  module could still cry wolf, and it would do it in exactly the situation it
+  was built for: the moments after somebody ran 0017. A first sighting now
+  reports "could not check"; only a PGRST202 that outlasts a 60-second grace
+  is called a missing migration. Anything that is not PGRST202 never starts
+  that clock, because a network error says nothing about which migrations
+  exist.
+- Everything else is checked against **pg_catalog through the inventory
+  function**, which is live and immune to cache lag. Only the discovery of the
+  function itself goes through PostgREST's cache — which is precisely why that
+  one check needed the grace and the other twenty did not.
 - A migration with genuinely no evidence declares `unprobeableReason` and is
   reported applied. **Never write a probe that cannot fail** — one that always
   passes looks exactly like one that works, which is the more expensive

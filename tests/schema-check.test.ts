@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CHECKED_MIGRATION_FILES,
   unmetRequirements,
@@ -146,5 +146,117 @@ describe("an inventory that could not be read", () => {
     expect(failureBranch.indexOf("return { unavailable:")).toBeLessThan(
       failureBranch.indexOf("tables: new Set(")
     );
+  });
+});
+
+/**
+ * The bootstrap check was the one place this module could still cry wolf, and
+ * it would do it in exactly the situation it exists to handle: the moments
+ * after somebody ran the migration.
+ *
+ * PostgREST answers PGRST202 both for "no such function" and for "my schema
+ * cache has not caught up yet" — same code, same message. Verified against the
+ * live project, along with the fact that information_schema is NOT reachable
+ * through PostgREST (PGRST106), so there is no second oracle to break the tie.
+ * Time is the only discriminator available.
+ */
+describe("PGRST202 is two different facts", () => {
+  const rpc = (result: { data?: unknown; error?: { code: string; message: string } }) =>
+    vi.fn().mockResolvedValue({ data: result.data ?? null, error: result.error ?? null });
+
+  const INVENTORY = {
+    tables: [], columns: [], indexes: [], functions: [], enum_values: {},
+  };
+
+  async function withClient(client: Record<string, unknown>) {
+    vi.resetModules();
+    vi.doMock("@/lib/supabase/admin", () => ({ createAdminClient: () => client }));
+    return import("@/lib/schema-check");
+  }
+
+  const storage = { listBuckets: async () => ({ data: [], error: null }) };
+
+  afterEach(() => {
+    vi.doUnmock("@/lib/supabase/admin");
+    vi.useRealTimers();
+  });
+
+  it("reports 'could not check', not 'missing', the first time", async () => {
+    // A migration somebody ran ten seconds ago must never be reported unrun.
+    const mod = await withClient({
+      rpc: rpc({ error: { code: "PGRST202", message: "Could not find the function" } }),
+      storage,
+    });
+    mod.resetSchemaCheckCache();
+    const status = await mod.checkSchema(true);
+
+    expect(status.missing).toEqual([]);
+    expect(status.unverified.length).toBe(status.checks.length);
+    expect(status.unverified[0].unverified).toContain("isn't answering yet");
+  });
+
+  it("calls it missing once it outlasts the grace", async () => {
+    // A function that genuinely does not exist does not start working, so the
+    // banner still has to say so — a check that can never turn red is not a
+    // check.
+    vi.useFakeTimers();
+    const mod = await withClient({
+      rpc: rpc({ error: { code: "PGRST202", message: "Could not find the function" } }),
+      storage,
+    });
+    mod.resetSchemaCheckCache();
+
+    await mod.checkSchema(true);
+    vi.advanceTimersByTime(61_000);
+    const status = await mod.checkSchema(true);
+
+    expect(status.missing.map((m) => m.file)).toEqual(["0017_schema_inventory.sql"]);
+    // And still never accuses the other twenty of being unrun.
+    expect(status.unverified.every((c) => c.file !== "0017_schema_inventory.sql")).toBe(true);
+  });
+
+  it("forgets the clock as soon as the function answers", async () => {
+    // The lag resolved. A later, unrelated PGRST202 must start its own grace
+    // rather than inheriting a stale one and turning red immediately.
+    vi.useFakeTimers();
+    const flaky = vi
+      .fn()
+      .mockResolvedValueOnce({ data: null, error: { code: "PGRST202", message: "x" } })
+      .mockResolvedValue({ data: INVENTORY, error: null });
+    const mod = await withClient({ rpc: flaky, storage });
+    mod.resetSchemaCheckCache();
+
+    await mod.checkSchema(true);
+    const recovered = await mod.checkSchema(true);
+    // The inventory answered, so nothing is "could not check" any more. (It
+    // is an EMPTY inventory, so everything is legitimately missing — that is
+    // the right reading of a database with no tables in it.)
+    expect(
+      recovered.unverified.filter((c) => c.unverified?.includes("isn't answering"))
+    ).toEqual([]);
+
+    // Long after, it fails again — and gets a fresh grace, not an instant red.
+    vi.advanceTimersByTime(10 * 60_000);
+    flaky.mockResolvedValue({ data: null, error: { code: "PGRST202", message: "x" } });
+    const later = await mod.checkSchema(true);
+    expect(later.missing).toEqual([]);
+  });
+
+  it("never starts the clock for an unrelated failure", async () => {
+    // A network error or a bad key says nothing about which migrations exist,
+    // and must not age into an accusation.
+    vi.useFakeTimers();
+    const mod = await withClient({
+      rpc: rpc({ error: { code: "PGRST301", message: "JWT expired" } }),
+      storage,
+    });
+    mod.resetSchemaCheckCache();
+
+    await mod.checkSchema(true);
+    vi.advanceTimersByTime(10 * 60_000);
+    const status = await mod.checkSchema(true);
+
+    expect(status.missing).toEqual([]);
+    expect(status.unverified[0].unverified).toContain("JWT expired");
   });
 });

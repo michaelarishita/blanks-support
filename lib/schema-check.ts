@@ -361,26 +361,48 @@ function unverifiableBuckets(requires: Requirements, inventory: SchemaInventory)
  */
 async function readInventory(
   admin: ReturnType<typeof createAdminClient>
-): Promise<{ inventory: SchemaInventory } | { unavailable: string }> {
+): Promise<
+  | { inventory: SchemaInventory }
+  /** Could not determine. NOT a claim that anything is missing. */
+  | { unavailable: string }
+  /** Determined: 0017 really has not been run. */
+  | { absent: string }
+> {
   const { data, error } = await admin.rpc("schema_inventory");
 
   if (error) {
-    // PGRST202 is "no such function", which here means 0017 itself has not
-    // been run. That is a real missing migration, and it is reported as one
-    // by 0017's own entry — but it leaves us unable to check anything else,
-    // which is a different sentence from "nothing else is applied".
-    // PGRST202 is "no such function". Almost always that means 0017 has not
-    // been run — but PostgREST discovers functions through the cached schema,
-    // so for a moment after you DO run it the answer is the same. 0017 ends
-    // with `notify pgrst, 'reload schema'` to close that window; the wording
-    // here covers it staying open anyway, because telling someone to run a
-    // migration they just ran is the whole failure this module is repaying.
-    const reason =
-      error.code === "PGRST202"
-        ? "supabase/migrations/0017_schema_inventory.sql has not been run yet (or was run seconds ago and PostgREST has not reloaded)"
-        : `${error.code ?? "error"}: ${error.message}`;
-    return { unavailable: reason };
+    /**
+     * PGRST202 is "no such function" AND "my schema cache has not caught up",
+     * with the same code and the same message. Verified, not assumed:
+     * information_schema is not reachable through PostgREST (PGRST106), so
+     * there is no second oracle to break the tie.
+     *
+     * Time is the only discriminator available. The first sighting starts a
+     * clock and reports "could not check"; only a PGRST202 that OUTLASTS the
+     * grace is called a missing migration. Telling somebody to run a file
+     * they ran ninety seconds ago is exactly the failure this module exists
+     * to stop repeating.
+     */
+    if (error.code === "PGRST202") {
+      const now = Date.now();
+      inventoryMissingSince ??= now;
+      const persistedFor = now - inventoryMissingSince;
+      return persistedFor >= INVENTORY_GRACE_MS
+        ? { absent: "function `schema_inventory()`" }
+        : {
+            unavailable:
+              "the schema inventory function isn't answering yet — if this " +
+              "persists, supabase/migrations/0017_schema_inventory.sql has not been run",
+          };
+    }
+    // Anything else is a failure to reach the database, which says nothing
+    // about which migrations exist. It never starts the clock.
+    return { unavailable: `${error.code ?? "error"}: ${error.message}` };
   }
+
+  // It answered, so whatever we thought was missing is not.
+  inventoryMissingSince = null;
+
   if (!data || typeof data !== "object") {
     return { unavailable: "the schema inventory came back empty" };
   }
@@ -426,9 +448,35 @@ const TTL_WHEN_HEALTHY_MS = 300_000;
 
 let cached: { at: number; ttl: number; status: SchemaStatus } | null = null;
 
+/**
+ * When the inventory function first looked absent, or null when it works.
+ *
+ * PostgREST answers PGRST202 both for "this function does not exist" and for
+ * "this function exists but my schema cache has not caught up" — verified:
+ * the code and message are identical, and information_schema is not reachable
+ * through PostgREST (PGRST106) to break the tie from outside.
+ *
+ * So a single call cannot distinguish them, and calling it `missing`
+ * immediately is the one remaining way this module can tell somebody to run a
+ * migration they have already run. Cache lag resolves in seconds; a migration
+ * nobody ran does not. Waiting is the only available discriminator.
+ */
+let inventoryMissingSince: number | null = null;
+
+/**
+ * How long PGRST202 must persist before it is called a missing migration.
+ *
+ * Long enough that a schema reload finishes inside it, short enough that a
+ * genuinely unrun 0017 turns red while somebody is still looking at the page.
+ * During the grace the banner is amber and says the check could not run —
+ * which is visible and honest, just not an accusation.
+ */
+const INVENTORY_GRACE_MS = 60_000;
+
 /** Exposed for tests; the cache is otherwise process-lifetime. */
 export function resetSchemaCheckCache() {
   cached = null;
+  inventoryMissingSince = null;
 }
 
 export async function checkSchema(force = false): Promise<SchemaStatus> {
@@ -459,18 +507,30 @@ async function runChecks(): Promise<SchemaStatus> {
   }
 
   const read = await readInventory(admin);
-  if ("unavailable" in read) {
-    // Everything except 0017 becomes unverified — NOT missing. This is the
-    // whole correction: the old code would have reported sixteen migrations
-    // as unapplied because one call failed.
+
+  if ("unavailable" in read || "absent" in read) {
+    /**
+     * Everything except 0017 becomes UNVERIFIED — never missing. This is the
+     * whole correction: the old code reported sixteen migrations as unapplied
+     * because one call failed.
+     *
+     * 0017 itself is the only entry that can be called missing here, and only
+     * when `readInventory` has established that rather than merely failed —
+     * see the grace period there. Without that distinction the bootstrap
+     * check was the one place this module could still cry wolf, and it would
+     * do it in exactly the situation it was built to handle: right after
+     * somebody ran the migration.
+     */
+    const determined = "absent" in read;
+    const detail = determined ? read.absent : read.unavailable;
+
     const checks = MIGRATIONS.map<MigrationCheck>((m) =>
-      m.file === "0017_schema_inventory.sql" &&
-      read.unavailable.includes("0017_schema_inventory.sql")
+      determined && m.file === "0017_schema_inventory.sql"
         ? {
             file: m.file,
             title: m.title,
             state: "missing",
-            missing: "function `schema_inventory()`",
+            missing: detail,
             unverified: null,
           }
         : {
@@ -478,7 +538,7 @@ async function runChecks(): Promise<SchemaStatus> {
             title: m.title,
             state: "unverified",
             missing: null,
-            unverified: read.unavailable,
+            unverified: detail,
           }
     );
     return {
