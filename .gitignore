@@ -34,3 +34,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Every env file EXCEPT the documented example, which is tracked on purpose.
+# `vercel link` writes a blanket `.env*` here; that shadows .env.example and
+# is how the one file describing the required variables quietly disappears.
+.env
+.env.*
+!.env.example

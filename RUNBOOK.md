@@ -194,11 +194,21 @@ looks exactly like a quiet week.
    so an invalid one has been revoked. Regenerate in Business settings →
    System users → the Blanks user → Generate token, and update
    `META_PAGE_ACCESS_TOKEN` in Vercel.
-4. **If signature failures are climbing**, compare `META_APP_SECRET` against
+4. **If Settings says "Meta has blocked this app from the Graph API"** —
+   that is an app-level restriction (code 200), NOT a token problem, and a new
+   token will not fix it. Check developers.facebook.com → the app → **Alerts**,
+   then **App Review**, then whether business verification is still pending.
+   Confirm it yourself in one call:
+   ```bash
+   curl -s "https://graph.facebook.com/v21.0/$META_APP_ID?access_token=$META_APP_ID|$META_APP_SECRET"
+   ```
+   That reads the app's own metadata. If it is blocked too, nothing about the
+   Page or the token is involved.
+5. **If signature failures are climbing**, compare `META_APP_SECRET` against
    the app's secret BEFORE assuming an attack. And check whether the failures
    are all on non-ASCII bodies — the log records `ascii=false` — which is a
    known Meta quirk about emoji, not a key problem. CLAUDE.md has the detail.
-5. **Events queued but not processing**: the hourly heartbeat drains them. If
+6. **Events queued but not processing**: the hourly heartbeat drains them. If
    the count is not falling, check Vercel logs for `[meta]`.
 
 Nothing is lost while this is broken: the messages stay in the Page inbox, and

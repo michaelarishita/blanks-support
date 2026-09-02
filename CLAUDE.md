@@ -1266,6 +1266,52 @@ as UNKNOWN rather than "no such customer" (or the most alarming signal we have
 would be on every social ticket forever), and resolve-on-reply never reads an
 address at all.
 
+### "API access blocked" is Meta's message, not ours — and it means the APP
+
+Both Settings rows showed it, which read as a token problem and is not one.
+Run against production credentials, every call fails identically:
+
+```
+GET /{page-id}/subscribed_apps  -> 400 {"message":"API access blocked.","type":"OAuthException","code":200}
+GET /debug_token                -> 400 same          (authenticated as the APP, not the page token)
+GET /me                         -> 400 same
+GET /{app-id}                   -> 400 same          (the app reading its OWN metadata)
+```
+
+The control settles it: a deliberately invalid token returns **code 190**
+("Cannot parse access token"), ours returns **code 200**. Different errors, so
+the token parses and is recognised — the block is on the app, not the
+credential. `debug_token` failing is the decisive one: it authenticates with
+`app_id|app_secret` and involves no page permission at all.
+
+**Code 200 + "API access blocked." = an app-level restriction.** App Review,
+access level, or business verification — not something a new token fixes.
+
+`lib/meta/graph-errors.ts` classifies a Graph refusal into the four things it
+can be, because they need different people to do different things:
+
+| kind | tell from | what it means |
+|---|---|---|
+| `token_invalid` | code 190 (subcode 463 expired, 467 revoked) | regenerate the token |
+| `missing_scope` | code 200/10/3 naming a permission | the token lacks a scope |
+| `app_restricted` | "API access blocked", app disabled/restricted | Meta has blocked the app |
+| `unreachable` | no HTTP status at all | we never reached Meta |
+
+The hard pair is the middle two: **both are code 200**, and the discriminator
+is whether the message names a capability or says the app cannot call the API
+at all.
+
+**The evidence is always printed** — HTTP status, code, subcode, type,
+fbtrace_id — even when the summary is confident. The trace id is what Meta
+support asks for and the code is what a search needs. The old panel printed
+`error.message` alone: a verdict with the evidence thrown away, which is the
+failure shape this codebase keeps finding.
+
+Consequence: an app-level block now reports **broken**, not "could not
+check". The old regex (`/token|expired|revoked|session|OAuth|permission/`)
+did not match "API access blocked." and so rendered a hard outage as a grey
+dot.
+
 ### Watching Messenger: three questions, all of them silent
 
 - **Is the app still subscribed?** Checked on every heartbeat against

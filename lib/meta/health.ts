@@ -1,5 +1,11 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPageAccessToken } from "./graph";
+import {
+  classifyGraphFailure,
+  readGraphFailure,
+  type GraphDiagnosis,
+  type GraphFailure,
+} from "./graph-errors";
 
 /**
  * Is Messenger actually connected?
@@ -32,9 +38,15 @@ export type Verdict = "ok" | "broken" | "unknown";
 
 export interface MetaHealth {
   /** Is the app subscribed to the Page for the fields we need? */
-  subscription: { state: Verdict; detail: string; fields: string[] };
+  subscription: {
+    state: Verdict;
+    detail: string;
+    /** The classified failure, when there was one. */
+    diagnosis?: GraphDiagnosis;
+    fields: string[];
+  };
   /** Does the Page token still work? */
-  token: { state: Verdict; detail: string };
+  token: { state: Verdict; detail: string; diagnosis?: GraphDiagnosis };
   /** Webhook traffic, from our own records. */
   events: {
     lastReceivedAt: string | null;
@@ -51,9 +63,26 @@ export interface MetaHealth {
 /** The webhook fields Messenger inbound depends on. */
 export const REQUIRED_FIELDS = ["messages", "message_echoes"];
 
-async function graph(path: string): Promise<{ ok: true; body: unknown } | { ok: false; error: string }> {
+/**
+ * A Graph call, keeping the whole failure rather than a sentence from it.
+ *
+ * The old version returned `error.message` alone, which is how a real
+ * diagnosis — "API access blocked." — reached the Settings panel as a verdict
+ * with the evidence discarded: no code, no subcode, no trace id, and no way to
+ * tell an app-level restriction from an expired token.
+ */
+async function graph(
+  path: string
+): Promise<{ ok: true; body: unknown } | { ok: false; failure: GraphFailure }> {
   const token = await getPageAccessToken();
-  if (!token) return { ok: false, error: "no page access token configured" };
+  if (!token) {
+    return {
+      ok: false,
+      failure: readGraphFailure(null, {
+        error: { message: "no page access token configured" },
+      }),
+    };
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -63,15 +92,17 @@ async function graph(path: string): Promise<{ ok: true; body: unknown } | { ok: 
       cache: "no-store",
     });
     const body = await res.json().catch(() => null);
-    if (!res.ok) {
-      const message =
-        (body as { error?: { message?: string; code?: number } })?.error?.message ??
-        `HTTP ${res.status}`;
-      return { ok: false, error: message };
-    }
+    if (!res.ok) return { ok: false, failure: readGraphFailure(res.status, body) };
     return { ok: true, body };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    // httpStatus null means we never got an answer, which classifies as
+    // unreachable rather than as any kind of refusal.
+    return {
+      ok: false,
+      failure: readGraphFailure(null, {
+        error: { message: e instanceof Error ? e.message : String(e) },
+      }),
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -95,7 +126,17 @@ export async function checkSubscription(): Promise<MetaHealth["subscription"]> {
     // A failed call is NOT "unsubscribed". Telling somebody the subscription
     // is gone when the Graph API merely timed out sends them to re-subscribe
     // a Page that was fine.
-    return { state: "unknown", detail: result.error, fields: [] };
+    //
+    // But a DEFINITIVE refusal is not indeterminate either: if Meta has
+    // blocked the app or rejected the token, Messenger is broken and saying
+    // "could not check" understates it.
+    const d = classifyGraphFailure(result.failure);
+    return {
+      state: d.kind === "app_restricted" || d.kind === "token_invalid" ? "broken" : "unknown",
+      detail: `${d.summary} (${d.evidence})`,
+      diagnosis: d,
+      fields: [],
+    };
   }
 
   const apps = (result.body as { data?: { subscribed_fields?: string[] }[] })?.data ?? [];
@@ -132,12 +173,19 @@ export async function checkToken(): Promise<MetaHealth["token"]> {
 
   const result = await graph("me?fields=id,name");
   if (!result.ok) {
-    // Meta's auth errors are specific enough to act on; anything else is a
-    // failure to reach them, which is not the same as a bad token.
-    const looksAuth = /token|expired|revoked|session|OAuth|permission/i.test(result.error);
-    return looksAuth
-      ? { state: "broken", detail: result.error }
-      : { state: "unknown", detail: result.error };
+    // Classified rather than regex-matched on the message. The old test
+    // (/token|expired|revoked|session|OAuth|permission/) called "API access
+    // blocked." indeterminate, which is how a hard app-level block showed up
+    // as a grey dot.
+    const d = classifyGraphFailure(result.failure);
+    return {
+      state:
+        d.kind === "token_invalid" || d.kind === "app_restricted" || d.kind === "missing_scope"
+          ? "broken"
+          : "unknown",
+      detail: `${d.summary} (${d.evidence})`,
+      diagnosis: d,
+    };
   }
   const name = (result.body as { name?: string })?.name;
   return { state: "ok", detail: name ? `valid for ${name}` : "valid" };

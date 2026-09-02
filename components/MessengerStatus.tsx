@@ -1,4 +1,5 @@
 import { readMetaHealth, SIGNATURE_FAILURE_THRESHOLD } from "@/lib/meta/health";
+import type { GraphDiagnosis } from "@/lib/meta/graph-errors";
 
 /**
  * Is Messenger connected, and is anything stuck?
@@ -18,6 +19,15 @@ export default async function MessengerStatus() {
         detail={health.subscription.detail}
       />
       <Row label="Page token" state={health.token.state} detail={health.token.detail} />
+
+      {/* One block, not two. Both rows fail from the same cause whenever the
+          cause is the app rather than the Page — printing the same paragraph
+          twice would read as two problems. */}
+      {(health.subscription.diagnosis ?? health.token.diagnosis) && (
+        <Diagnosis
+          d={(health.subscription.diagnosis ?? health.token.diagnosis)!}
+        />
+      )}
 
       {health.events.error ? (
         // A failed read is not "no events". Saying "0 signature failures"
@@ -64,6 +74,30 @@ export default async function MessengerStatus() {
           />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * The cause, named, with the codes printed.
+ *
+ * "API access blocked" is Meta's message and it is a verdict with the
+ * evidence thrown away — no code, no subcode, no trace id, and no way to tell
+ * an app-level block from an expired token. Every one of those needs a
+ * different person to do a different thing.
+ */
+function Diagnosis({ d }: { d: GraphDiagnosis }) {
+  const tone =
+    d.kind === "rate_limited" || d.kind === "unreachable"
+      ? "border-warning-border bg-warning-bg text-warning-text"
+      : "border-danger-border bg-danger-bg text-danger-text";
+  return (
+    <div className={`mt-2 rounded-md border px-3 py-2 text-caption ${tone}`}>
+      <p className="font-semibold">{d.summary}</p>
+      {d.action && <p className="mt-1 opacity-90">{d.action}</p>}
+      {/* Always shown, even when the summary is confident. The trace id is
+          what Meta support asks for, and the code is what a search needs. */}
+      <p className="mt-1 font-mono text-mono opacity-70">{d.evidence}</p>
     </div>
   );
 }
