@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPageAccessToken } from "./graph";
+import { resolvePageToken, type TokenKind } from "./page-token";
 import {
   classifyGraphFailure,
   readGraphFailure,
@@ -168,8 +169,24 @@ export async function checkSubscription(): Promise<MetaHealth["subscription"]> {
  * not a renewal.
  */
 export async function checkToken(): Promise<MetaHealth["token"]> {
-  const token = await getPageAccessToken();
-  if (!token) return { state: "broken", detail: "no page access token configured" };
+  /**
+   * Reported as TWO facts, because they are two facts and conflating them is
+   * what hid this for days: what is configured, and what we ended up using.
+   *
+   * "Valid for BlanksHelpdesk" was technically true and was the clue that
+   * solved it — the token was valid, and belonged to the system user rather
+   * than the Page. That distinction is now stated rather than left for
+   * somebody to notice.
+   */
+  const resolved = await resolvePageToken();
+  if ("error" in resolved) {
+    return {
+      state: "broken",
+      detail: resolved.configuredName
+        ? `${describeKind(resolved.configuredKind)} for ${resolved.configuredName} — ${resolved.error}`
+        : resolved.error,
+    };
+  }
 
   const result = await graph("me?fields=id,name");
   if (!result.ok) {
@@ -188,7 +205,27 @@ export async function checkToken(): Promise<MetaHealth["token"]> {
     };
   }
   const name = (result.body as { name?: string })?.name;
-  return { state: "ok", detail: name ? `valid for ${name}` : "valid" };
+  const pageName = name ?? resolved.pageName;
+
+  // Both halves, always. A reader must be able to see at a glance that the
+  // thing we are calling with is the PAGE, not the account that owns it.
+  const detail =
+    resolved.configuredKind === "system_user"
+      ? `system user token${resolved.configuredName ? ` (${resolved.configuredName})` : ""}` +
+        ` → derived Page token${pageName ? ` for ${pageName}` : ""}` +
+        (resolved.fromCache ? ", cached" : "")
+      : `Page token${pageName ? ` for ${pageName}` : ""}`;
+
+  return { state: "ok", detail };
+}
+
+/** Plain words for a token kind, for the panel. */
+function describeKind(kind: TokenKind): string {
+  return kind === "page"
+    ? "Page token"
+    : kind === "system_user"
+      ? "system user token"
+      : "token of unknown kind";
 }
 
 /** What our own webhook log says, without asking Meta anything. */

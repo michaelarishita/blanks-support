@@ -194,6 +194,22 @@ looks exactly like a quiet week.
    so an invalid one has been revoked. Regenerate in Business settings →
    System users → the Blanks user → Generate token, and update
    `META_PAGE_ACCESS_TOKEN` in Vercel.
+
+   **What that produces is a SYSTEM USER token, not a Page token** — and that
+   is fine. The app derives the Page token from it automatically and caches
+   it. You do not need to find a Page token yourself.
+
+   Settings shows both, and should read like:
+   `system user token (BlanksHelpdesk) → derived Page token for Blank's Sports Nutrition`
+
+   If it shows only the first half, the derivation failed — usually because
+   the system user has lost access to the Page in Business settings.
+
+   **`code 190 subcode 2069032` is NOT an invalid token.** It says
+   *"A Page access token is required for this call"*: a valid token of the
+   wrong kind. Regenerating gives you another system user token and the same
+   error. A system user token passes `/debug_token` and every generic check,
+   so "valid" and "the right kind" are different questions.
 4. **If Settings says "Meta has blocked this app from the Graph API"** —
    that is an app-level restriction (code 200), NOT a token problem, and a new
    token will not fix it. Check developers.facebook.com → the app → **Alerts**,

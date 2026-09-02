@@ -18,6 +18,9 @@ export interface GraphFailure {
   subcode: number | null;
   type: string | null;
   message: string;
+  /** Meta's own human-facing pair. Frequently the most useful thing it sends. */
+  userTitle: string | null;
+  userMessage: string | null;
   fbtraceId: string | null;
 }
 
@@ -28,6 +31,8 @@ export type GraphFailureKind =
   | "token_invalid"
   /** The token works but does not carry the permission this call needs. */
   | "missing_scope"
+  /** The token is valid but is the wrong KIND — a user token where a Page one is needed. */
+  | "wrong_token_kind"
   /** The APP is restricted — access level, App Review, business verification. */
   | "app_restricted"
   /** Throttled. Nothing is wrong; try later. */
@@ -59,6 +64,8 @@ export function readGraphFailure(
     subcode: num(e.error_subcode),
     type: str(e.type),
     message: str(e.message) ?? (httpStatus ? `HTTP ${httpStatus}` : "no response"),
+    userTitle: str(e.error_user_title),
+    userMessage: str(e.error_user_msg),
     fbtraceId: str(e.fbtrace_id),
   };
 }
@@ -105,6 +112,28 @@ export function classifyGraphFailure(f: GraphFailure): GraphDiagnosis {
       kind: "rate_limited",
       summary: `Rate limited by Meta — ${message}`,
       action: "Nothing to fix; it clears on its own.",
+      evidence,
+    };
+  }
+
+  /**
+   * 190 + 2069032 is NOT an invalid token. It is a valid token of the wrong
+   * KIND: Meta wants a Page token and has been given a system user token.
+   *
+   * This must be checked before the generic 190 branch, because the advice
+   * that follows from "invalid token" — regenerate it — produces another
+   * system user token and the identical failure. It cost days.
+   */
+  if (f.code === 190 && f.subcode === 2069032) {
+    return {
+      kind: "wrong_token_kind",
+      summary:
+        f.userMessage ??
+        "A Page access token is required for this call; the token in use is not one.",
+      action:
+        "Nothing to regenerate. The Page token is derived from the system user " +
+        "token automatically — if this persists, the system user has lost access " +
+        "to the Page in Business settings.",
       evidence,
     };
   }

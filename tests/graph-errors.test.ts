@@ -32,6 +32,10 @@ describe("reading the failure", () => {
       subcode: null,
       type: "OAuthException",
       message: "API access blocked.",
+      // Meta's human-facing pair. Absent on this error; present on the
+      // wrong-token-kind one, where it is the clearest thing it sends.
+      userTitle: null,
+      userMessage: null,
       fbtraceId: "ACOer4dNaGlRCc09sPcTH5P",
     });
   });

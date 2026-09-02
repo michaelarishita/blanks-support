@@ -1,5 +1,4 @@
-import { createAdminClient } from "@/lib/supabase/admin";
-import { decryptSecret } from "@/lib/crypto";
+import { resolvePageToken } from "./page-token";
 import type { MetaChannel } from "./events";
 
 /**
@@ -12,31 +11,56 @@ import type { MetaChannel } from "./events";
 const GRAPH = "https://graph.facebook.com/v21.0";
 
 /**
- * The Page access token.
+ * The Page access token — DERIVED, not read straight from the environment.
  *
- * Prefers the encrypted `oauth_tokens` row (provider `meta`) and falls back to
- * META_PAGE_ACCESS_TOKEN. The env var is what gets Messenger working today;
- * the stored token is where a System User token belongs, per 9F, so that the
- * integration does not die when one person changes their Facebook password.
+ * META_PAGE_ACCESS_TOKEN holds whatever Business settings produced, and what
+ * "System users → Generate token" produces is a SYSTEM USER token. It is
+ * perfectly valid and passes every generic check, but the calls that matter
+ * refuse it:
+ *
+ *   code 190, subcode 2069032
+ *   "A Page access token is required for this call for the new Pages experience."
+ *
+ * `resolvePageToken` works out which kind is configured, derives the Page
+ * token when it needs to, and caches it encrypted in `oauth_tokens` — the same
+ * pattern as the Gmail and Shopify tokens.
  */
 export async function getPageAccessToken(): Promise<string | null> {
-  try {
-    const admin = createAdminClient();
-    const { data } = await admin
-      .from("oauth_tokens")
-      .select("encrypted_refresh_token")
-      .eq("provider", "meta")
-      .limit(1)
-      .maybeSingle();
-    if (data?.encrypted_refresh_token) {
-      return decryptSecret(data.encrypted_refresh_token as string);
-    }
-  } catch (e) {
-    // A missing row is normal; a decrypt failure is not, and is worth seeing
-    // rather than silently falling back to a stale env var.
-    console.error("[meta] could not read the stored page token:", e);
+  const resolved = await resolvePageToken();
+  if ("error" in resolved) {
+    console.error("[meta] no usable page token:", resolved.error);
+    return null;
   }
-  return process.env.META_PAGE_ACCESS_TOKEN ?? null;
+  return resolved.token;
+}
+
+/**
+ * A Graph call that re-derives the Page token once if it is rejected.
+ *
+ * A token derived from a non-expiring system user token should not expire —
+ * but "should not" is not a guarantee, and the failure mode without this is a
+ * silently dead channel. One retry, then the failure is real.
+ */
+export async function withPageToken<T>(
+  call: (token: string) => Promise<{ rejected: boolean; result: T }>
+): Promise<T | null> {
+  const first = await resolvePageToken();
+  if ("error" in first) {
+    console.error("[meta] no usable page token:", first.error);
+    return null;
+  }
+
+  const attempt = await call(first.token);
+  if (!attempt.rejected) return attempt.result;
+
+  // Rejected. Re-derive once, bypassing the cache, before believing it.
+  const fresh = await resolvePageToken({ forceRefresh: true });
+  if ("error" in fresh) {
+    console.error("[meta] page token refresh failed:", fresh.error);
+    return attempt.result;
+  }
+  const retry = await call(fresh.token);
+  return retry.result;
 }
 
 export interface MetaProfile {

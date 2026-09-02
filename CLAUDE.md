@@ -1266,6 +1266,51 @@ as UNKNOWN rather than "no such customer" (or the most alarming signal we have
 would be on every social ticket forever), and resolve-on-reply never reads an
 address at all.
 
+### The token Business settings gives you is NOT a Page token
+
+**Business settings → System users → Generate token produces a SYSTEM USER
+token.** The calls that matter — `/{page-id}/subscribed_apps`, the Send API —
+require a **Page** token, which is DERIVED from it.
+
+This is the sharpest version of a lesson this codebase keeps relearning:
+**"the token is valid" and "the token is the right kind" are different
+questions, and every generic check answers only the first.** A system user
+token passes `/debug_token`, passes `/me`, and passed our own health check,
+which reported `valid for BlanksHelpdesk` — every word true, and BlanksHelpdesk
+is the system user, not the Page. That was the clue, and it was incidental.
+
+The error makes it worse rather than better:
+
+```
+code 190, error_subcode 2069032
+"Invalid OAuth 2.0 Access Token"
+error_user_msg: "A Page access token is required for this call for the new Pages experience."
+```
+
+**Code 190 reads as "invalid token" everywhere**, and the advice that follows
+— regenerate it — produces another system user token and the identical
+failure. The subcode is the only thing that distinguishes them, and
+`error_user_msg` is the only field that explains it. We were discarding both.
+
+`lib/meta/page-token.ts` holds the knowledge instead of a runbook:
+
+- **Which kind is configured is decided by asking, not by inspecting.** `/me`
+  on a Page token returns the Page; on a system user token it returns the
+  user. Nothing in the token string distinguishes them, so a prefix check
+  would be a guess that works until it doesn't.
+- **Either kind is accepted.** Paste a real Page token later and it is used
+  directly. The operator should not have to know the difference — that
+  knowledge is exactly what tripped us up.
+- The derived token is cached encrypted in `oauth_tokens` (provider `meta`,
+  `account_ref` = page id), the same pattern as Gmail and Shopify.
+- **Rejection re-derives once before reporting failure.** A Page token from a
+  non-expiring system user token should not expire — but "should not" is not
+  a guarantee, and the failure mode without the retry is a silently dead
+  channel.
+
+The panel now says both facts:
+`system user token (BlanksHelpdesk) → derived Page token for Blank's Sports Nutrition, cached`
+
 ### "API access blocked" is Meta's message, not ours — and it means the APP
 
 Both Settings rows showed it, which read as a token problem and is not one.
