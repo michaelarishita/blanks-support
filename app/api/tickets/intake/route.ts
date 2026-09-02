@@ -6,6 +6,7 @@ import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { assessTicketRisk } from "@/lib/risk/assess";
 import { createRateLimiter } from "@/lib/rate-limit";
 import { claimUploads, discardTempUploads } from "@/lib/uploads/claim";
+import { linkGrantToAttachment, resolveGrant } from "@/lib/uploads/ledger";
 import type { AcceptedFile } from "@/lib/uploads/validate";
 
 // ------------------------------------------------------------
@@ -215,6 +216,29 @@ export async function POST(request: Request) {
   );
   await discardTempUploads(tempPaths);
 
+  /**
+   * A file we verified and then failed to store is OUR failure, and the
+   * customer has already been told their message was received.
+   *
+   * So the ticket says so. Appended to the body rather than left in a log,
+   * for the same reason the widget appends its own note: an agent answering
+   * "the tub arrived smashed" needs to know a photo of it was meant to be
+   * here. A log line nobody reads is indistinguishable from silence.
+   */
+  if (storedAttachments.failed.length) {
+    const names = storedAttachments.failed.join(", ");
+    console.error(`[intake] ${storedAttachments.failed.length} attachment(s) lost after ticket creation: ${names}`);
+    await supabase
+      .from("messages")
+      .update({
+        body_text:
+          `${message}\n\n---\n[${storedAttachments.failed.length} ` +
+          `${storedAttachments.failed.length === 1 ? "attachment" : "attachments"} (${names}) ` +
+          `could not be saved — a fault on our side. Ask the customer to resend.]`,
+      })
+      .eq("id", firstMessage.id);
+  }
+
   // auto-apply the topic tag
   const { data: tag } = await supabase
     .from("tags")
@@ -233,7 +257,8 @@ export async function POST(request: Request) {
     detail: {
       via: "web_form",
       ip,
-      attachments: storedAttachments,
+      attachments: storedAttachments.stored,
+      attachments_lost: storedAttachments.failed.length || undefined,
     },
   });
 
@@ -256,7 +281,7 @@ export async function POST(request: Request) {
   await assessTicketRisk(ticket.id);
 
   return NextResponse.json(
-    { ok: true, ticket_number: ticket.number, attachments: storedAttachments },
+    { ok: true, ticket_number: ticket.number, attachments: storedAttachments.stored },
     { headers: CORS_HEADERS }
   );
 }
@@ -265,18 +290,28 @@ export async function POST(request: Request) {
  * Uploads the already-validated bytes and records them.
  *
  * Runs AFTER the ticket exists, because the storage path is scoped by ticket
- * and message. A failure here is logged and counted but does not fail the
- * request: the customer's message is already saved, and losing the whole
- * ticket because one photo didn't upload is the worse outcome.
+ * and message. A failure here still does not fail the request — the
+ * customer's message is saved, and losing the whole ticket because one photo
+ * did not upload is the worse outcome.
+ *
+ * But it is no longer SILENT, which it was: it logged, continued, and let the
+ * response report success. That is the same shape as the widget dropping a
+ * failed upload — a photo the customer believes they sent, a ticket that does
+ * not mention it, and an agent with no idea to ask. The bytes are already
+ * verified by this point, so a failure here is ours, not theirs.
+ *
+ * Returns what was stored AND what was lost, so the caller can say so in the
+ * ticket rather than only in a log nobody reads.
  */
 async function storeAttachments(
   ticketId: string,
   messageId: string,
   files: AcceptedFile[]
-): Promise<number> {
-  if (!files.length) return 0;
+): Promise<{ stored: number; failed: string[] }> {
+  if (!files.length) return { stored: 0, failed: [] };
   const supabase = createAdminClient();
   let stored = 0;
+  const failed: string[] = [];
 
   for (const [index, file] of files.entries()) {
     // Index-prefixed so two photos named IMG_0001.jpg don't overwrite each
@@ -288,23 +323,35 @@ async function storeAttachments(
       .upload(path, file.bytes, { contentType: file.kind, upsert: false });
     if (uploadError) {
       console.error(`[intake] attachment upload failed (${path}):`, uploadError);
+      failed.push(file.filename);
+      await resolveGrant(file.sourcePath ?? path, "rejected", `storage upload failed: ${uploadError.message}`);
       continue;
     }
 
-    const { error: rowError } = await supabase.from("attachments").insert({
+    const { data: inserted, error: rowError } = await supabase.from("attachments").insert({
       message_id: messageId,
       filename: file.filename,
       mime_type: file.kind,
       size_bytes: file.bytes.length,
       storage_path: path,
-    });
+    }).select("id").single();
     if (rowError) {
       console.error(`[intake] attachment row failed (${path}):`, rowError);
+      failed.push(file.filename);
+      // The object is now unreferenced. Removed rather than left for the
+      // folder sweep, which only collects folders whose TICKET is gone — this
+      // ticket exists, so nothing would ever have tidied this up.
+      await supabase.storage.from("attachments").remove([path]);
+      await resolveGrant(file.sourcePath ?? path, "rejected", `row insert failed: ${rowError.message}`);
       continue;
     }
 
+    if (file.sourcePath) {
+      await resolveGrant(file.sourcePath, "stored");
+      if (inserted?.id) await linkGrantToAttachment(file.sourcePath, inserted.id as string);
+    }
     stored++;
   }
 
-  return stored;
+  return { stored, failed };
 }

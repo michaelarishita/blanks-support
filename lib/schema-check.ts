@@ -293,6 +293,14 @@ const MIGRATIONS: Migration[] = [
       indexes: ["meta_webhook_events_pending_idx"],
     },
   },
+  {
+    file: "0022_upload_grants.sql",
+    title: "Upload ledger — without it a lost photo leaves no trace at all",
+    requires: {
+      tables: ["upload_grants"],
+      indexes: ["upload_grants_path_uniq"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

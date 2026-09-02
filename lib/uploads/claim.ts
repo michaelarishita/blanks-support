@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyUploadGrant } from "./grant";
+import { resolveGrant } from "./ledger";
 import { MAX_FILES, validateUploads, type ValidationOutcome } from "./validate";
 
 /**
@@ -50,7 +51,9 @@ export async function claimUploads(grants: unknown): Promise<ClaimOutcome> {
   }
 
   const admin = createAdminClient();
-  const incoming: { name: string; bytes: Uint8Array }[] = [];
+  // `path` rides along so a verdict can be attributed to the grant it came
+  // from; validateUploads ignores it.
+  const incoming: { name: string; path: string; bytes: Uint8Array }[] = [];
   const rejections: { name: string; reason: string }[] = [];
   const paths: string[] = [];
 
@@ -73,15 +76,17 @@ export async function claimUploads(grants: unknown): Promise<ClaimOutcome> {
     if (error || !data) {
       // Nothing there: the upload never completed, or this grant was already
       // spent. Both mean there is no file to attach.
-      rejections.push({
-        name: verified.originalName,
-        reason: `upload missing (${error?.message ?? "no object"})`,
-      });
+      const reason = `upload missing (${error?.message ?? "no object"})`;
+      // THE case this ledger was built for: we invited an upload and the
+      // bytes never arrived. Previously this left no trace anywhere.
+      await resolveGrant(verified.path, "missing", reason);
+      rejections.push({ name: verified.originalName, reason });
       continue;
     }
 
     incoming.push({
       name: verified.originalName,
+      path: verified.path,
       bytes: new Uint8Array(await data.arrayBuffer()),
     });
   }
@@ -97,6 +102,16 @@ export async function claimUploads(grants: unknown): Promise<ClaimOutcome> {
         rejections,
       }
     : validateUploads(incoming);
+
+  // The verdict, per grant. A rejection here is a file we HAD and refused —
+  // materially different from one that never arrived, and the ledger is where
+  // that difference becomes countable.
+  if (!result.ok) {
+    for (const item of incoming) {
+      const why = result.rejections.find((r) => r.name === item.name);
+      await resolveGrant(item.path, "rejected", why?.reason ?? "rejected");
+    }
+  }
 
   return { result, paths };
 }

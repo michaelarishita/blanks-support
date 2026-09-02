@@ -1,3 +1,4 @@
+import { createAdminClient } from "@/lib/supabase/admin";
 import { backfillFromMailbox } from "@/lib/google/inbound";
 import { loadQuarantinedIds } from "@/lib/inbound/quarantine";
 import { raiseSystemAlert } from "@/lib/alerts";
@@ -162,6 +163,84 @@ export async function reconcileMailbox(
 }
 
 /** How many discrepancies get named in the alert before it becomes a wall. */
+/**
+ * Uploads we invited that never became anything.
+ *
+ * The third reconciliation, and the one that answers the question nobody
+ * could answer when a customer's photo went missing: we minted a URL, and
+ * then what? A grant with no resolution is somebody who tried to send us
+ * something and did not — reported as a count with reasons, the same way the
+ * mailbox reconciliation reports its guard-drops.
+ *
+ * Grants younger than the grace are ignored: a submission genuinely in flight
+ * has an unresolved row for as long as the customer is still typing, and
+ * flagging those would make this fire on healthy traffic.
+ */
+const GRANT_GRACE_MS = 2 * 60 * 60 * 1000;
+
+export interface UploadLedgerReport {
+  issued: number;
+  stored: number;
+  /** Invited, never claimed. The browser PUT failed, or they gave up. */
+  neverClaimed: number;
+  /** Claimed, but the object was not there. */
+  missingObject: number;
+  /** Claimed and refused — sniffing, size, EXIF, or a storage failure. */
+  rejected: number;
+  reasons: string[];
+  error: string | null;
+}
+
+export async function reconcileUploads(
+  now = Date.now()
+): Promise<UploadLedgerReport> {
+  const empty: UploadLedgerReport = {
+    issued: 0, stored: 0, neverClaimed: 0, missingObject: 0, rejected: 0,
+    reasons: [], error: null,
+  };
+  const admin = createAdminClient();
+
+  const { data, error } = await admin
+    .from("upload_grants")
+    .select("storage_path, original_name, issued_at, resolved_at, outcome, detail")
+    .gte("issued_at", new Date(now - 7 * 86_400_000).toISOString());
+  // A failed read is reported, never rendered as "nothing outstanding".
+  if (error) return { ...empty, error: error.message };
+
+  const rows = data ?? [];
+  const report = { ...empty, issued: rows.length };
+  const reasons = new Map<string, number>();
+
+  for (const row of rows) {
+    const settled = Boolean(row.resolved_at);
+    if (!settled) {
+      // Still in flight: not yet evidence of anything.
+      if (now - Date.parse(row.issued_at as string) < GRANT_GRACE_MS) continue;
+      report.neverClaimed++;
+      reasons.set("never claimed (the upload never reached us)",
+        (reasons.get("never claimed (the upload never reached us)") ?? 0) + 1);
+      continue;
+    }
+    if (row.outcome === "stored") { report.stored++; continue; }
+    if (row.outcome === "missing") {
+      report.missingObject++;
+      reasons.set("claimed but the object was absent",
+        (reasons.get("claimed but the object was absent") ?? 0) + 1);
+      continue;
+    }
+    if (row.outcome === "rejected") {
+      report.rejected++;
+      const why = `rejected: ${String(row.detail ?? "no reason recorded").slice(0, 60)}`;
+      reasons.set(why, (reasons.get(why) ?? 0) + 1);
+    }
+  }
+
+  report.reasons = [...reasons.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, count]) => `${count} × ${reason}`);
+  return report;
+}
+
 const NAMED_IN_ALERT = 10;
 
 /**
@@ -180,7 +259,25 @@ export async function runReconciliation(
 ): Promise<ReconcileReport> {
   const report = await reconcileMailbox(options);
 
+  // The upload ledger, on the same daily cadence. Wrapped: a failure here
+  // must not stop the mailbox reconciliation it rides on.
+  let uploads: UploadLedgerReport | null = null;
+  try {
+    uploads = await reconcileUploads(options.now ?? Date.now());
+    if (uploads.error) console.error("[reconcile] upload ledger:", uploads.error);
+    else if (uploads.neverClaimed || uploads.missingObject) {
+      console.warn(
+        `[reconcile] uploads: ${uploads.issued} issued, ${uploads.stored} stored, ` +
+          `${uploads.neverClaimed} never claimed, ${uploads.missingObject} missing — ` +
+          uploads.reasons.join("; ")
+      );
+    }
+  } catch (e) {
+    console.error("[reconcile] upload ledger threw:", e);
+  }
+
   await patchSettingsBlob({
+    inbound_last_upload_ledger: uploads,
     inbound_last_reconcile: {
       // A failed run records the failure and does NOT stamp the clean-run
       // time — otherwise a broken reconciliation reads as a healthy mailbox,

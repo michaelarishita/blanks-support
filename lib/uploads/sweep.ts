@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { resolveGrant } from "./ledger";
 import { INTAKE_PREFIX } from "./grant";
 
 /**
@@ -118,6 +119,13 @@ export async function sweepOrphanedUploads(
     .remove(stale);
   if (removeError) {
     return { scanned: objects.length, deleted: 0, error: removeError.message };
+  }
+
+  // Close the ledger on what was swept. Without this an unclaimed grant stays
+  // "unresolved" forever and reconciliation cannot tell "the customer is still
+  // typing" from "this upload was abandoned a week ago".
+  for (const path of stale) {
+    await resolveGrant(path, "expired", "swept unclaimed after 24h");
   }
 
   return { scanned: objects.length, deleted: stale.length };

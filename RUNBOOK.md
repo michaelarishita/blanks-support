@@ -154,6 +154,39 @@ the daily reconciliation reports anything we never stored.
 
 ---
 
+## "I attached a photo and you didn't get it"
+
+First, check whether we ever saw it:
+
+```sql
+select original_name, issued_at, outcome, detail
+from upload_grants
+where issued_at > now() - interval '7 days'
+order by issued_at desc;
+```
+
+| outcome | what happened | what to say |
+|---|---|---|
+| `stored` | it worked — look again in the thread | — |
+| `missing` | we invited the upload; the bytes never arrived | ask them to resend |
+| `rejected` | we got it and refused it; `detail` says why | usually too large, or a file type we don't take |
+| `expired` | they picked a file and never submitted | — |
+| null / unresolved | still in flight, or they abandoned the form | wait, then treat as expired |
+
+The widget now blocks submit on a failed upload, so this should be rare. If a
+customer removed a failed file and sent anyway, **the ticket body says so** —
+look for a line in square brackets at the end of their message.
+
+If the line says "a fault on our side", that is `storeAttachments` failing
+after the ticket was created: the bytes reached us and we lost them. Check
+Vercel logs for `[intake] attachment`.
+
+The daily reconciliation reports these as counts. Rising `missing` means
+browsers are failing to upload; rising `rejected` means customers are sending
+things we refuse, and the `detail` will say which.
+
+---
+
 ## Replies aren't sending
 
 Almost always: **that agent hasn't connected their Gmail.** Settings →

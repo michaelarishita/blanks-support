@@ -1365,6 +1365,69 @@ Deprecating a topic means removing it from TOPICS and LEAVING THE TAG ROW —
 deleting the row cascades through ticket_tags and rewrites history. That is
 what happened to "Ambassador / athlete" in 0012.
 
+### A failed upload must cost the customer a decision, not a photo
+
+A customer attached a JPEG, the ticket arrived without it, and they were told
+it worked. The upload failed in the browser; the widget filtered the file out
+of `readyGrants` (which has always selected `status === "done"`); the server
+never learned a file was meant to exist. Nothing rejected it, nothing logged
+it server-side, and nothing could count it — the only record was a
+`console.error` in the customer's own browser.
+
+The intake route was innocent. A bad grant returns **400 with no ticket** and
+logs the reason. The silent drop was in the widget.
+
+- **Two automatic retries with backoff first.** The likeliest trigger is a
+  moment of bad mobile data, and most of those clear on the next attempt.
+- **Then the file blocks submit until it is retried or removed.** Not a hard
+  block on the form: somebody on a bad connection who cannot file a ticket at
+  all is worse off than somebody whose photo went missing — they came here
+  with a problem. Removing the file is one tap and re-enables submit. The
+  choice stays theirs; it just cannot be made by accident, which is what was
+  happening.
+- **A removed-because-failed file puts a line in the ticket body.** Counted
+  only when the file had actually FAILED — removing one they changed their
+  mind about is not a lost photo and must not say so.
+
+### The upload ledger, because the rate was not merely unknown
+
+When the report came in, "was an upload URL even issued?" had no answer. The
+temp object is deleted on claim and swept after 24h; nothing recorded the
+middle step. The rate at which uploads were being lost was **unknowable**, not
+just unmeasured.
+
+`upload_grants` (0022) is a row per minted URL, resolved at claim with the
+reason: `stored`, `rejected`, `missing` (claimed, no object) or `expired`
+(swept unclaimed). The sweep closes the ledger too — without that an
+unresolved grant looks identical to a submission still being typed.
+
+Reconciliation reports it daily as counts with reasons, alongside the mailbox
+and Messenger checks. Same argument as those: **watch the outcome, not the
+mechanism.**
+
+Grants under two hours old are ignored: a submission genuinely in flight has
+an unresolved row for as long as the customer is still typing.
+
+### storeAttachments had the identical shape
+
+It runs after the ticket exists, and on failure it logged, continued, and let
+the response report success — a photo the customer believes they sent, a
+ticket that does not mention it, an agent with no idea to ask. Not what
+happened this time; the same bug one door down.
+
+It now returns what it lost, the ticket body says so, and the orphaned object
+is removed — the folder sweep only collects folders whose TICKET is gone, so
+a failed row on a live ticket would have left bytes nothing ever tidied.
+
+It still does not fail the request. The customer's message is saved, and
+losing the whole ticket because one photo did not upload is the worse outcome.
+
+**What the text search found, before the fix:** 25 widget submissions, 1 with
+an attachment, and **zero** of the other 24 mentioning a photo. That is weak
+evidence of absence rather than evidence of health — somebody who picks a file
+in a widget that shows them a file row has no reason to also write "see
+attached". The ledger exists because the text never could answer this.
+
 ### Customer file uploads (Drop 8A: direct to storage)
 
 **The bytes never pass through a Vercel function, and they cannot.** A

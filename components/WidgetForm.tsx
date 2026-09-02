@@ -52,6 +52,17 @@ interface Attachment {
   error?: string;
 }
 
+/**
+ * Automatic retries before the customer is told anything.
+ *
+ * Two, because the failure this answers is a moment of bad mobile data and
+ * those clear quickly; a third attempt mostly adds delay to a file that is
+ * not going to upload on this connection.
+ */
+const UPLOAD_RETRIES = 2;
+/** Multiplied by the attempt number, so 400ms then 800ms. */
+const UPLOAD_BACKOFF_MS = 400;
+
 export default function WidgetForm({
   parentOrigin,
   allowedParents,
@@ -78,6 +89,19 @@ export default function WidgetForm({
   const nextIdRef = useRef(0);
 
   const uploading = attachments.some((a) => a.status === "uploading");
+  /**
+   * A file that failed and has not been dealt with. Submit waits for it.
+   *
+   * This is the whole fix. `readyGrants` has always filtered to "done", so a
+   * failed upload was simply absent from the payload — the server never
+   * learned a file was meant to exist, could not reject, could not log, and
+   * could not count it. The customer was told it worked.
+   *
+   * Blocking on it does not take the choice away: removing the file is one
+   * tap and re-enables submit immediately. It only stops the choice being
+   * made by accident.
+   */
+  const unresolved = attachments.some((a) => a.status === "failed");
   const readyGrants = attachments
     .filter((a) => a.status === "done" && a.grant)
     .map((a) => a.grant as string);
@@ -100,6 +124,15 @@ export default function WidgetForm({
   function set(field: string, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
   }
+
+  /**
+   * How many files the customer removed BECAUSE they would not upload.
+   *
+   * Carried into the ticket body: the agent needs to know a photo was meant
+   * to be here, or they will answer a damaged-product complaint without
+   * realising there was a picture of the damage.
+   */
+  const [abandoned, setAbandoned] = useState(0);
 
   function patchAttachment(id: number, patch: Partial<Attachment>) {
     setAttachments((current) =>
@@ -130,26 +163,71 @@ export default function WidgetForm({
     await Promise.all(
       pending.map(async (item, index) => {
         const target = minted.uploads[index];
-        try {
-          await putWithProgress(target.url, item.file, (percent) =>
-            patchAttachment(item.id, { progress: percent })
-          );
-          // The grant is only worth keeping once the bytes are actually
-          // there — claiming it earlier would just fail server-side.
-          patchAttachment(item.id, {
-            status: "done",
-            progress: 100,
-            grant: target.grant,
-          });
-        } catch (error) {
-          console.error("[widget] upload failed:", error);
-          patchAttachment(item.id, {
-            status: "failed",
-            error: "That file didn't upload. Remove it and try again.",
-          });
+
+        /**
+         * RETRIED BEFORE THE CUSTOMER EVER HEARS ABOUT IT.
+         *
+         * The likeliest cause of a failed PUT is a moment of bad mobile
+         * data, and most of those succeed on the next attempt. Asking
+         * somebody to intervene in a problem that would have fixed itself is
+         * how a form starts feeling broken.
+         */
+        for (let attempt = 0; attempt <= UPLOAD_RETRIES; attempt++) {
+          try {
+            await putWithProgress(target.url, item.file, (percent) =>
+              patchAttachment(item.id, { progress: percent })
+            );
+            // The grant is only worth keeping once the bytes are actually
+            // there — claiming it earlier would just fail server-side.
+            patchAttachment(item.id, {
+              status: "done",
+              progress: 100,
+              grant: target.grant,
+              error: undefined,
+            });
+            return;
+          } catch (error) {
+            console.error(
+              `[widget] upload failed (attempt ${attempt + 1}/${UPLOAD_RETRIES + 1}):`,
+              error
+            );
+            if (attempt === UPLOAD_RETRIES) break;
+            // Backoff, and the bar resets so the retry is visibly a retry
+            // rather than a stall at 60%.
+            patchAttachment(item.id, { progress: 0 });
+            await new Promise((r) => setTimeout(r, UPLOAD_BACKOFF_MS * (attempt + 1)));
+          }
         }
+
+        /**
+         * Out of retries. This file now BLOCKS submit until the customer
+         * either retries it or removes it.
+         *
+         * Not silently dropped, which is what used to happen: the grant was
+         * simply absent from the payload, the server never learned a file was
+         * meant to exist, and the ticket arrived without it while the
+         * customer was told everything worked.
+         *
+         * And not a hard block on the form either. Somebody on a bad
+         * connection who cannot file a ticket at all is worse off than
+         * somebody whose photo went missing — they came here with a problem.
+         * The choice stays theirs; it just has to be made on purpose.
+         */
+        patchAttachment(item.id, {
+          status: "failed",
+          progress: 0,
+          error: "This didn't upload. Try again, or remove it to send without it.",
+        });
       })
     );
+  }
+
+  /** Puts one failed file back in the queue, on the customer's say-so. */
+  async function retryUpload(id: number) {
+    const item = attachments.find((a) => a.id === id);
+    if (!item) return;
+    patchAttachment(id, { status: "uploading", progress: 0, error: undefined });
+    await beginUpload([{ ...item, status: "uploading", progress: 0 }]);
   }
 
   /**
@@ -207,13 +285,21 @@ export default function WidgetForm({
     // here: doing it properly would need another public endpoint that takes a
     // grant and deletes bytes, which is a lot of new attack surface to save a
     // few megabytes for 24 hours.
-    setAttachments((current) => current.filter((a) => a.id !== id));
+    setAttachments((current) => {
+      // Counted only when they are removing something that FAILED. Removing a
+      // file they simply changed their mind about is not a lost photo and
+      // must not put a misleading line in the ticket.
+      if (current.find((a) => a.id === id)?.status === "failed") {
+        setAbandoned((n) => n + 1);
+      }
+      return current.filter((a) => a.id !== id);
+    });
     setError("");
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (uploading) return;
+    if (uploading || unresolved) return;
 
     setState("sending");
     setError("");
@@ -229,7 +315,20 @@ export default function WidgetForm({
       const res = await fetch("/api/tickets/intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, attachments: readyGrants }),
+        body: JSON.stringify({
+          ...form,
+          // Says so IN THE TICKET, not just in a log. An agent reading
+          // "the tub arrived smashed" needs to know a photo of it was meant
+          // to be attached, or they will answer without asking for one.
+          message: abandoned
+            ? `${form.message}\n\n---\n[${abandoned} ${
+                abandoned === 1 ? "file" : "files"
+              } could not be uploaded from the customer's device — ask them to send ${
+                abandoned === 1 ? "it" : "them"
+              } by reply.]`
+            : form.message,
+          attachments: readyGrants,
+        }),
       });
 
       // NOT res.json(). That throws the browser's own parse error on any
@@ -528,10 +627,23 @@ export default function WidgetForm({
                             </div>
                           )}
 
-                          {item.status === "failed" && item.error && (
-                            <p className="mt-1 text-[12px] text-widget-danger">
-                              {item.error}
-                            </p>
+                          {item.status === "failed" && (
+                            <div className="mt-1">
+                              <p className="text-[12px] text-widget-danger">
+                                {item.error}
+                              </p>
+                              {/* Two explicit ways out, and no third. The
+                                  customer decides whether to send without the
+                                  photo; the form no longer decides for them
+                                  by quietly leaving it behind. */}
+                              <button
+                                type="button"
+                                onClick={() => retryUpload(item.id)}
+                                className="mt-1.5 h-9 rounded-md border border-widget-border px-3 text-[13px] font-semibold text-widget-text active:bg-widget-muted/40"
+                              >
+                                Try again
+                              </button>
+                            </div>
                           )}
                         </li>
                       ))}
@@ -553,7 +665,7 @@ export default function WidgetForm({
                   // Disabled while bytes are still moving: submitting now
                   // would file the ticket without the photo the customer is
                   // watching upload.
-                  disabled={state === "sending" || uploading}
+                  disabled={state === "sending" || uploading || unresolved}
                   // Hover DARKENS. brand-500 carries white at 5.06:1 and a
                   // lighter hover would drop it under AA — the contrast test
                   // asserts this in both directions.
@@ -562,7 +674,9 @@ export default function WidgetForm({
                     hover:bg-brand-600 active:bg-brand-700
                     disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {uploading
+                  {unresolved
+                    ? "Retry or remove the file above"
+                    : uploading
                     ? "Uploading…"
                     : state === "sending"
                       ? "Sending…"

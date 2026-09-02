@@ -5,6 +5,7 @@ import { corsHeaders, isOriginAllowed } from "@/lib/cors";
 import { createRateLimiter } from "@/lib/rate-limit";
 import { ACCEPTED_DESCRIPTION, MAX_FILES, MAX_FILE_BYTES } from "@/lib/uploads/limits";
 import { INTAKE_PREFIX, signUploadGrant } from "@/lib/uploads/grant";
+import { recordGrantIssued } from "@/lib/uploads/ledger";
 
 // ------------------------------------------------------------
 // Mints signed upload URLs so the browser can PUT files straight to Supabase
@@ -131,6 +132,16 @@ export async function POST(request: Request) {
         { status: 500, headers: CORS_HEADERS }
       );
     }
+
+    // Recorded BEFORE the URL is handed out, so a grant can never exist
+    // without a row. Best-effort: bookkeeping must not be able to stop a
+    // customer uploading.
+    await recordGrantIssued({
+      storagePath: path,
+      originalName: file.name,
+      declaredBytes: file.size,
+      ip,
+    });
 
     uploads.push({
       // The grant is what the customer hands back with the form. It proves we

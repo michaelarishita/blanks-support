@@ -19,6 +19,8 @@ export {
 } from "./limits";
 
 export interface IncomingFile {
+  /** Present when the bytes arrived via a signed upload grant. */
+  path?: string;
   name: string;
   bytes: Uint8Array;
 }
@@ -30,6 +32,13 @@ export interface AcceptedFile {
   isImage: boolean;
   /** Post-strip. This is what gets stored. */
   bytes: Uint8Array;
+  /**
+   * The intake/ path this came from, when it came through a grant.
+   *
+   * Carried so the ledger can be closed against the right row. Absent for the
+   * inbound-email path, which never mints a grant.
+   */
+  sourcePath?: string;
 }
 
 export interface Rejection {
@@ -93,6 +102,7 @@ export function validateUploads(incoming: IncomingFile[]): ValidationOutcome {
       kind: sniffed.kind,
       isImage: sniffed.isImage,
       bytes: stripped.bytes,
+      sourcePath: file.path,
     });
   }
 
