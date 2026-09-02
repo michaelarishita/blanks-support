@@ -78,6 +78,8 @@ revert — as done for the orphaned-author hydration fix.
 - `npm run dev` — dev server on localhost:3000 (Turbopack)
 - `npm run build` — production build; must pass before any commit is pushed
 - `npm test` — vitest; must pass before any commit is pushed
+- `npm run migrations` — what the database actually has. **Run this before
+  saying anything about migration state; paste the output beside the claim.**
 - Node 22+ preferred (`nvm use 22`); Node 20 works but Supabase libs warn
 
 ## Current state — live, in daily use
@@ -125,29 +127,44 @@ deployed. Until then it redirects to `/login`, so use the meta tag.
 deployed commit — check the build sha before concluding a fix is live or that
 a bug still exists.
 
-### Do not carry "run migration NNNN" forward without re-checking
+### NEVER state migration status from memory — paste the output or say nothing
 
-It happened: 0021 was reported as outstanding after it had already been run.
-The cause was not a false negative — the banner was correct throughout — it
-was that the instruction was written when the migration was authored and then
-repeated later as a standing to-do that nobody re-verified.
+**The rule:** any statement about which migrations are applied — in a summary,
+a hand-off, a commit message, a report — must be accompanied by the output of
+`npm run migrations` **in the same message**. If that output is not there, the
+sentence must not be there either.
 
-**A migration instruction is a claim about the database, and it goes stale the
-moment somebody acts on it.** Writing "0021 needs running" in a commit message
-is fine — that is a note about a moment. Repeating it in a later summary is a
-fresh claim, and it needs a fresh check:
+Not a suggestion. This replaces a politely-worded note asking for the same
+thing, which failed: "0021 and 0022 are still outstanding" was asserted three
+times after both had been applied, sending somebody to the SQL editor for
+nothing. A pointer that is sometimes wrong is worse than no pointer, and this
+one was wrong about the database while being written by the thing that could
+have just asked it.
+
+The reason the note failed and this might not: **"did I paste the output?" is
+answerable by looking at the message. "Did I remember to check?" is not.** The
+first is a property of the artifact; the second is a hope about a habit.
 
 ```
-select count(*) from pg_class where relname = '<the table it creates>';
+$ npm run migrations
+applied    : 22 of 22
+MISSING    : none
+UNVERIFIED : none
 ```
 
-or, from the app, `checkSchema(true)` — which is the same thing the banner
-does and takes one call.
+One command, no ceremony, and it exits non-zero when something is genuinely
+outstanding. It calls the same `checkSchema` the in-app banner uses, so the
+command and the banner cannot disagree. `UNVERIFIED` deliberately does not
+fail it — "could not check" is not "missing", and that distinction is the
+whole reason the checker was rebuilt.
 
-Passing a test in `tests/schema-check.test.ts` is NOT that check. Those tests
-compare the checker's list against the migrations directory; **none of them
-touches the database**, and a green run says nothing about what has been
-applied.
+**Passing `tests/schema-check.test.ts` is not this check.** Those tests compare
+the checker's list against the migrations directory; none of them touches the
+database, and a green run says nothing about what has been applied.
+
+Writing "0022 needs running" in the commit message that ADDS 0022 is fine —
+that is a note about a moment, and true when written. Repeating it later is a
+fresh claim about the database, and needs fresh evidence.
 
 ### Migrations are run BY HAND
 

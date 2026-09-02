@@ -302,7 +302,12 @@ carry a real reason.
   Settings → Ignored senders.
 - **Migrations** — every `.sql` in `supabase/migrations/` must be run in
   order. The banner tracks which are outstanding and distinguishes "not run"
-  from "couldn't check".
+  from "couldn't check". From a terminal:
+  ```bash
+  npm run migrations
+  ```
+  Trust that over anything anybody tells you, including Claude Code — it has
+  asserted stale migration status from memory before.
 - **Meta webhook** — no renewal needed (the System User token does not
   expire), but the heartbeat checks hourly that the Page is still subscribed,
   because Meta drops a failing app without telling anyone.
