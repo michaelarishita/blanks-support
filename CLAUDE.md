@@ -259,6 +259,37 @@ no environment at all — verified from a clean clone with `.env.local` deleted.
 **The general rule: nothing that runs at build time may require a secret.** If
 a prerendered page needs a client, construct it lazily.
 
+### Never set `deploymentId` in next.config.mjs
+
+It cost four days of unshipped work. Vercel sets `NEXT_DEPLOYMENT_ID` to its
+own `dpl_...` value; Next 16 compares that against a config `deploymentId` and
+**throws before compiling anything**, which is a four-second build failure with
+nothing useful on screen.
+
+The trap is that it only fires on Vercel. The check is gated on
+`hasNextSupport`, which is `!!process.env.NOW_BUILDER`, so every local build
+passes and the config looks correct. Simulating it needs BOTH
+`NOW_BUILDER=1` and `NEXT_DEPLOYMENT_ID=dpl_...` — the env var alone proves
+nothing.
+
+**The docs and the implementation disagree in 16.3.0.** The page says "if both
+are set, the config value takes precedence over the environment variable";
+`server/config.ts` throws on the mismatch and then runs
+`result.deploymentId = process.env.NEXT_DEPLOYMENT_ID` unconditionally. So on
+Vercel our value could never have been used even if it had been let through.
+Read the code, not the page.
+
+With no config value, Vercel's own id is picked up from the environment and
+Skew Protection works as intended — verified in a built server:
+`data-dpl-id="dpl_..."` on `<html>`.
+
+**The app's build identity is deliberately separate.** The `build-sha` meta
+tag, `/api/version` and `VersionWatcher` all source from
+`VERCEL_GIT_COMMIT_SHA`, not from `deploymentId` — Vercel's `dpl_...` is a
+different value with a different lifetime and is not what anyone means by
+"which commit is live". A test asserts the config stays clean, because
+re-adding it reads like an improvement and fails invisibly until production.
+
 ### Nothing was watching the thing that ships the app
 
 Every subsystem here has a heartbeat except the deploy. `lib/deploy-health.ts`

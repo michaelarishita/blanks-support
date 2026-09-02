@@ -129,21 +129,47 @@ you have a real problem — start at the top of this page.
 The deploy failed and Vercel emailed about it, which is why you are reading
 this instead: emailed alerts die in the noise, so the heartbeat raises a row.
 
-1. **vercel.com → blanks-support → Deployments.** A red one at the top is the
-   answer — open it and read the build log.
-2. **A failure in ~4–6 seconds** that compiles and then dies on `/login` is a
-   missing `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` at
-   BUILD time. Check the variable exists AND is scoped to Production.
-3. **Reproduce it the way the cloud does it**, from an empty tree:
-   ```bash
-   rm -rf node_modules && npm ci && npm run build
-   ```
-   `npm install` succeeds where `npm ci` fails, so it proves nothing.
-4. **What is actually being served:**
-   ```bash
-   curl -s https://support.blankssportsnutrition.com/login | grep build-sha
-   ```
-   Compare to the latest commit on GitHub.
+**Go to vercel.com → blanks-support → Deployments, open the red one, and READ
+THE BUILD LOG.** Everything below is a lookup table for what you find there —
+it is not a diagnosis you can make from the outside.
+
+### A failure in 4–6 seconds has three known causes
+
+They look identical from here. Only the log tells them apart, and guessing has
+already cost days.
+
+| The log says | Cause | Fix |
+|---|---|---|
+| `npm ci` errors, or `EUSAGE` / lockfile out of sync | The lockfile was built with `--legacy-peer-deps`; Vercel runs strict `npm ci` | Regenerate the lockfile without that flag, or change the dependency. Never loosen the install. |
+| Compiles, then `Error occurred prerendering page "/login"` and `@supabase/ssr: Your project's URL and API key are required` | A **build-time** dependency on a runtime secret — `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY` missing or not scoped to Production | Restore the variable in Vercel → Settings → Environment Variables, scoped to **Production** |
+| `The NEXT_DEPLOYMENT_ID environment variable value "dpl_…" does not match the provided deploymentId "…" in the config` | Something set `deploymentId` in `next.config.mjs`. Vercel sets its own and Next 16 refuses the mismatch | Remove it. Vercel's Skew Protection works from the environment with no config. |
+
+### Reproducing it locally
+
+The default `npm run build` will pass for all three, which is exactly how each
+one shipped. To match the cloud:
+
+```bash
+rm -rf node_modules && npm ci && npm run build
+```
+
+That covers the first two — a clean tree has no `node_modules` and no
+`.env.local`. The third only fires on a Vercel builder, so it needs both:
+
+```bash
+NOW_BUILDER=1 NEXT_DEPLOYMENT_ID=dpl_test npm run build
+```
+
+`NEXT_DEPLOYMENT_ID` alone is not enough: the check is gated on
+`NOW_BUILDER`, and without it the build passes and proves nothing.
+
+### What is actually being served
+
+```bash
+curl -s https://support.blankssportsnutrition.com/login | grep build-sha
+```
+
+Compare to the latest commit on GitHub.
 
 Nothing is lost while this is broken — customers keep using the last good
 build. What is lost is every fix since it.

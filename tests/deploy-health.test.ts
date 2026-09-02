@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { BEHIND_ALERT_HOURS, compareDeploy } from "@/lib/deploy-health";
 
@@ -116,5 +117,62 @@ describe("the divergence clock", () => {
     );
     expect(cron).toContain("previous.running === running && previous.head === head");
     expect(cron).toContain("samePair ? (previous.since ?? Date.now()) : Date.now()");
+  });
+});
+
+/**
+ * The config option that broke production for four days.
+ *
+ * Vercel sets NEXT_DEPLOYMENT_ID to its own `dpl_...` value. Next 16 compares
+ * it against a config `deploymentId` and throws before compiling — so every
+ * production build failed in ~4 seconds while every local build passed,
+ * because the check is gated on `hasNextSupport` (`!!process.env.NOW_BUILDER`)
+ * and that is false everywhere except a Vercel builder.
+ *
+ * Re-adding it is a tempting thing to do — it reads like a useful piece of
+ * version-skew plumbing, and the failure is invisible until it is in
+ * production. Hence a test.
+ */
+describe("next.config must not set a custom deploymentId", () => {
+  const config = readFileSync("next.config.mjs", "utf8");
+
+  it("does not set deploymentId in the config object", () => {
+    // Vercel supplies its own through the environment and Next uses it
+    // regardless — `result.deploymentId = process.env.NEXT_DEPLOYMENT_ID`
+    // runs unconditionally, so ours could never have been used anyway.
+    expect(config).not.toMatch(/^\s*deploymentId\s*:/m);
+  });
+
+  it("says why, so it is not re-added as an improvement", () => {
+    expect(config).toContain("NEXT_DEPLOYMENT_ID");
+    expect(config).toMatch(/NOW_BUILDER/);
+  });
+});
+
+/**
+ * The identity the app actually uses, which is deliberately NOT Next's
+ * deploymentId. Vercel's `dpl_...` is a different value with a different
+ * lifetime and is not what anyone means by "which commit is live".
+ */
+describe("build identity is independent of deploymentId", () => {
+  it("sources the meta tag from the git sha", () => {
+    expect(readFileSync("app/layout.tsx", "utf8")).toContain(
+      "VERCEL_GIT_COMMIT_SHA"
+    );
+  });
+
+  it("sources /api/version from the git sha", () => {
+    expect(readFileSync("lib/stale-deploy.ts", "utf8")).toContain(
+      "VERCEL_GIT_COMMIT_SHA"
+    );
+  });
+
+  it("does not read data-dpl-id anywhere", () => {
+    // React strips server-rendered attributes on hydration, so the watcher
+    // baselines off the first /api/version answer instead. Reading the DOM
+    // attribute would fail silently — the exact bug that was fixed once.
+    const watcher = readFileSync("components/VersionWatcher.tsx", "utf8");
+    expect(watcher).not.toMatch(/dataset\.dplId|getAttribute\("data-dpl-id"\)/);
+    expect(watcher).toContain("/api/version");
   });
 });

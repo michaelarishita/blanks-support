@@ -10,11 +10,15 @@
 /**
  * The build this bundle came from.
  *
- * Set from `deploymentId` in next.config.mjs, which Next also stamps onto the
- * <html> element as `data-dpl-id`. Absent in ordinary local development, and
- * that is deliberate: with no id there is nothing to compare, the version
- * watcher stays silent, and nobody gets a "new version" bar every time the dev
- * server restarts.
+ * Sourced from the git sha, INDEPENDENTLY of Next's `deploymentId` — which
+ * this project deliberately does not set, because doing so fails the build on
+ * Vercel (see next.config.mjs). Vercel's own `dpl_...` id is a different
+ * value with a different lifetime, and it is not what anyone wants to see
+ * when asking "which commit is live".
+ *
+ * Absent in ordinary local development, and that is deliberate: with no id
+ * there is nothing to compare, the version watcher stays silent, and nobody
+ * gets a "new version" bar every time the dev server restarts.
  */
 export function serverBuildId(): string | null {
   return (

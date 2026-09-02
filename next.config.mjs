@@ -40,25 +40,37 @@ export function frameAncestors() {
 }
 
 /**
- * The build identifier, and the reason the app can tell a stale tab from an
- * outage.
+ * DELIBERATELY NO `deploymentId` HERE. Setting one broke production.
  *
- * Next uses this for version-skew protection: it stamps `data-dpl-id` on the
- * <html> element, appends `?dpl=` to asset URLs, and turns a mismatched
- * client-side navigation into a full reload. We read the same attribute to
- * warn BEFORE an action fails.
+ * Vercel sets NEXT_DEPLOYMENT_ID to its own `dpl_...` identifier. Next 16
+ * compares that against a config `deploymentId` and THROWS on any mismatch,
+ * before compiling anything — which is how a build fails in four seconds with
+ * nothing useful on screen. We set ours to the git sha, so every production
+ * build after that change failed, for four days, silently.
  *
- * Undefined in ordinary local development on purpose. With no id there is
- * nothing to compare, so the version watcher stays quiet instead of announcing
- * a new release every time the dev server restarts. Set NEXT_PUBLIC_BUILD_ID
- * by hand to exercise it.
+ * The trap is that this only fires on Vercel: the check is gated on
+ * `hasNextSupport`, which is `!!process.env.NOW_BUILDER`. Locally the config
+ * value is simply used, so it builds fine and looks correct.
+ *
+ * Note the docs and the implementation disagree in 16.3.0. The doc says "if
+ * both are set, the config value takes precedence over the environment
+ * variable"; `server/config.ts` throws on the mismatch and then does
+ * `result.deploymentId = process.env.NEXT_DEPLOYMENT_ID` unconditionally. So
+ * on Vercel the config value could never have been used even if it had been
+ * allowed through. Trust the code here, not the page.
+ *
+ * With no config value, Vercel's own id is picked up from the environment and
+ * Skew Protection works exactly as it is meant to — `?dpl=` on assets, and a
+ * hard navigation on a mismatched client transition. Off Vercel there is no
+ * id and no skew protection, which is right for a dev server.
+ *
+ * Nothing in the app reads this. The build-sha meta tag, /api/version and
+ * VersionWatcher all source their identity from VERCEL_GIT_COMMIT_SHA
+ * independently — verified, not assumed.
  */
-export const BUILD_ID =
-  process.env.NEXT_PUBLIC_BUILD_ID || process.env.VERCEL_GIT_COMMIT_SHA || undefined;
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  deploymentId: BUILD_ID,
   async headers() {
     return [
       {
