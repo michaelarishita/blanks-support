@@ -124,6 +124,32 @@ you have a real problem — start at the top of this page.
 
 ---
 
+## "Production is running old code"
+
+The deploy failed and Vercel emailed about it, which is why you are reading
+this instead: emailed alerts die in the noise, so the heartbeat raises a row.
+
+1. **vercel.com → blanks-support → Deployments.** A red one at the top is the
+   answer — open it and read the build log.
+2. **A failure in ~4–6 seconds** that compiles and then dies on `/login` is a
+   missing `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` at
+   BUILD time. Check the variable exists AND is scoped to Production.
+3. **Reproduce it the way the cloud does it**, from an empty tree:
+   ```bash
+   rm -rf node_modules && npm ci && npm run build
+   ```
+   `npm install` succeeds where `npm ci` fails, so it proves nothing.
+4. **What is actually being served:**
+   ```bash
+   curl -s https://support.blankssportsnutrition.com/login | grep build-sha
+   ```
+   Compare to the latest commit on GitHub.
+
+Nothing is lost while this is broken — customers keep using the last good
+build. What is lost is every fix since it.
+
+---
+
 ## Facebook Messenger has stopped
 
 Symptoms: DMs to the Blanks Page don't become tickets.

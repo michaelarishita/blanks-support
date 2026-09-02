@@ -7,6 +7,8 @@ import {
   shouldSendAlert,
 } from "@/lib/monitoring";
 import { readMetaHealth } from "@/lib/meta/health";
+import { compareDeploy, readHeadOfMain, readRunningBuild } from "@/lib/deploy-health";
+import { getSettingsBlob, patchSettingsBlob } from "@/lib/settings";
 import { drainWebhookEvents } from "@/lib/meta/queue";
 
 // Hourly. The most important cron here: a lapsed Gmail watch stops inbound
@@ -39,6 +41,15 @@ export async function GET(request: NextRequest) {
    */
   const meta = await checkMetaChannel();
 
+  /**
+   * And the thing that ships the app, which had no heartbeat at all.
+   *
+   * Seven production builds failed over four days and nobody was told; the
+   * only reason it surfaced was somebody going to look. Every other
+   * subsystem here reports when it stops working.
+   */
+  const deploy = await checkDeploy();
+
   const { health, previousStatus } = await checkInboundHealth();
 
   if (health.status !== "degraded") {
@@ -47,6 +58,7 @@ export async function GET(request: NextRequest) {
       reasons: health.reasons,
       alertSent: false,
       meta,
+      deploy,
     });
   }
 
@@ -99,6 +111,7 @@ export async function GET(request: NextRequest) {
     alertSent: raised.emailed,
     webhookSent: raised.webhooked,
     meta,
+    deploy,
     alertRecipient: raised.emailed ? alertRecipient() : undefined,
     alertError: raised.error,
   });
@@ -165,5 +178,82 @@ async function checkMetaChannel() {
   } catch (e) {
     console.error("[cron] Meta health check failed:", e);
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Is production serving what we last shipped?
+ *
+ * Its own alert kind, like Messenger's: a failed deploy and a lapsed Gmail
+ * watch need different people to do different things, and acknowledging one
+ * must not silence the other.
+ *
+ * The divergence CLOCK is persisted rather than recomputed, because "they
+ * differ" is not the alarm — "they have differed for six hours" is. A deploy
+ * takes minutes, and a push thirty seconds ago is not a failure.
+ */
+async function checkDeploy() {
+  try {
+    const site = process.env.NEXT_PUBLIC_SITE_URL;
+    const repo = process.env.GITHUB_REPO ?? "michaelarishita/blanks-support";
+    if (!site) return { state: "unknown", detail: "NEXT_PUBLIC_SITE_URL is not set" };
+
+    const [running, head] = await Promise.all([
+      readRunningBuild(site),
+      readHeadOfMain(repo),
+    ]);
+
+    const blob = await getSettingsBlob();
+    const previous = (blob.deploy_divergence as
+      | { running?: string; head?: string; since?: number }
+      | undefined) ?? {};
+
+    // The clock restarts whenever the PAIR changes, so a new push does not
+    // inherit the previous divergence's age and alarm instantly.
+    const samePair = previous.running === running && previous.head === head;
+    const divergedSince = samePair ? (previous.since ?? Date.now()) : Date.now();
+
+    const health = compareDeploy({ running, head, divergedSince, now: Date.now() });
+
+    await patchSettingsBlob({
+      deploy_divergence:
+        health.state === "current" && health.behindHours === 0
+          ? null
+          : { running, head, since: divergedSince },
+      deploy_last_checked: new Date().toISOString(),
+    });
+
+    if (health.state !== "behind") return health;
+
+    await raiseSystemAlert({
+      kind: "deploy_behind",
+      title: "Production is running old code",
+      severity: "warning",
+      reasons: [health.detail],
+      detail: [
+        `Serving : ${health.running}`,
+        `main    : ${health.head}`,
+        `Behind  : ${health.behindHours}h`,
+        "",
+        "A pushed commit is not a deployed commit. Builds fail silently —",
+        "Vercel emails about it, and an emailed alert dies in the noise,",
+        "which is why this is a row.",
+        "",
+        "What to check, in order:",
+        "  1. vercel.com → blanks-support → Deployments. A red one at the top",
+        "     is the answer; open it and read the build log.",
+        "  2. A failure in ~4-6s that compiles and then dies on /login is a",
+        "     missing NEXT_PUBLIC_SUPABASE_* at BUILD time.",
+        "  3. Reproduce locally the way the cloud does it:",
+        "     rm -rf node_modules && npm ci && npm run build",
+        "     `npm install` succeeds where `npm ci` fails — it proves nothing.",
+      ].join("\n"),
+    });
+
+    return health;
+  } catch (e) {
+    // Never the thing that stops the email heartbeat.
+    console.error("[cron] deploy check failed:", e);
+    return { state: "unknown", detail: e instanceof Error ? e.message : String(e) };
   }
 }

@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
-  const supabase = createClient();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,6 +15,24 @@ export default function LoginPage() {
     e.preventDefault();
     setPending(true);
     setError(null);
+    /**
+     * Built HERE, not during render, and that is a BUILD concern rather than
+     * a style one.
+     *
+     * This page is statically prerendered, so anything in the component body
+     * runs on the server at build time. `createClient()` throws when
+     * NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY are absent, which made a missing
+     * env var fail the whole production build — compile succeeds, export dies
+     * on /login, four seconds, no deploy. That is a hard coupling between
+     * shipping the app and a runtime secret, and it is the wrong direction:
+     * a login page that renders and reports it cannot reach Supabase is
+     * strictly better than a deploy that never lands and leaves stale code
+     * serving customers.
+     *
+     * Constructing it in the handler means it only ever runs in a browser,
+     * where the values are inlined and present.
+     */
+    const supabase = createClient();
     const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,

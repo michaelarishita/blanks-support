@@ -23,6 +23,26 @@ output: `grep`'s exit status replaces the build's, so the chain succeeds even
 when the build failed. If you need to filter build output, run the gate first
 and inspect afterwards.
 
+**2. The gate must include `npm ci` from an EMPTY node_modules.**
+
+`npm run build` against a populated `node_modules` proves almost nothing about
+the cloud build. Vercel starts from nothing, and so must the check:
+
+```
+rm -rf node_modules && npm ci && npm run build
+```
+
+`npm install` succeeds where `npm ci` fails, so it can never be used to
+conclude the build is fine. And it is not only the lockfile: a clean tree has
+no `.env.local`, which is how a build-time dependency on a runtime secret
+stays invisible locally for months.
+
+**A pushed commit is not a deployed commit.** Seven production builds failed
+over four days and nobody was told; the only reason it surfaced was somebody
+going to look. `curl -s <site>/login | grep build-sha` answers what is
+actually being served, and the heartbeat now compares it against the head of
+main — see the deploy check below.
+
 **A change is not done until it is pushed.** Push by default once the gate
 passes; only hold back if Michael says so. `main` deploys to production, so a
 push is a release — which is a reason to run the gate, not a reason to sit on
@@ -38,7 +58,7 @@ Two things this does NOT license: pushing work that hasn't passed the gate
 branch was asked for. And `git add -A` still sweeps up unrelated files —
 stage explicit paths, because a push makes that mistake much harder to undo.
 
-**2. Test globs must cover every extension the suite uses.**
+**3. Test globs must cover every extension the suite uses.**
 
 `vitest.config.mts` `include` is `tests/**/*.test.{ts,tsx}`. It was
 `*.test.ts`, which silently skipped a whole `.tsx` file — the run reported
@@ -221,6 +241,47 @@ file recommended exactly that as a recovery step, from a time when the app was
 not deployed. It would now destroy a live system's environment variables,
 domain binding and cron schedule, and none of those are reproducible from this
 repository alone.
+
+### The build must not need a runtime secret
+
+`/login` is statically prerendered, and it used to call `createClient()` in
+the component body — which runs on the SERVER at build time. `@supabase/ssr`
+throws without `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY`, so a missing env var
+did not degrade the login page: **it failed the entire production build**,
+compile succeeding and export dying on `/login` in about four seconds.
+
+That coupling is backwards. A login page that renders and reports it cannot
+reach Supabase is strictly better than a deploy that never lands and leaves
+stale code serving customers. The client is now built inside the submit
+handler, so it only ever runs in a browser, and `npm run build` succeeds with
+no environment at all — verified from a clean clone with `.env.local` deleted.
+
+**The general rule: nothing that runs at build time may require a secret.** If
+a prerendered page needs a client, construct it lazily.
+
+### Nothing was watching the thing that ships the app
+
+Every subsystem here has a heartbeat except the deploy. `lib/deploy-health.ts`
+compares the sha production is actually serving — read from the live site's
+`build-sha` meta tag, not from Vercel's API, because what a CUSTOMER is being
+given is the question — against the head of main, and alerts through the same
+`system_alerts` row as the mailbox and Messenger checks.
+
+Deliberately NOT Vercel's notification emails: an emailed alert dies in the
+noise, which is why alerts became a row first and an email second.
+
+- **`unknown` never collapses into `behind`.** An unreachable site or a
+  GitHub rate limit says nothing about whether a deploy succeeded, and
+  "production is stale" would send somebody to re-deploy a system that was
+  fine — the schema banner's lesson, applied to the thing that ships the
+  schema.
+- **"They differ" is not the alarm; "they have differed for six hours" is.**
+  A deploy takes minutes. The divergence clock is persisted and RESTARTS
+  whenever the pair changes, so a new push cannot inherit the previous
+  divergence's age and alarm instantly.
+- Shas are compared by common prefix: the site serves 7 characters, GitHub
+  returns 40, and a false "behind" from a formatting difference would be the
+  most annoying possible version of this alarm.
 
 ## Hard-won gotchas (do not re-learn these)
 
