@@ -620,6 +620,44 @@ It is the house rule again, in the module whose whole job is raising alarms:
 - Storage is a separate service: a failed `listBuckets()` is `null`, not an
   empty set, so it can never read as "the bucket is gone".
 
+### Every new alert must say what stops it repeating — at review time
+
+**The rule: an alert that can fire repeatedly for one ongoing condition is not
+finished until you can say what silences it.** State it when the alert is
+written, not after somebody's inbox has 127 copies. An alarm that cannot be
+silenced gets ignored, and then the real one is ignored too.
+
+This is the August burial arriving through a new channel. Then it was 200
+notification emails hiding four real heartbeat warnings; we fixed the volume
+and the shape came straight back, because the fix was in the notification
+code and the alert code had the same defect waiting.
+
+`raiseSystemAlert` used to email unless a caller passed `notify: false`.
+**One of seven callers remembered.** The hourly Messenger check turned a
+single known condition into 127 emails over five days, while the banner
+aggregated it correctly into one row — the two paths diverged because only one
+of them had a rate limit.
+
+Acknowledging made it WORSE. The lookup filtered `acknowledged_at is null`, so
+acknowledging made the next check find nothing, insert a fresh row, reset the
+occurrence count, and email again as though the condition were new. Observed:
+acknowledged 04:17, replacement row 05:00, emails resumed.
+
+The rule now lives in `raiseSystemAlert` rather than in every caller, because
+**a default that is wrong when you forget it is a bad default**:
+
+- a TRANSITION into the bad state emails once;
+- a merely continuing condition emails at most once a day;
+- an ACKNOWLEDGED condition does not email at all, until it clears and comes
+  back — which is what acknowledging means;
+- "cleared" is inferred from an absence of firings for longer than a day,
+  because nothing ever calls "the alert is over". Deliberately longer than 24h
+  so a daily cron's own cadence is not mistaken for recovery-and-return.
+
+The occurrence count still increments on every check even when no email goes
+out — an alert that under-counts itself cannot escalate, and the banner has to
+stay honest whether or not the email fires.
+
 ### An alarm must not look like the hundred FYIs
 
 The heartbeat was never broken. It fired four times, delivered correctly, and

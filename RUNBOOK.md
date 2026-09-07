@@ -176,6 +176,35 @@ build. What is lost is every fix since it.
 
 ---
 
+## An alert is emailing over and over
+
+It should not be able to any more: an alert emails once on the way into a bad
+state, then at most once a day, and not at all once acknowledged.
+
+If it happens again, **acknowledge it in the dashboard banner** — that now
+silences the email as well as the banner, until the condition clears and comes
+back.
+
+To stop it from the database instead (no deploy):
+
+```sql
+update system_alerts set acknowledged_at = now() where acknowledged_at is null;
+```
+
+To undo that:
+
+```sql
+update system_alerts set acknowledged_at = null, acknowledged_by = null
+where kind = 'the_kind_you_want_back';
+```
+
+Historic note: before September 2026 acknowledging did NOT stop the email —
+it made the next check create a replacement row and start again. If you are
+reading this against an old deployment, the only reliable stop is to fix the
+underlying condition.
+
+---
+
 ## Facebook Messenger has stopped
 
 Symptoms: DMs to the Blanks Page don't become tickets.

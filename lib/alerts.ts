@@ -34,6 +34,23 @@ export const SYSTEM_ALERT_PREFIX = "[⚠️ BLANKS SYSTEM]";
 /** Past this many unacknowledged occurrences, a warning becomes critical. */
 export const ESCALATE_AFTER_OCCURRENCES = 3;
 
+/**
+ * How often a CONTINUING condition may email. Once a day, never hourly.
+ *
+ * The condition is already on the banner and already known; the reminder
+ * exists so a problem left for a week does not fall out of mind entirely.
+ */
+export const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Quiet for this long and the next firing counts as a fresh transition.
+ *
+ * Deliberately longer than a day: the daily crons would otherwise look like a
+ * recovery-and-return every time they ran, and every daily alert would email
+ * every day regardless of acknowledgement.
+ */
+export const RECOVERY_GAP_MS = 25 * 60 * 60 * 1000;
+
 export type AlertSeverity = "warning" | "critical";
 
 export interface SystemAlert {
@@ -256,14 +273,37 @@ export async function raiseSystemAlert(input: {
   const detail = input.detail ?? "";
   const now = new Date().toISOString();
 
-  const { data: existing, error: readError } = await admin
+  /**
+   * The LATEST row for this condition, acknowledged or not.
+   *
+   * It used to filter `acknowledged_at is null`, which meant acknowledging an
+   * alert made the next check find nothing, insert a fresh row, and email
+   * again as though the condition were new. Proven in production: the
+   * meta_messenger_down row was acknowledged at 04:17 and a replacement
+   * appeared at 05:00, still emailing. Acknowledging made it worse — it also
+   * reset the occurrence count, so the escalation ladder started over.
+   */
+  const { data: latest, error: readError } = await admin
     .from("system_alerts")
     .select("*")
     .eq("kind", input.kind)
-    .is("acknowledged_at", null)
+    .order("last_seen_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (readError) return { alert: null, emailed: false, webhooked: false, error: readError.message };
 
+  /**
+   * Has this condition been quiet long enough to count as having cleared?
+   *
+   * Nothing calls "the alert is over", so a return to health is only visible
+   * as an ABSENCE of firings. Longer than a day means the daily jobs' own
+   * cadence never looks like a recovery.
+   */
+  const lastSeen = latest ? Date.parse(latest.last_seen_at as string) : null;
+  const continuing =
+    latest !== null && lastSeen !== null && Date.now() - lastSeen < RECOVERY_GAP_MS;
+
+  const existing = continuing ? latest : null;
   const occurrence = (existing?.occurrence_count ?? 0) + 1;
   const severity = escalatedSeverity(input.severity ?? "warning", occurrence);
 
@@ -301,7 +341,39 @@ export async function raiseSystemAlert(input: {
   }
   const alert = row.data as SystemAlert;
 
-  if (input.notify === false) {
+  /**
+   * WHETHER TO EMAIL — decided here rather than by each caller.
+   *
+   * It used to email unless a caller passed `notify: false`, so forgetting
+   * the parameter meant an email on every check. Five of the six callers
+   * forgot, and the hourly heartbeat turned one ongoing Messenger condition
+   * into 127 emails over five days — the same burial that hid four real
+   * heartbeat warnings under 200 notifications in August, arriving through a
+   * new channel.
+   *
+   * A default that is wrong when you forget it is a bad default. The rule now
+   * lives in one place:
+   *
+   *   - a TRANSITION into the bad state emails once;
+   *   - a condition that is merely continuing emails at most once a day;
+   *   - an ACKNOWLEDGED condition emails not at all, until it clears and
+   *     comes back, because that is what acknowledging means.
+   */
+  const acknowledged = Boolean(existing?.acknowledged_at);
+  const lastNotified = existing?.last_notified_at
+    ? Date.parse(existing.last_notified_at as string)
+    : null;
+  const reminderDue =
+    lastNotified === null || Date.now() - lastNotified >= REMINDER_INTERVAL_MS;
+
+  const shouldEmail =
+    input.notify === false
+      ? false
+      : !existing
+        ? true // transition: first sighting, or the condition came back
+        : !acknowledged && reminderDue;
+
+  if (!shouldEmail) {
     return { alert, emailed: false, webhooked: false };
   }
 
