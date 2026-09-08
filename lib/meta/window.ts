@@ -21,7 +21,17 @@ export type ReplyWindowState =
   /** Meta will refuse. Nothing we can send changes that. */
   | "expired"
   /** No inbound message, so no window was ever opened. */
-  | "never_opened";
+  | "never_opened"
+  /**
+   * We could not read the customer's last message.
+   *
+   * NOT the same as "no window". A failed query and a conversation the
+   * customer never started produce the same `null` timestamp, and treating
+   * them alike means a database hiccup silently tells an agent their reply is
+   * impossible — or worse, lets a doomed one through. The composer warns and
+   * allows; the send re-reads and refuses only on a real answer.
+   */
+  | "unknown";
 
 export interface ReplyWindow {
   state: ReplyWindowState;
@@ -34,6 +44,27 @@ export interface ReplyWindow {
   canSend: boolean;
   /** True when the send must carry the tag. */
   requiresTag: boolean;
+}
+
+/**
+ * The window when the lookup itself failed.
+ *
+ * `canSend` is TRUE on purpose. Being unable to measure the clock is not
+ * evidence the clock has run out, and blocking a reply on a transient
+ * database error is the failure this codebase keeps finding — a confident
+ * answer built from an absent one. The send path re-reads at the moment of
+ * sending, so an optimistic composer costs at most one honest API refusal
+ * with a real reason attached.
+ */
+export function unknownWindow(): ReplyWindow {
+  return {
+    state: "unknown",
+    msUntilTagRequired: 0,
+    msUntilClosed: 0,
+    lastInboundAt: null,
+    canSend: true,
+    requiresTag: false,
+  };
 }
 
 export function replyWindow(
@@ -97,6 +128,18 @@ export function sendParamsFor(
   if (state === "human_agent") {
     return { messaging_type: "MESSAGE_TAG", tag: "HUMAN_AGENT" };
   }
+  /**
+   * `unknown` sends as a plain RESPONSE.
+   *
+   * We could not read the clock, so we do not know whether the tag is
+   * required. Sending untagged is the honest attempt: if the window has in
+   * fact closed Meta refuses with a specific error the agent can act on, and
+   * a refusal with a reason beats a silent block. Applying HUMAN_AGENT
+   * speculatively would be worse — the tag is only legitimate for a human
+   * answering a question, and using it on a guess is a policy violation
+   * rather than a bug.
+   */
+  if (state === "unknown") return { messaging_type: "RESPONSE" };
   return null;
 }
 
@@ -127,6 +170,10 @@ export function describeWindow(window: ReplyWindow): string {
       return "Meta's 7-day reply window has closed. You can't message this customer until they write again.";
     case "never_opened":
       return "No message from this customer yet, so Meta won't allow a reply.";
+    case "unknown":
+      // Says what we do not know rather than implying a state. An agent
+      // reading this should send, and will get a real reason if Meta refuses.
+      return "Couldn't check Meta's reply window — sending may fail.";
   }
 }
 
