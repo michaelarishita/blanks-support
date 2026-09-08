@@ -73,12 +73,25 @@ function siteUrl(): string {
 /** Counts of this agent's unresolved tickets, and their oldest. */
 async function gatherQueue(agentId: string): Promise<AssignmentContext["queue"]> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("tickets")
     .select("number, priority, created_at")
     .eq("assignee_id", agentId)
     .in("status", OPEN_STATUSES)
     .order("created_at", { ascending: true });
+
+  /**
+   * A failed read is not an empty queue.
+   *
+   * `data ?? []` produced a "your outstanding queue: 0" block in an
+   * assignment email for an agent who might have twenty. Returning null omits
+   * the block entirely, which is the same rule the sidebar counts already
+   * follow: show nothing rather than a number nobody measured.
+   */
+  if (error) {
+    console.error("[notifications] could not read the queue:", error.message);
+    return null;
+  }
 
   const rows = data ?? [];
   const byPriority: QueueBreakdown = { urgent: 0, high: 0, normal: 0, low: 0 };
@@ -109,7 +122,7 @@ async function threadRoot(
   ticketId: string
 ): Promise<{ messageId: string; subject: string | null } | null> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("notifications")
     .select("thread_message_id, subject")
     .eq("agent_id", agentId)
@@ -118,6 +131,15 @@ async function threadRoot(
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
+
+  // Logged rather than swallowed. The consequence is mild — a fresh email
+  // thread instead of a reply into the existing one — but "there is no root"
+  // and "we could not look" are different facts, and only one of them is
+  // about the data.
+  if (error) {
+    console.error("[notifications] could not read the thread root:", error.message);
+    return null;
+  }
   if (!data?.thread_message_id) return null;
   return {
     messageId: data.thread_message_id as string,

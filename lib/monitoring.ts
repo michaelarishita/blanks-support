@@ -95,8 +95,17 @@ export interface HealthInputs {
   lastHistoryId: string | null;
   previousHistoryId: string | null;
   previousHistoryChangedAt: string | null;
-  /** Whether any email ticket has ever existed — suppresses noise pre-launch. */
-  everReceived: boolean;
+  /**
+   * Whether any email ticket has ever existed — suppresses noise pre-launch.
+   *
+   * THREE states, not two. `null` means the count could not be read, which is
+   * not the same as "none". Collapsing them silenced the entire heartbeat on
+   * a failed query: `count ?? 0` made this false, the early return below fired
+   * with no reasons, and the one alarm that catches a silent inbound outage
+   * was itself disabled by a failure — the exact `!error` shape fixed in the
+   * schema banner.
+   */
+  everReceived: boolean | null;
 }
 
 /**
@@ -124,9 +133,29 @@ export function evaluateInboundHealth(input: HealthInputs): {
     };
   }
 
+  /**
+   * We could not tell whether any mail has ever arrived.
+   *
+   * NOT a reason to go quiet. Being unable to determine health is itself a
+   * condition worth knowing about — it means the heartbeat is not watching,
+   * and the whole point of the heartbeat is that its silence is meaningful.
+   * Checked BEFORE the pre-launch case, because "no baseline" is a claim and
+   * a failed count has not made one.
+   */
+  if (input.everReceived === null) {
+    return {
+      status: "degraded",
+      reasons: [
+        "Inbound health could not be determined — the ticket count could not be read, " +
+          "so this check is not currently watching anything.",
+      ],
+      historyChangedAt,
+    };
+  }
+
   // Before the first email ever arrives there's no baseline to judge silence
   // against, so don't cry wolf during setup.
-  if (!input.everReceived) {
+  if (input.everReceived === false) {
     return { status: "unknown", reasons: [], historyChangedAt };
   }
 
@@ -199,10 +228,13 @@ export async function checkInboundHealth(): Promise<{
     .limit(1)
     .maybeSingle();
 
-  const { count: emailTicketCount } = await admin
+  const { count: emailTicketCount, error: countError } = await admin
     .from("tickets")
     .select("id", { count: "exact", head: true })
     .eq("channel", "email");
+  if (countError) {
+    console.error("[monitoring] could not count email tickets:", countError.message);
+  }
 
   const evaluated = evaluateInboundHealth({
     now,
@@ -212,7 +244,9 @@ export async function checkInboundHealth(): Promise<{
     lastHistoryId: connection?.last_history_id ?? null,
     previousHistoryId: previous.lastHistoryId,
     previousHistoryChangedAt: previous.historyChangedAt,
-    everReceived: (emailTicketCount ?? 0) > 0,
+    // null on failure, never 0 — a count nobody measured must not read as
+    // "nothing has ever arrived".
+    everReceived: countError ? null : (emailTicketCount ?? 0) > 0,
   });
 
   /**
@@ -224,6 +258,9 @@ export async function checkInboundHealth(): Promise<{
    * opposite fixes — the first is a bug in our guards, the second is a quiet
    * Tuesday.
    */
+  /** Set when a check could not run at all, as opposed to running and passing. */
+  let unverifiable = false;
+
   let recentlyDropped: string | null = null;
   try {
     const blob = await getSettingsBlob();
@@ -245,8 +282,20 @@ export async function checkInboundHealth(): Promise<{
       );
     }
     if (dropped.length) recentlyDropped = dropped.join("; ");
-  } catch {
-    // Monitoring must never be the thing that breaks.
+  } catch (e) {
+    /**
+     * Monitoring must never be the thing that breaks — but it must not go
+     * quiet either. Losing this read loses the distinction between "no mail
+     * arrived" and "mail arrived and every message was dropped", which are
+     * opposite problems that read identically, and which is the reason this
+     * block exists at all.
+     */
+    console.error("[monitoring] could not read the last sync's record:", e);
+    unverifiable = true;
+    evaluated.reasons.push(
+      "The sync's own record of what it discarded could not be read, so " +
+        "'no mail arrived' cannot be told apart from 'mail arrived and was dropped'."
+    );
   }
 
   if (recentlyDropped && evaluated.reasons.length) {
@@ -277,12 +326,22 @@ export async function checkInboundHealth(): Promise<{
         `The mailbox has not been reconciled for ${hours}h (threshold ${RECONCILE_STALE_HOURS}h).`
       );
     }
-  } catch {
-    // Monitoring must never be the thing that breaks.
+  } catch (e) {
+    // Same rule: the watchdog's own watchdog failing is worth a sentence.
+    console.error("[monitoring] could not read the reconciliation record:", e);
+    unverifiable = true;
+    evaluated.reasons.push(
+      "Could not check when the mailbox was last reconciled, so the check " +
+        "that watches for mail going missing is itself unverified."
+    );
   }
 
   const health: InboundHealth = {
-    status: evaluated.status,
+    // `unverifiable` escalates: pushing a reason without changing the status
+    // would put the sentence on the banner and never send the alert, since
+    // the cron returns early on anything that is not "degraded". A reason
+    // nobody is notified about is the silence this module exists to end.
+    status: unverifiable ? "degraded" : evaluated.status,
     reasons: evaluated.reasons,
     recentlyDropped,
     checkedAt: new Date(now).toISOString(),

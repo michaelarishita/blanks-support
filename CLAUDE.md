@@ -414,6 +414,35 @@ looks like the calm one.
 the source, because "a failure never renders as an absence" is a property of
 the code's shape — calling a function that works cannot observe it.
 
+### The two places it was still live, found by audit
+
+**The heartbeat could be silenced by a failed count.** `monitoring.ts` read
+the email-ticket count without binding `error`, so `count ?? 0` made
+`everReceived` false, and `evaluateInboundHealth` took the pre-launch early
+return — status `unknown`, no reasons, no alert. The one alarm that catches a
+silent inbound outage, disabled by the exact shape it exists to catch.
+
+`everReceived` is now `boolean | null`, and **null does not silence it**:
+being unable to determine health is itself a condition worth alerting on,
+because the heartbeat's whole value is that its silence means something.
+
+**Routing strategy 1 fell through on error.** The `[BLK-n]` token lookup
+discarded its error while strategies 2 and 3 threw — directly under the
+comment explaining that a failed lookup "would fall through to 'create a new
+ticket', silently splitting a conversation in two". It is the DOMINANT path
+in production (43 of 57 recorded matches), so it was the worst one to leave.
+All four strategies now throw, which holds the cursor and retries rather than
+splitting a thread.
+
+**It had never fired.** Checked before fixing: 43 token matches, zero
+duplicate tickets across 126 email tickets. Latent, not historic — no
+conversations to merge.
+
+**Corollary, from the monitoring fix:** pushing a reason is not alerting.
+The cron returns early on anything that is not `degraded`, so a reason added
+without escalating the status lands on the banner and notifies nobody. If a
+check cannot run, say so AND degrade.
+
 ### A poison message must not take the channel down with it
 
 The cursor is held back when a message fails to store. That is right, and it

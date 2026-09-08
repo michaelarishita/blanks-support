@@ -427,11 +427,18 @@ async function routeToTicket(
   // 1. Routing token in the subject.
   const ticketNumber = extractTicketToken(parsed.subject);
   if (ticketNumber !== null) {
-    const { data } = await admin
+    const { data, error } = await admin
       .from("tickets")
       .select("id")
       .eq("number", ticketNumber)
       .maybeSingle();
+    // Same rule as strategies 2 and 3 below, and this is the strategy that
+    // most needed it: the [BLK-n] token is the strongest signal we have —
+    // we put it in the subject for exactly this — so a failed lookup falling
+    // through to "create a new ticket" would split the conversations we were
+    // most certain about. It is the dominant path in production (43 of 57
+    // recorded matches), which is precisely why it must not fail quietly.
+    if (error) throw new Error(`Token routing lookup failed: ${error.message}`);
     if (data) return { ticketId: data.id, path: "token" };
   }
 
@@ -468,14 +475,19 @@ async function routeToTicket(
     const since = new Date(
       Date.now() - SENDER_MATCH_WINDOW_DAYS * 86_400_000
     ).toISOString();
-    const { data: customer } = await admin
+    const { data: customer, error: customerError } = await admin
       .from("customers")
       .select("id")
       .eq("email", parsed.fromEmail)
       .maybeSingle();
+    // The last strategy, and still not a place to guess: falling through
+    // here creates a second ticket just as surely as falling through above.
+    if (customerError) {
+      throw new Error(`Sender routing lookup failed: ${customerError.message}`);
+    }
 
     if (customer) {
-      const { data: recent } = await admin
+      const { data: recent, error: recentError } = await admin
         .from("tickets")
         .select("id, subject")
         .eq("customer_id", customer.id)
@@ -483,6 +495,9 @@ async function routeToTicket(
         .gte("last_message_at", since)
         .order("last_message_at", { ascending: false })
         .limit(10);
+      if (recentError) {
+        throw new Error(`Recent-ticket routing lookup failed: ${recentError.message}`);
+      }
 
       const incoming = normalizeSubject(parsed.subject);
       const match = (recent ?? []).find(
