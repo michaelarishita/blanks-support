@@ -68,7 +68,7 @@ describe("renderSnippet", () => {
   it("uses the control characters the SQL emits, not <mark>", () => {
     // The whole reason the snippet is delimited rather than shipped as HTML:
     // raw customer text can contain markup, and rendering it as HTML would be
-    // an injection. These MUST equal the \x01 / \x02 in 0023_search.sql.
+    // an injection. These MUST equal the \x01 / \x02 in 0024_search.sql.
     expect(HL_START.charCodeAt(0)).toBe(0x01);
     expect(HL_END.charCodeAt(0)).toBe(0x02);
     expect(HL_START).not.toContain("<");
@@ -108,8 +108,8 @@ describe("isTruncated", () => {
  * migration text — the same discipline the resolve-on-reply and topics tests
  * use for their SQL.
  */
-describe("0023_search.sql does what the feature needs", () => {
-  const sql = read("../supabase/migrations/0023_search.sql");
+describe("0024_search.sql does what the feature needs", () => {
+  const sql = read("../supabase/migrations/0024_search.sql");
 
   it("indexes both tsvectors with GIN", () => {
     expect(sql).toMatch(/create index if not exists tickets_fts_idx on tickets using gin \(fts\)/);
@@ -156,8 +156,8 @@ describe("0023_search.sql does what the feature needs", () => {
 });
 
 describe("the migration is registered with the schema checker", () => {
-  it("lists 0023 so the banner is not blind to it", () => {
-    expect(CHECKED_MIGRATION_FILES).toContain("0023_search.sql");
+  it("lists 0024 so the banner is not blind to it", () => {
+    expect(CHECKED_MIGRATION_FILES).toContain("0024_search.sql");
   });
 });
 

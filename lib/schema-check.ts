@@ -302,7 +302,7 @@ const MIGRATIONS: Migration[] = [
     },
   },
   {
-    file: "0023_search.sql",
+    file: "0024_search.sql",
     title: "Full-text search — without the GIN indexes and the RPC, search is dead",
     requires: {
       columns: ["tickets.fts", "messages.fts"],

@@ -65,7 +65,7 @@ async function Results({ query }: { query: string }) {
       <QueryError
         title="Search could not run — this is NOT “no results found”."
         reason={`${error.message}${error.hint ? ` — ${error.hint}` : ""}`}
-        note="Nothing was searched. Try again; if it keeps failing, the search index migration (0023) may not be applied."
+        note="Nothing was searched. Try again; if it keeps failing, the search index migration (0024) may not be applied."
       />
     );
   }

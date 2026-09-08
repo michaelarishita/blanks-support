@@ -1,7 +1,7 @@
 /**
  * Full-text search — the pure half.
  *
- * The SQL lives in 0023_search.sql and the query runs there; everything a test
+ * The SQL lives in 0024_search.sql and the query runs there; everything a test
  * or a component needs to reason about without a database is here. Kept
  * dependency-free so the snippet parsing runs identically on the server render
  * and any client that reuses it.
@@ -19,7 +19,7 @@ import type { TicketChannel, TicketPriority, TicketStatus } from "@/lib/types";
  * real email, so `renderSnippet` can split on them and the caller wraps the
  * matches itself — with everything else escaped as ordinary text by React.
  *
- * These MUST match the StartSel/StopSel in 0023_search.sql (\x01 / \x02).
+ * These MUST match the StartSel/StopSel in 0024_search.sql (\x01 / \x02).
  */
 export const HL_START = "\u0001";
 export const HL_END = "\u0002";

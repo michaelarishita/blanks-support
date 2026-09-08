@@ -1,6 +1,10 @@
 -- ============================================================
 -- Blanks Support — full-text search (Prompt 27A)
--- Run in the Supabase SQL Editor after 0022_upload_grants.sql.
+-- Run in the Supabase SQL Editor after 0023_alert_mutes.sql.
+--
+-- Renumbered from 0023 to 0024: afk/alert-kill-switch took 0023 first
+-- (0023_alert_mutes.sql), so this moved up to keep the hand-run order
+-- unambiguous once both branches land.
 --
 -- IDEMPOTENT THROUGHOUT.
 --

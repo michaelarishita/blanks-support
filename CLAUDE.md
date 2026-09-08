@@ -177,6 +177,18 @@ is the single most common way this app breaks, which is why the schema banner
 exists and why it distinguishes "not run" from "couldn't check". When adding a
 migration, say so in the commit message and in the hand-off.
 
+**The next number is claimed across EVERY unmerged branch, not just main.**
+Two branches that both add `0023_*.sql` collide the moment the second one
+merges, and the loser is whoever is renumbering under time pressure with tests,
+the schema-checker registration and docs all pointing at the old number. Before
+adding a migration, run `git branch -a` and grep the branches for the number
+you are about to take — `git log --all --oneline -- 'supabase/migrations/*'` or
+`git ls-tree` across the branch tips — and pick the first number no unmerged
+branch has claimed. This was flagged as a hazard in one AFK report and then hit
+in the very next drop: `0023_alert_mutes.sql` (afk/alert-kill-switch, first, so
+it keeps 0023) versus `0023_search.sql` (afk/search-and-triage, renumbered to
+0024). "The number is free on main" is not the same as "the number is free."
+
 ### What is connected
 
 - **Gmail (Phase 2, live).** `hello@blankssportsnutrition.com` is the watched
