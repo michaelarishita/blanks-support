@@ -1,8 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isInlineSafe } from "@/lib/attachments";
 import { htmlToPlainText } from "@/lib/html";
 import type { MetaChannel } from "./events";
-import { sendMetaText } from "./send";
-import { replyWindow, type ReplyWindow } from "./window";
+import { sendMetaMessage, type OutboundAttachment } from "./send";
+import { replyWindow, unknownWindow, type ReplyWindow } from "./window";
 
 /**
  * Delivering an agent's reply to Instagram or Messenger.
@@ -45,7 +46,7 @@ function recipientFor(
  */
 export async function currentReplyWindow(ticketId: string): Promise<ReplyWindow> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from("messages")
     .select("created_at")
     .eq("ticket_id", ticketId)
@@ -53,6 +54,20 @@ export async function currentReplyWindow(ticketId: string): Promise<ReplyWindow>
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+
+  /**
+   * A failed read is NOT "this customer never messaged us".
+   *
+   * Both produce a null timestamp, and the difference decides whether a reply
+   * is free-form, needs the HUMAN_AGENT tag, or is blocked outright. Passing
+   * the failure through as `never_opened` would block a legitimate reply on a
+   * transient database error and tell the agent the customer must message
+   * first — which would be untrue and unfixable from their side.
+   */
+  if (error) {
+    console.error(`[meta] could not read the reply window for ${ticketId}:`, error.message);
+    return unknownWindow();
+  }
 
   return replyWindow((data?.created_at as string | undefined) ?? null);
 }
@@ -133,6 +148,22 @@ export async function deliverMetaMessage(messageId: string): Promise<DeliveryRes
     );
   }
 
+  /**
+   * Attachments, as URLs Meta's servers can fetch.
+   *
+   * Signed and short-lived rather than our own storage paths: the bucket is
+   * private, and making it public to send one photo would expose every
+   * customer's photographs to anyone who guessed a path.
+   *
+   * A file we cannot sign is NOT silently dropped — that is the exact defect
+   * this drop keeps finding. It fails the send with the filename in it, so
+   * the agent knows which one and can try again.
+   */
+  const attachments = await outboundAttachments(message.id);
+  if ("error" in attachments) {
+    return fail(message.id, ticket.id, message.agent_id, attachments.error);
+  }
+
   // Re-checked here, not trusted from the composer. The window is a clock,
   // and the only reading that matters is the one at the moment of sending.
   const window = await currentReplyWindow(ticket.id);
@@ -152,15 +183,17 @@ export async function deliverMetaMessage(messageId: string): Promise<DeliveryRes
     : message.body_text
   ).trim();
 
-  if (!text) {
+  // Text OR an attachment is enough; an attachment-only reply is legitimate.
+  if (!text && !attachments.files.length) {
     return fail(message.id, ticket.id, message.agent_id, "Nothing to send.");
   }
 
-  const sent = await sendMetaText({
+  const sent = await sendMetaMessage({
     recipientId: recipient,
     text,
     windowState: window.state,
     channel: ticket.channel,
+    attachments: attachments.files,
   });
 
   if (!sent.ok) {
@@ -189,4 +222,63 @@ export async function deliverMetaMessage(messageId: string): Promise<DeliveryRes
   }
 
   return { ok: true };
+}
+
+
+/** How long Meta gets to fetch an attachment before the URL dies. */
+const ATTACHMENT_URL_TTL_SECONDS = 10 * 60;
+
+/**
+ * Signed URLs for a message's attachments, or the reason there are none.
+ *
+ * Meta fetches the bytes from a URL rather than accepting an upload, so each
+ * file needs a link its servers can reach. The bucket is private and stays
+ * that way: these are short-lived signed URLs, not a public path.
+ *
+ * Returns `{ error }` rather than an empty list when signing fails. Dropping
+ * an attachment silently is the defect this codebase keeps rediscovering —
+ * the customer would receive the words without the photo, and the agent would
+ * be told it sent.
+ */
+async function outboundAttachments(
+  messageId: string
+): Promise<{ files: OutboundAttachment[] } | { error: string }> {
+  const admin = createAdminClient();
+
+  const { data: rows, error } = await admin
+    .from("attachments")
+    .select("id, filename, mime_type, storage_path")
+    .eq("message_id", messageId)
+    .order("created_at", { ascending: true });
+
+  // A failed lookup is not "no attachments". Sending the text alone would
+  // deliver half a reply and call it whole.
+  if (error) {
+    return { error: `Could not read this reply's attachments: ${error.message}` };
+  }
+  if (!rows?.length) return { files: [] };
+
+  const files: OutboundAttachment[] = [];
+  for (const row of rows) {
+    const { data, error: signError } = await admin.storage
+      .from("attachments")
+      .createSignedUrl(row.storage_path as string, ATTACHMENT_URL_TTL_SECONDS);
+
+    if (signError || !data?.signedUrl) {
+      return {
+        error: `Could not prepare ${row.filename} for sending: ${signError?.message ?? "no signed URL"}`,
+      };
+    }
+
+    files.push({
+      url: data.signedUrl,
+      // Meta renders `image` inline and offers `file` as a download. The
+      // mime type decides, not the extension — the same rule the inline
+      // serving allowlist uses.
+      kind: isInlineSafe(row.mime_type as string | null) ? "image" : "file",
+      filename: (row.filename as string) ?? "attachment",
+    });
+  }
+
+  return { files };
 }
