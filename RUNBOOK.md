@@ -176,6 +176,46 @@ build. What is lost is every fix since it.
 
 ---
 
+## STOP AN ALERT EMAILING ME RIGHT NOW
+
+You know about the problem. You are working on it. You want the notifications
+to stop without shipping anything.
+
+**Dashboard:** Settings → Muted alerts → pick the alert, pick how long, Mute.
+
+**SQL, if the app is the thing that is broken:**
+
+```sql
+-- silence for 24 hours
+insert into alert_mutes (kind, expires_at, reason)
+values ('meta_messenger_down', now() + interval '24 hours', 'known, being worked on')
+on conflict (kind) do update
+  set expires_at = excluded.expires_at, reason = excluded.reason, muted_at = now();
+
+-- what is muted right now
+select kind, expires_at, reason from alert_mutes;
+
+-- let it alarm again
+delete from alert_mutes where kind = 'meta_messenger_down';
+```
+
+Kinds: `inbound_email_down`, `meta_messenger_down`, `meta_reconciliation`,
+`deploy_behind`, `inbound_quarantine`, `inbound_reconciliation`,
+`inbound_reconciliation_failed`.
+
+**A mute stops the EMAIL and nothing else.** The alert is still recorded, the
+occurrence count still climbs, and the banner still shows it marked "muted".
+That is deliberate: a muted alarm that stopped counting would destroy the
+record of how long the problem lasted, which is usually the thing you want
+afterwards.
+
+**Omit `expires_at` to mute indefinitely.** Allowed, and flagged in red
+everywhere it appears, because an indefinite mute is how a real alarm becomes
+a permanent blind spot. Prefer an expiry you will regret rather than one you
+will forget.
+
+---
+
 ## An alert is emailing over and over
 
 It should not be able to any more: an alert emails once on the way into a bad

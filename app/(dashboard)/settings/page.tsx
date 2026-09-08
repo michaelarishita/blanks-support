@@ -9,6 +9,7 @@ import QuarantinedMessages from "@/components/QuarantinedMessages";
 import { readQuarantined } from "@/lib/inbound/quarantine";
 import ReconcileStatus, { type ReconcileSummary } from "@/components/ReconcileStatus";
 import MessengerStatus from "@/components/MessengerStatus";
+import AlertMutes, { type MuteRow } from "@/components/AlertMutes";
 import { getSettingsBlob } from "@/lib/settings";
 import CheckMailNow from "@/components/CheckMailNow";
 import IgnoredSenderList from "@/components/IgnoredSenderList";
@@ -63,6 +64,34 @@ export default async function SettingsPage({
   // are opposite claims and only one of them is reassuring.
   const quarantined =
     me?.role === "admin" ? await readQuarantined() : { rows: [], error: null };
+  /**
+   * Muted alert kinds, with how many times each has fired WHILE muted —
+   * the number that proves a mute silenced the email and not the evidence.
+   */
+  const alertMutes: MuteRow[] = [];
+  if (me?.role === "admin") {
+    const { readAlertMutes } = await import("@/lib/alerts");
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const admin = createAdminClient();
+    const mutes = await readAlertMutes();
+    for (const mute of mutes.values()) {
+      const { data } = await admin
+        .from("system_alerts")
+        .select("occurrence_count")
+        .eq("kind", mute.kind)
+        .order("last_seen_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      alertMutes.push({
+        kind: mute.kind,
+        expiresAt: mute.expiresAt,
+        reason: mute.reason,
+        indefinite: mute.indefinite,
+        occurrences: (data?.occurrence_count as number | undefined) ?? null,
+      });
+    }
+  }
+
   const lastReconcile =
     me?.role === "admin"
       ? (((await getSettingsBlob()).inbound_last_reconcile as ReconcileSummary | undefined) ??
@@ -316,6 +345,13 @@ export default async function SettingsPage({
 
           <div className="mt-4 border-t border-gray-200 pt-4">
             <CheckMailNow connected={Boolean(supportInbox)} />
+          </div>
+
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <h3 className="mb-2 text-sm font-semibold text-gray-700">
+              Muted alerts
+            </h3>
+            <AlertMutes mutes={alertMutes} />
           </div>
 
           <div className="mt-4 border-t border-gray-200 pt-4">

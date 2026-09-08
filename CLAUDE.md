@@ -620,6 +620,26 @@ It is the house rule again, in the module whose whole job is raising alarms:
 - Storage is a separate service: a failed `listBuckets()` is `null`, not an
   empty set, so it can never read as "the bucket is gone".
 
+### An alarm must be silenceable without a deploy
+
+`alert_mutes` (0023) silences a KIND from the database or from Settings, with
+an optional expiry. It exists because the only available stop for 127
+notifications was shipping code — and the deploy pipeline was itself broken at
+the time, which is exactly when you least want the two coupled.
+
+- **A mute stops the email and NOTHING else.** The row is still written and
+  the occurrence count still increments. Checked AFTER the write for that
+  reason, and a test asserts the ordering: a muted alarm that stopped counting
+  would destroy the record of how long the condition lasted.
+- **The banner shows muted alerts as muted, not absent.** A mute nobody can
+  see is the blind spot the feature is supposed to prevent.
+- **Indefinite mutes are allowed and flagged**, everywhere they appear.
+- **A failed read of `alert_mutes` alerts anyway.** A missed mute is a
+  duplicate email; a wrongly-assumed mute is a silent alarm, and this codebase
+  has already paid for the second one.
+- Keyed on kind rather than on an alert row, so a kind can be muted before it
+  has ever fired — the maintenance window you already know will trip it.
+
 ### Every new alert must say what stops it repeating — at review time
 
 **The rule: an alert that can fire repeatedly for one ongoing condition is not

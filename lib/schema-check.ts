@@ -301,6 +301,11 @@ const MIGRATIONS: Migration[] = [
       indexes: ["upload_grants_path_uniq"],
     },
   },
+  {
+    file: "0023_alert_mutes.sql",
+    title: "Alert mutes — silencing a known alarm without a deploy",
+    requires: { tables: ["alert_mutes"] },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

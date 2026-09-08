@@ -244,10 +244,61 @@ export async function postAlertWebhook(
   }
 }
 
+/** A kind that is currently silenced, and until when. */
+export interface AlertMute {
+  kind: string;
+  mutedAt: string;
+  expiresAt: string | null;
+  reason: string | null;
+  /** Flagged, because an indefinite mute becomes a permanent blind spot. */
+  indefinite: boolean;
+}
+
+/**
+ * Every mute currently in force.
+ *
+ * A failed read returns an EMPTY map rather than throwing, and that direction
+ * is deliberate: if we cannot tell whether a kind is muted, the safe answer is
+ * to alert. A missed mute is a duplicate email; a wrongly-assumed mute is a
+ * silent alarm, and this codebase has already paid for the second one.
+ */
+export async function readAlertMutes(): Promise<Map<string, AlertMute>> {
+  const map = new Map<string, AlertMute>();
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from("alert_mutes")
+      .select("kind, muted_at, expires_at, reason");
+    if (error) {
+      console.error("[alerts] could not read mutes — alerting anyway:", error.message);
+      return map;
+    }
+    const now = Date.now();
+    for (const row of data ?? []) {
+      const expiresAt = (row.expires_at as string | null) ?? null;
+      // An expired mute is not a mute. Left in the table as a record of what
+      // was silenced and when, which is worth keeping.
+      if (expiresAt && Date.parse(expiresAt) <= now) continue;
+      map.set(row.kind as string, {
+        kind: row.kind as string,
+        mutedAt: row.muted_at as string,
+        expiresAt,
+        reason: (row.reason as string | null) ?? null,
+        indefinite: expiresAt === null,
+      });
+    }
+  } catch (e) {
+    console.error("[alerts] could not read mutes — alerting anyway:", e);
+  }
+  return map;
+}
+
 export interface RaiseResult {
   alert: SystemAlert | null;
   emailed: boolean;
   webhooked: boolean;
+  /** Set when a mute stopped the notification. The row was still written. */
+  muted?: AlertMute;
   error?: string;
 }
 
@@ -272,6 +323,7 @@ export async function raiseSystemAlert(input: {
   const reasons = input.reasons ?? [];
   const detail = input.detail ?? "";
   const now = new Date().toISOString();
+  const mutes = await readAlertMutes();
 
   /**
    * The LATEST row for this condition, acknowledged or not.
@@ -373,6 +425,20 @@ export async function raiseSystemAlert(input: {
         ? true // transition: first sighting, or the condition came back
         : !acknowledged && reminderDue;
 
+  /**
+   * A MUTE stops the notification and nothing else.
+   *
+   * Deliberately checked here, AFTER the row has been written and the
+   * occurrence incremented. A muted alarm that stops counting is how you lose
+   * the evidence: the condition would go on happening and the only record of
+   * how long, and how often, would be gone. Silence the messenger, keep the
+   * ledger.
+   */
+  const mute = mutes.get(input.kind);
+  if (mute) {
+    return { alert, emailed: false, webhooked: false, muted: mute };
+  }
+
   if (!shouldEmail) {
     return { alert, emailed: false, webhooked: false };
   }
@@ -462,6 +528,8 @@ export async function alertResponderNames(): Promise<string> {
 
 export async function readOpenAlerts(): Promise<{
   alerts: SystemAlert[];
+  /** Mutes in force, so the banner can show muted rather than nothing. */
+  mutes: Map<string, AlertMute>;
   error: string | null;
 }> {
   const admin = createAdminClient();
@@ -475,8 +543,12 @@ export async function readOpenAlerts(): Promise<{
   // A failed read is reported, never rendered as "no alerts" — that is the
   // house rule, and this is the surface where breaking it would hide the
   // thing most worth seeing.
-  if (error) return { alerts: [], error: error.message };
-  return { alerts: (data ?? []) as SystemAlert[], error: null };
+  if (error) return { alerts: [], mutes: new Map(), error: error.message };
+  return {
+    alerts: (data ?? []) as SystemAlert[],
+    mutes: await readAlertMutes(),
+    error: null,
+  };
 }
 
 /**
@@ -494,4 +566,48 @@ export async function sendOperationalAlert(
     body,
     { occurrence_count: 1, first_seen_at: new Date().toISOString(), severity: "warning" }
   );
+}
+
+
+/**
+ * Silences a kind. `expiresAt` null means until somebody unmutes it.
+ *
+ * Takes a KIND rather than an alert id on purpose: you often want to mute
+ * before the thing fires — the maintenance window you already know will trip
+ * the heartbeat — and an id does not exist yet at that point.
+ */
+export async function muteAlert(input: {
+  kind: string;
+  agentId: string | null;
+  expiresAt?: string | null;
+  reason?: string | null;
+}): Promise<{ error?: string }> {
+  const admin = createAdminClient();
+  const { error } = await admin.from("alert_mutes").upsert(
+    {
+      kind: input.kind,
+      muted_at: new Date().toISOString(),
+      muted_by: input.agentId,
+      expires_at: input.expiresAt ?? null,
+      reason: input.reason ?? null,
+    },
+    { onConflict: "kind" }
+  );
+  return error ? { error: error.message } : {};
+}
+
+/** Lets a kind alarm again. */
+export async function unmuteAlert(kind: string): Promise<{ error?: string }> {
+  const admin = createAdminClient();
+  const { error } = await admin.from("alert_mutes").delete().eq("kind", kind);
+  return error ? { error: error.message } : {};
+}
+
+/** Human wording for how long a mute has left. */
+export function describeMute(mute: AlertMute, now = Date.now()): string {
+  if (!mute.expiresAt) return "muted indefinitely";
+  const hours = Math.round((Date.parse(mute.expiresAt) - now) / 3_600_000);
+  if (hours <= 0) return "mute expiring now";
+  if (hours < 24) return `muted for ${hours}h`;
+  return `muted for ${Math.round(hours / 24)}d`;
 }
