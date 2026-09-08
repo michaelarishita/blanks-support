@@ -6,7 +6,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { CHANNEL_META, type TicketChannel } from "@/lib/types";
 import { EDGE_ZONE_PX, isEdgeSwipe } from "@/lib/swipe";
-import { SettingsIcon, MenuIcon } from "@/components/ui/icons";
+import { SearchIcon, SettingsIcon, MenuIcon } from "@/components/ui/icons";
 
 /**
  * The navigation, reachable from anywhere on a phone.
@@ -179,6 +179,13 @@ export default function NavDrawer({
             <span className="text-label font-semibold text-primary">Support</span>
           </div>
 
+          <Row
+            href="/search"
+            label="Search"
+            icon={<SearchIcon size={16} className="flex-none" />}
+            active={pathname === "/search"}
+          />
+
           <Section label="Views" />
           {VIEWS.map((view) => (
             <Row
@@ -202,7 +209,12 @@ export default function NavDrawer({
           ))}
 
           <div className="mt-auto border-t border-subtle pt-1">
-            <Row href="/settings" label="Settings" icon active={pathname.startsWith("/settings")} />
+            <Row
+              href="/settings"
+              label="Settings"
+              icon={<SettingsIcon size={16} className="flex-none" />}
+              active={pathname.startsWith("/settings")}
+            />
           </div>
         </nav>
       </div>
@@ -229,7 +241,7 @@ function Row({
   label: string;
   count?: number | null;
   active: boolean;
-  icon?: boolean;
+  icon?: React.ReactNode;
 }) {
   return (
     <Link
@@ -241,7 +253,7 @@ function Row({
         active ? "bg-brand-50 font-semibold text-brand-700" : "text-secondary"
       )}
     >
-      {icon && <SettingsIcon size={16} className="flex-none" />}
+      {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {/* null means the count query failed — show nothing rather than a zero
           nobody measured. */}

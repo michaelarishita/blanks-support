@@ -301,6 +301,151 @@ export async function sendAssignmentNotification(
   return { sent: true };
 }
 
+/**
+ * Tells the PREVIOUS owner a ticket has left their queue.
+ *
+ * A reply on someone else's ticket reassigns it to the replier (app/actions).
+ * A ticket silently disappearing from a queue is worse than the problem that
+ * reassignment solves — so the person who had it is told, and told WHO has it
+ * now, through the same mailbox and threading as every other notification.
+ *
+ * Deliberately NOT quiet-hours-deferred like assignment: it is triggered by a
+ * teammate's live action during the day, it is low-frequency, and deferring it
+ * would mean parking a `scheduled_for` row that the cron would then re-send as
+ * a plain "now yours" assignment — the wrong copy to the wrong person. Sending
+ * immediately keeps the message and its meaning together.
+ */
+export async function sendReassignmentNotification(
+  ticketId: string,
+  previousAssigneeId: string,
+  newAssigneeId: string
+): Promise<NotificationResult> {
+  const admin = createAdminClient();
+
+  const { data: previous, error: previousError } = await admin
+    .from("agents")
+    .select("id, name, display_name, email, is_active, notifications_enabled")
+    .eq("id", previousAssigneeId)
+    .maybeSingle();
+  if (previousError) return { sent: false, error: previousError.message };
+  if (!previous) return { sent: false, skipped: "previous assignee not found" };
+  if (!previous.is_active) return { sent: false, skipped: "previous assignee inactive" };
+  if (previous.notifications_enabled === false) {
+    return { sent: false, skipped: "notifications disabled" };
+  }
+
+  const { data: newAgent } = await admin
+    .from("agents")
+    .select("id, name, display_name")
+    .eq("id", newAssigneeId)
+    .maybeSingle();
+  const newAgentName = agentDisplayName(newAgent);
+
+  const { data: ticket, error: ticketError } = await admin
+    .from("tickets")
+    .select(
+      "id, number, subject, priority, channel, topic, created_at, customer:customers(name, email), ticket_tags(tag:tags(name))"
+    )
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (ticketError) return { sent: false, error: ticketError.message };
+  if (!ticket) return { sent: false, skipped: "ticket not found" };
+
+  const connection = await getSupportInboxConnection();
+  if (!connection) return { sent: false, skipped: "no support mailbox connected" };
+
+  const { data: latest } = await admin
+    .from("messages")
+    .select("body_text, body_html")
+    .eq("ticket_id", ticketId)
+    .eq("direction", "inbound")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const customer = Array.isArray(ticket.customer) ? ticket.customer[0] : ticket.customer;
+  const tags = ((ticket.ticket_tags ?? []) as { tag: { name: string } | { name: string }[] }[])
+    .map((tt) => (Array.isArray(tt.tag) ? tt.tag[0]?.name : tt.tag?.name))
+    .filter((name): name is string => Boolean(name));
+
+  const company = await getCompanySettings();
+  const priority = ticket.priority as TicketPriority;
+  const previousName = agentDisplayName(previous);
+
+  const context: AssignmentContext = {
+    agentName: previousName,
+    variant: "reassigned_away",
+    lead: `${previousName}, ticket #${ticket.number} has moved to ${newAgentName}'s queue after they replied to the customer.`,
+    // No queue and no reminder buttons: this ticket is no longer theirs, so
+    // "your outstanding queue" and "remind me about this" would both be wrong.
+    queue: null,
+    ticket: {
+      id: ticket.id,
+      number: ticket.number,
+      subject: ticket.subject,
+      priority,
+      channel: ticket.channel as TicketChannel,
+      topic: ticket.topic,
+      tags,
+      customerName: customerDisplayName(customer),
+      createdAt: ticket.created_at,
+    },
+    summary: summarizeMessage({
+      bodyText: latest?.body_text,
+      bodyHtml: latest?.body_html,
+    }),
+    siteUrl: siteUrl(),
+  };
+
+  const messageId = generateMessageId(connection.account_ref);
+  // Threads into the previous owner's existing conversation about this ticket,
+  // if they had one — the "it moved" notice belongs beside the assignment they
+  // once got, not as a fresh mail.
+  const root = await threadRoot(previousAssigneeId, ticketId);
+  const subject = root?.subject ?? notificationSubject(ASSIGNMENT_SUBJECT, priority);
+
+  const raw = buildRawEmail({
+    fromEmail: connection.account_ref,
+    fromName: `${company.company_name} Support`,
+    to: previous.email,
+    // Never hello@: replying to a notification must not open a ticket.
+    replyTo: previous.email,
+    subject,
+    bodyText: renderAssignmentText(context),
+    bodyHtml: renderAssignmentHtml(context),
+    messageId,
+    inReplyTo: root?.messageId ?? null,
+    references: root ? [root.messageId] : undefined,
+    extraHeaders: { ...NOTIFICATION_HEADERS },
+  });
+
+  try {
+    const accessToken = await getAccessToken(connection.id);
+    await sendGmailMessage(accessToken, { raw });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`[notifications] reassignment send failed for ${previousAssigneeId}:`, message);
+    return { sent: false, error: message };
+  }
+
+  // Recorded as an assignment-kind row (the enum has no separate value and one
+  // is not worth a migration): it threads the notice for the previous owner
+  // and never re-sends, because sent_at is stamped.
+  const { error: insertError } = await admin.from("notifications").insert({
+    agent_id: previousAssigneeId,
+    ticket_id: ticketId,
+    kind: "assignment",
+    thread_message_id: root?.messageId ?? messageId,
+    subject,
+    sent_at: new Date().toISOString(),
+  });
+  if (insertError) {
+    console.error("[notifications] could not record the reassignment notice:", insertError);
+  }
+
+  return { sent: true };
+}
+
 
 export interface NewTicketResult {
   sent: number;

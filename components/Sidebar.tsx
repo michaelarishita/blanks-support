@@ -10,6 +10,7 @@ import { CHANNEL_META } from "@/lib/types";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
 import ChannelIcon from "@/components/ui/ChannelIcon";
+import SearchBox from "@/components/SearchBox";
 import Tooltip from "@/components/ui/Tooltip";
 import {
   Dropdown,
@@ -145,6 +146,10 @@ export default function Sidebar({
         <div className="text-title font-semibold leading-tight text-primary">
           Support
         </div>
+      </div>
+
+      <div className="px-2.5 pb-1">
+        <SearchBox />
       </div>
 
       <nav className="scrollbar-slim flex-1 overflow-y-auto px-2.5 pb-4">

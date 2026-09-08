@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { CHANNEL_META, type TicketChannel } from "@/lib/types";
-import { SettingsIcon } from "@/components/ui/icons";
+import { SearchIcon, SettingsIcon } from "@/components/ui/icons";
 import { NavDrawerButton } from "@/components/NavDrawer";
 
 /**
@@ -66,9 +66,16 @@ export default function MobileTopBar({
           <span className="text-label font-semibold text-primary">Support</span>
         </div>
         <Link
+          href="/search"
+          aria-label="Search"
+          // 44px: everything on this bar is a thumb target.
+          className="flex h-11 w-11 items-center justify-center rounded-md text-tertiary active:bg-gray-100"
+        >
+          <SearchIcon size={18} />
+        </Link>
+        <Link
           href="/settings"
           aria-label="Settings"
-          // 44px: everything on this bar is a thumb target.
           className="flex h-11 w-11 items-center justify-center rounded-md text-tertiary active:bg-gray-100"
         >
           <SettingsIcon size={18} />

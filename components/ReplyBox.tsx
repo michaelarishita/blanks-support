@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useKeyboardInset } from "@/lib/use-visual-viewport";
 import { cn } from "@/lib/cn";
-import { keepTicketOpen, sendReply } from "@/app/actions";
+import { keepTicketOpen, reassignBack, sendReply } from "@/app/actions";
 import { isEmptyHtml } from "@/lib/html";
 import { useHotkey } from "@/lib/shortcuts";
 import RichTextEditor, {
@@ -234,6 +234,34 @@ export default function ReplyBox({
       // hitting send.
       if (res?.claimed) {
         toast("This ticket is now assigned to you", { tone: "info" });
+      }
+
+      /**
+       * REASSIGNED FROM SOMEONE ELSE.
+       *
+       * Its own toast rather than crammed into the resolve line — two short
+       * facts read better than one long one, and each carries its OWN undo.
+       * Undoing the reassign (this) and keeping the ticket open (above) are
+       * independent: they update different columns and neither reverts the
+       * other. 12 seconds, matching the resolve escape hatch, because both are
+       * decisions rather than slips.
+       */
+      if (res?.reassignedFromId) {
+        const prevId = res.reassignedFromId;
+        const prevName = res.reassignedFrom ?? "the previous owner";
+        toast(`Reassigned to you from ${prevName}`, {
+          tone: "info",
+          duration: 12000,
+          action: {
+            label: "Undo",
+            onClick: () => {
+              reassignBack(ticketId, prevId).then((r) => {
+                if (r?.error) toast(r.error, { tone: "error" });
+                else toast(`Reassigned back to ${prevName}`, { tone: "info" });
+              });
+            },
+          },
+        });
       }
     });
   }
