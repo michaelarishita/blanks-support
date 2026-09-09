@@ -24,7 +24,7 @@ import { InfoIcon } from "@/components/ui/icons";
  * part that changes their work, and nothing about the mechanism.
  */
 export default async function SystemAlertBanner({ isAdmin }: { isAdmin: boolean }) {
-  const { alerts, error } = await readOpenAlerts();
+  const { alerts, mutes, error } = await readOpenAlerts();
 
   if (error) {
     // A failed read of the alert table is itself an alert-shaped event, and is
@@ -55,11 +55,19 @@ export default async function SystemAlertBanner({ isAdmin }: { isAdmin: boolean 
     <div className="border-b border-danger-border bg-danger-bg">
       {alerts.map((alert) => (
         <div key={alert.id} role="alert" className="flex items-start gap-2.5 px-5 py-2.5">
+          {/* A muted alert stays ON the banner, marked. Hiding it would make
+              the mute a blind spot — the condition is still happening and the
+              occurrence count is still climbing; only the email stopped. */}
           <SystemAlertDetail
             summary={
               <p className="font-semibold">
                 {alert.severity === "critical" && "STILL BROKEN — "}
                 {alert.title}
+                {mutes.get(alert.kind) && (
+                  <span className="ml-1.5 rounded-sm border border-danger-border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide opacity-90">
+                    {mutes.get(alert.kind)!.indefinite ? "muted — no expiry" : "muted"}
+                  </span>
+                )}
                 {alert.occurrence_count > 1 && (
                   <span className="ml-1.5 font-normal opacity-80">
                     seen {alert.occurrence_count}× since{" "}

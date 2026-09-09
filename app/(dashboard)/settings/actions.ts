@@ -398,3 +398,51 @@ export async function releaseQuarantinedMessage(
   revalidatePath("/settings");
   return {};
 }
+
+
+/**
+ * Silences an alert kind. Optional expiry in hours; omitted means indefinite.
+ *
+ * Exists because the only way to stop a known alarm used to be a deploy —
+ * which turned an in-progress condition into 127 notifications, and required
+ * the one mechanism that was itself broken at the time.
+ */
+export async function setAlertMute(
+  kind: string,
+  hours: number | null,
+  reason: string
+): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const { muteAlert } = await import("@/lib/alerts");
+  const result = await muteAlert({
+    kind,
+    agentId: me.id,
+    expiresAt: hours ? new Date(Date.now() + hours * 3_600_000).toISOString() : null,
+    reason: reason.trim().slice(0, 200) || null,
+  });
+  if (result.error) {
+    return { error: `Could not mute that alert: ${result.error}` };
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/inbox");
+  return { ok: true };
+}
+
+/** Lets a kind alarm again. */
+export async function clearAlertMute(kind: string): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const { unmuteAlert } = await import("@/lib/alerts");
+  const result = await unmuteAlert(kind);
+  if (result.error) {
+    return { error: `Could not unmute that alert: ${result.error}` };
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/inbox");
+  return { ok: true };
+}
