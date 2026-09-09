@@ -29,12 +29,13 @@ const VIEWS = [
   { key: "unassigned", label: "Unassigned" },
   { key: "all", label: "All" },
   { key: "resolved", label: "Resolved" },
+  { key: "junk", label: "Junk" },
 ];
 
 const CHANNELS: TicketChannel[] = ["web_form", "email", "instagram", "messenger"];
 
 export interface NavCounts {
-  counts: { open: number; mine: number; unassigned: number } | null;
+  counts: { open: number; mine: number; unassigned: number; junk?: number } | null;
   channelCounts: Record<TicketChannel, number> | null;
 }
 
@@ -105,7 +106,9 @@ export default function NavDrawer({
           ? counts.mine
           : key === "unassigned"
             ? counts.unassigned
-            : null;
+            : key === "junk"
+              ? (counts.junk ?? null)
+              : null;
 
   const width = 268;
   const offset = drag !== null ? Math.min(0, drag - width) : open ? 0 : -width;

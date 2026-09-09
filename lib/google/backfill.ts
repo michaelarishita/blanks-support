@@ -181,6 +181,7 @@ export async function backfillAttachments({
         checked: 0,
         created: 0,
         appended: 0,
+        junked: 0,
         skipped: {},
         ruleHits: {},
         failures: [],

@@ -27,6 +27,8 @@ const OLD = String(NOW - 5 * HOUR);
 // ---------------------------------------------------------------- fakes
 
 let storedIds: string[];
+/** Of the stored ids, which belong to a junk ticket (the junk-classify query). */
+let junkedStoredIds: string[];
 let quarantinedIds: string[];
 let quarantineReadFails: boolean;
 
@@ -37,9 +39,13 @@ const alerts = vi.hoisted(() => ({ current: [] as { kind: string; reasons?: stri
 const patched = vi.hoisted(() => ({ current: [] as Record<string, unknown>[] }));
 
 class FakeQuery {
+  private eqs: [string, unknown][] = [];
   constructor(private table: string) {}
   select() { return this; }
-  eq() { return this; }
+  eq(col?: string, val?: unknown) {
+    if (col !== undefined) this.eqs.push([col, val]);
+    return this;
+  }
   in() { return this; }
   is() { return this; }
   not() { return this; }
@@ -47,8 +53,12 @@ class FakeQuery {
   limit() { return this; }
   then(onFulfilled: (v: unknown) => unknown) {
     if (this.table === "messages") {
+      // The junk-classification query filters on ticket.status; it must return
+      // only the stored ids that are junk, not every stored id.
+      const isJunkQuery = this.eqs.some(([c]) => c === "ticket.status");
+      const ids = isJunkQuery ? junkedStoredIds : storedIds;
       return Promise.resolve({
-        data: storedIds.map((id) => ({ gmail_message_id: id })),
+        data: ids.map((id) => ({ gmail_message_id: id })),
         error: null,
       }).then(onFulfilled);
     }
@@ -129,6 +139,7 @@ vi.mock("@/lib/google/gmail", async () => {
 beforeEach(() => {
   vi.resetModules();
   storedIds = [];
+  junkedStoredIds = [];
   quarantinedIds = [];
   quarantineReadFails = false;
   mailbox.current = [];
@@ -158,6 +169,18 @@ describe("what counts as accounted for", () => {
     const report = await reconcile();
     expect(report.discrepancies).toEqual([]);
     expect(report.accounted.stored).toBe(1);
+  });
+
+  it("reports a stored-but-junk message as junked, not as stored", async () => {
+    // A message we FILED in Junk is accounted for — we decided about it — but it
+    // is not in the inbox, so it must be reported apart from `stored`.
+    mailbox.current = [customer("m1")];
+    storedIds = ["m1"];
+    junkedStoredIds = ["m1"];
+    const report = await reconcile();
+    expect(report.discrepancies).toEqual([]);
+    expect(report.accounted.junked).toBe(1);
+    expect(report.accounted.stored).toBe(0);
   });
 
   it("accepts a message a guard drops, re-deriving the verdict now", async () => {

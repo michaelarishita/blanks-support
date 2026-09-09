@@ -135,6 +135,32 @@ describe("My-tickets status scope", () => {
   });
 });
 
+describe("junk stays out of every view but its own", () => {
+  it.each(["open", "mine", "unassigned", "all", "resolved"])(
+    "excludes junk from the %s view",
+    (view) => {
+      const { proxy, calls } = recorder();
+      applyTicketFilters(proxy, { view }, "agent-1");
+      expect(has(calls, "not", "status", "eq", "junk")).toBe(true);
+    }
+  );
+
+  it("the junk view shows only junk, and does not also exclude it", () => {
+    const { proxy, calls } = recorder();
+    applyTicketFilters(proxy, { view: "junk" }, "agent-1");
+    expect(has(calls, "eq", "status", "junk")).toBe(true);
+    expect(has(calls, "not", "status", "eq", "junk")).toBe(false);
+  });
+
+  it("the unassigned view also drops junk from its status set", () => {
+    // Junk is unassigned by construction, so without this it would inflate the
+    // Unassigned queue.
+    const { proxy, calls } = recorder();
+    applyTicketFilters(proxy, { view: "unassigned" }, "agent-1");
+    expect(has(calls, "not", "status", "in", "(resolved,closed,junk)")).toBe(true);
+  });
+});
+
 describe("sender filter", () => {
   it("filters to the resolved customer ids", () => {
     const { proxy, calls } = recorder();

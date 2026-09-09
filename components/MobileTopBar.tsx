@@ -32,7 +32,7 @@ export default function MobileTopBar({
   channelCounts,
 }: {
   /** null when the count query FAILED — render nothing rather than zero. */
-  counts: { open: number; mine: number; unassigned: number } | null;
+  counts: { open: number; mine: number; unassigned: number; junk?: number } | null;
   channelCounts: Record<TicketChannel, number> | null;
 }) {
   const pathname = usePathname();

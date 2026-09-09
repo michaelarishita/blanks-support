@@ -8,7 +8,13 @@ export interface ActionResult {
   claimed?: boolean;
 }
 
-export type TicketStatus = "new" | "open" | "pending" | "resolved" | "closed";
+export type TicketStatus =
+  | "new"
+  | "open"
+  | "pending"
+  | "resolved"
+  | "closed"
+  | "junk";
 export type TicketChannel = "web_form" | "email" | "instagram" | "messenger";
 export type TicketPriority = "low" | "normal" | "high" | "urgent";
 
@@ -42,6 +48,27 @@ export interface Tag {
   is_topic: boolean;
 }
 
+/**
+ * Why a ticket was filed in Junk. Stored on the ticket and shown to the agent,
+ * so the filing decision is legible rather than a silent drop.
+ */
+export interface JunkReason {
+  /** Which mechanism filed it. `manual` is an agent's "Mark as spam". */
+  source: "guard" | "override" | "classifier" | "manual";
+  /** The guard rule that fired (source === "guard"). */
+  rule?: string;
+  /** The guard's own detail string (source === "guard"). */
+  detail?: string;
+  /** The override scope/value that filed it (source === "override"). */
+  overrideScope?: "address" | "domain";
+  overrideValue?: string;
+  /** The vendor-outreach classifier's score at filing time, always recorded. */
+  classifierScore?: number;
+  /** The junk threshold the classifier was measured against. */
+  classifierThreshold?: number;
+  classifierReasons?: { code: string; label: string; weight: number }[];
+}
+
 export interface Ticket {
   id: string;
   number: number;
@@ -65,6 +92,10 @@ export interface Ticket {
   vendor_reasons?: { code: string; label: string; weight: number }[];
   first_response_at: string | null;
   resolved_at: string | null;
+  /** Set when status is `junk`; retention is measured from here. */
+  junked_at?: string | null;
+  /** Why the ticket was junked: which guard/rule, the classifier score. */
+  junk_reason?: JunkReason | null;
   last_message_at: string;
   created_at: string;
   customer?: Customer;
@@ -147,6 +178,7 @@ export const STATUS_META: Record<
   pending: { label: "Pending", tone: "warning" },
   resolved: { label: "Resolved", tone: "success" },
   closed: { label: "Closed", tone: "neutral" },
+  junk: { label: "Junk", tone: "neutral" },
 };
 
 // Icons live in components/ui/ChannelIcon so this stays a types-only module

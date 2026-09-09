@@ -136,7 +136,7 @@ describe("counts are never invented", () => {
     // drawer became a third — which is the wrong failure: the property is
     // "nobody receives a fabricated zero", not "there are two of them", and a
     // count would have gone green again the moment somebody deleted one.
-    const guarded = layout.match(/counts=\{measured \? \{ open, mine, unassigned \} : null\}/g) ?? [];
+    const guarded = layout.match(/counts=\{measured \? \{ open, mine, unassigned, junk \} : null\}/g) ?? [];
     const all = layout.match(/\scounts=\{/g) ?? [];
     expect(all.length).toBeGreaterThan(0);
     expect(guarded.length).toBe(all.length);
@@ -151,7 +151,7 @@ describe("counts are never invented", () => {
     "%s accepts the null and renders no badge",
     (file) => {
       const source = code(file);
-      expect(source).toMatch(/counts: \{ open: number; mine: number; unassigned: number \} \| null/);
+      expect(source).toMatch(/counts: \{ open: number; mine: number; unassigned: number;.*\} \| null/);
       expect(source).toMatch(/Record<TicketChannel, number> \| null/);
       expect(source).toMatch(/!counts\s*\n?\s*\?\s*null/);
     }

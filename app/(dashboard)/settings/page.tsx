@@ -16,6 +16,8 @@ import NotificationToggle from "@/components/NotificationToggle";
 import ProfileEditor from "@/components/ProfileEditor";
 import { getCompanySettings } from "@/lib/settings";
 import { readIgnoredSenders } from "@/lib/senders/ignored";
+import { scoreAgainstCorrections } from "@/lib/inbound/harness";
+import ClassifierScore from "@/components/ClassifierScore";
 import {
   getConnectionForAgent,
   getSupportInboxConnection,
@@ -69,6 +71,10 @@ export default async function SettingsPage({
         null)
       : null;
   const ignored = await readIgnoredSenders();
+  // The classifier's current precision/recall against the corrections corpus —
+  // the number that must be checked before any future rule change ships.
+  const classifierScore =
+    me?.role === "admin" ? await scoreAgainstCorrections() : null;
 
   const { count: pendingCount } = await supabase
     .from("messages")
@@ -247,6 +253,22 @@ export default async function SettingsPage({
         </p>
         <IgnoredSenderList entries={ignored.entries} error={ignored.error} />
       </section>
+
+      {me?.role === "admin" && classifierScore && (
+        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+            Spam classifier
+          </h2>
+          <p className="mb-4 mt-1 text-sm text-gray-600">
+            How the current classifier scores against every &ldquo;Not
+            spam&rdquo; / &ldquo;Mark as spam&rdquo; correction the team has made
+            — the labelled set. A false positive is a customer junked; a false
+            negative is spam that reached the inbox. No rule change should ship
+            without re-checking these.
+          </p>
+          <ClassifierScore report={classifierScore} />
+        </section>
+      )}
 
       {me?.role === "admin" && (
         <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">

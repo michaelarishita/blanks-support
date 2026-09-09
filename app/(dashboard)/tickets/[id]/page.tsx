@@ -8,6 +8,7 @@ import TicketSidePanel from "@/components/TicketSidePanel";
 import MobileContextSheet from "@/components/MobileContextSheet";
 import RiskNotice from "@/components/RiskNotice";
 import VendorNotice from "@/components/VendorNotice";
+import JunkNotice from "@/components/JunkNotice";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
 import { ShopifyProvider } from "@/components/ShopifyContext";
 import { isMetaChannel, currentReplyWindow } from "@/lib/meta/outbound";
@@ -165,6 +166,10 @@ export default async function TicketPage({
           advanceHref={advanceHref}
           isLastInView={!nextId}
         />
+
+        {t.status === "junk" && (
+          <JunkNotice reason={t.junk_reason} junkedAt={t.junked_at} />
+        )}
 
         {(t.risk_reasons?.length ?? 0) > 0 && (
           <RiskNotice

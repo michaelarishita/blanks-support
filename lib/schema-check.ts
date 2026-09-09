@@ -310,6 +310,17 @@ const MIGRATIONS: Migration[] = [
       functions: ["search_tickets"],
     },
   },
+  {
+    file: "0025_junk_folder.sql",
+    title: "Junk folder + correction loop — guards file instead of discarding",
+    requires: {
+      // The enum value is the half a column probe cannot see, and it is the
+      // half that throws when the sync tries to file a message as junk.
+      enumValues: { ticket_status: ["junk"] },
+      columns: ["tickets.junked_at", "tickets.junk_reason"],
+      tables: ["spam_corrections", "sender_spam_overrides"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

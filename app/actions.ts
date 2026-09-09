@@ -21,6 +21,11 @@ import {
 import { describeWindow } from "@/lib/meta/window";
 import { humanizePostgresError } from "@/lib/supabase/errors";
 import { normalizeIgnoreValue } from "@/lib/senders/ignored";
+import {
+  markTicketAsSpam,
+  markTicketNotSpam,
+  undoCorrection,
+} from "@/lib/inbound/corrections";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -348,6 +353,40 @@ export async function keepTicketOpen(ticketId: string) {
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
   return { ok: true, changed: Boolean(moved?.length) };
+}
+
+/**
+ * "Mark as spam" — file a normal ticket into Junk, and record the correction.
+ *
+ * Undoable: returns the correction id so the toast can offer Undo.
+ */
+export async function markAsSpam(ticketId: string): Promise<ActionResult & { correctionId?: string }> {
+  const { userId } = await requireAgent();
+  const { error, correctionId } = await markTicketAsSpam(ticketId, userId);
+  if (error) return { error };
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  return { ok: true, correctionId };
+}
+
+/** "Not spam" — rescue a junked ticket to the inbox, unassigned. */
+export async function markNotSpam(ticketId: string): Promise<ActionResult & { correctionId?: string }> {
+  const { userId } = await requireAgent();
+  const { error, correctionId } = await markTicketNotSpam(ticketId, userId);
+  if (error) return { error };
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  return { ok: true, correctionId };
+}
+
+/** Reverse a correction (either direction), from the toast's Undo. */
+export async function undoSpamCorrection(correctionId: string): Promise<ActionResult> {
+  const { userId } = await requireAgent();
+  const { error, ticketId } = await undoCorrection(correctionId, userId);
+  if (error) return { error };
+  if (ticketId) revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  return { ok: true };
 }
 
 export async function assignTicket(ticketId: string, assigneeId: string | null) {
