@@ -301,6 +301,20 @@ const MIGRATIONS: Migration[] = [
       indexes: ["upload_grants_path_uniq"],
     },
   },
+  {
+    file: "0023_alert_mutes.sql",
+    title: "Alert mutes — silencing a known alarm without a deploy",
+    requires: { tables: ["alert_mutes"] },
+  },
+  {
+    file: "0024_search.sql",
+    title: "Full-text search — without the GIN indexes and the RPC, search is dead",
+    requires: {
+      columns: ["tickets.fts", "messages.fts"],
+      indexes: ["tickets_fts_idx", "messages_fts_idx"],
+      functions: ["search_tickets"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */
