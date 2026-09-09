@@ -26,6 +26,7 @@ import {
   applyTicketFilters,
   inboxHref,
   nextTicketId,
+  resolveSenderCustomerIds,
   ticketHref,
   type TicketViewParams,
 } from "@/lib/ticket-query";
@@ -108,10 +109,17 @@ export default async function TicketPage({
   // to whatever the agent would have opened next.
   // No error branch on purpose, and the only one on this page: losing this
   // costs the "next ticket" jump, and nothing else on screen becomes untrue.
+  //
+  // The sender filter is resolved the same way the list resolves it, so "next
+  // ticket" walks the exact filtered list the agent opened this from.
+  const senderCustomerIds = view.sender
+    ? await resolveSenderCustomerIds(supabase, view.sender)
+    : undefined;
   const { data: viewRows } = await applyTicketFilters(
     supabase.from("tickets").select("id").limit(200),
     view,
-    user?.id ?? null
+    user?.id ?? null,
+    senderCustomerIds
   );
   const orderedIds = (viewRows ?? []).map((row) => row.id as string);
   const nextId = nextTicketId(orderedIds, id);

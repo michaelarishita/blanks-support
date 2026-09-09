@@ -6,8 +6,13 @@ import type { ActionResult, TicketStatus } from "@/lib/types";
 import { canEmail, deliverMessage, resolveSender } from "@/lib/google/outbound";
 import { htmlToPlainText, sanitizeRichText } from "@/lib/html";
 import { syncSupportMailboxThrottled } from "@/lib/google/inbound";
-import { sendAssignmentNotification } from "@/lib/notifications/send";
+import {
+  sendAssignmentNotification,
+  sendReassignmentNotification,
+} from "@/lib/notifications/send";
 import { STATUSES_A_REPLY_RESOLVES } from "@/lib/ticket-status";
+import { replyAssignment } from "@/lib/assignment";
+import { agentDisplayName } from "@/lib/display";
 import {
   currentReplyWindow,
   deliverMetaMessage,
@@ -60,14 +65,25 @@ export async function sendReply(
   // swallow the agent's draft into a thread as an undeliverable message.
   let willEmail = false;
   let willSendSocial = false;
-  let unassigned = false;
+  // The owner AT SEND TIME, so answering can claim an unowned ticket or take a
+  // handoff from someone else. Read once here and reused below.
+  let previousAssignee: string | null = null;
+  let previousAssigneeName: string | null = null;
   if (!isNote) {
     const { data: ticket } = await supabase
       .from("tickets")
-      .select("channel, assignee_id, customer:customers(email)")
+      // assignee embed names the constraint: 0015's second FK to agents makes a
+      // bare `agents` embed ambiguous (PGRST201).
+      .select(
+        "channel, assignee_id, assignee:agents!tickets_assignee_id_fkey(name, display_name), customer:customers(email)"
+      )
       .eq("id", ticketId)
       .single();
-    unassigned = !ticket?.assignee_id;
+    previousAssignee = ticket?.assignee_id ?? null;
+    const owner = Array.isArray(ticket?.assignee)
+      ? ticket.assignee[0]
+      : ticket?.assignee;
+    previousAssigneeName = owner ? agentDisplayName(owner) : null;
     const customer = Array.isArray(ticket?.customer)
       ? ticket.customer[0]
       : ticket?.customer;
@@ -117,24 +133,63 @@ export async function sendReply(
     if (!result.ok) deliveryError = result.error;
   }
 
-  // Answering an unowned ticket claims it. Deliberately does NOT reassign a
-  // ticket that already has an owner — replying to someone else's ticket
-  // shouldn't silently take it off them.
+  // Answering a ticket makes it yours. Three cases, one rule:
+  //  - UNOWNED  → claim it (no notification: you just replied, mailing you
+  //               about it would be noise). This already existed.
+  //  - YOURS    → nothing changes.
+  //  - SOMEONE  → reassign it to you AND tell the previous owner, because a
+  //    ELSE'S     ticket silently vanishing from a queue is worse than the
+  //               problem this solves.
+  // Only public replies reach here — an internal note is the team talking to
+  // itself and must never move ownership.
   let claimed = false;
-  if (!isNote && unassigned) {
-    const { error: claimError } = await supabase
-      .from("tickets")
-      .update({ assignee_id: userId })
-      .eq("id", ticketId)
-      .is("assignee_id", null);
+  let reassignedFrom: string | null = null;
+  let reassignedFromId: string | null = null;
+  if (!isNote) {
+    const action = replyAssignment(previousAssignee, userId);
 
-    if (!claimError) {
-      claimed = true;
-      await logEvent(supabase, ticketId, userId, "auto_assigned", {
-        reason: "replied to an unassigned ticket",
-      });
-      // No assignment notification here: they just replied to it, so mailing
-      // them about it would be noise.
+    if (action === "claim") {
+      const { error: claimError } = await supabase
+        .from("tickets")
+        .update({ assignee_id: userId })
+        .eq("id", ticketId)
+        .is("assignee_id", null);
+      if (!claimError) {
+        claimed = true;
+        await logEvent(supabase, ticketId, userId, "auto_assigned", {
+          reason: "replied to an unassigned ticket",
+        });
+      }
+    } else if (action === "reassign" && previousAssignee) {
+      // Guarded on the owner we read, so a human claiming it in the same second
+      // wins instead of being silently overwritten. Only counts as a reassign
+      // if the UPDATE actually moved the row.
+      const { data: moved, error: reassignError } = await supabase
+        .from("tickets")
+        .update({ assignee_id: userId })
+        .eq("id", ticketId)
+        .eq("assignee_id", previousAssignee)
+        .select("id");
+      if (!reassignError && moved?.length) {
+        reassignedFrom = previousAssigneeName;
+        reassignedFromId = previousAssignee;
+        await logEvent(supabase, ticketId, userId, "reassigned", {
+          from: previousAssignee,
+          to: userId,
+          reason: "replied to a ticket assigned to someone else",
+        });
+        // Tell the previous owner it left their queue, and who has it now.
+        // Surfaced-but-non-blocking: the reassignment already happened, so a
+        // failed email is logged, not thrown.
+        const notice = await sendReassignmentNotification(
+          ticketId,
+          previousAssignee,
+          userId
+        );
+        if (notice.error) {
+          console.error("[reassign] previous-owner notice failed:", notice.error);
+        }
+      }
     }
   }
 
@@ -177,10 +232,48 @@ export async function sendReply(
       ok: true,
       claimed,
       resolved,
+      reassignedFrom,
+      reassignedFromId,
       warning: `Saved, but the email didn't send: ${deliveryError}`,
     };
   }
-  return { ok: true, claimed, resolved };
+  return { ok: true, claimed, resolved, reassignedFrom, reassignedFromId };
+}
+
+/**
+ * Undo for the auto-reassign — the 12-second escape hatch on the send toast.
+ *
+ * Hands the ticket back to its previous owner, but ONLY while the replier still
+ * holds it. In those seconds someone else may have claimed it, or the customer
+ * may have replied; an unconditional write would stamp over a state that had
+ * already moved on. Being a no-op there is correct — the reply's assignment has
+ * already been superseded, which is all "undo" was asking for.
+ *
+ * Independent of the resolve undo (`keepTicketOpen`): a reply both resolves and
+ * reassigns, and undoing one must not touch the other.
+ */
+export async function reassignBack(ticketId: string, previousAssigneeId: string) {
+  const { supabase, userId } = await requireAgent();
+
+  const { data: moved, error } = await supabase
+    .from("tickets")
+    .update({ assignee_id: previousAssigneeId })
+    .eq("id", ticketId)
+    .eq("assignee_id", userId)
+    .select("id");
+  if (error) return { error: error.message };
+
+  if (moved?.length) {
+    await logEvent(supabase, ticketId, userId, "reassigned", {
+      from: userId,
+      to: previousAssigneeId,
+      reason: "undid auto-reassign after replying",
+    });
+  }
+
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  return { ok: true, changed: Boolean(moved?.length) };
 }
 
 /** Re-attempts delivery of a reply that failed to send. */

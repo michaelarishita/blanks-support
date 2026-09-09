@@ -1,7 +1,18 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import TicketList from "@/components/TicketList";
 import InboxHeader from "@/components/InboxHeader";
-import { applyTicketFilters, resolveSort } from "@/lib/ticket-query";
+import MineStatusFilter from "@/components/MineStatusFilter";
+import SenderFilter from "@/components/SenderFilter";
+import {
+  applyTicketFilters,
+  resolveMineStatus,
+  resolveSenderCustomerIds,
+  resolveSort,
+  viewQueryString,
+  type TicketViewParams,
+} from "@/lib/ticket-query";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
 import { agentDisplayName } from "@/lib/display";
 import { CHANNEL_META, type Ticket, type TicketChannel } from "@/lib/types";
@@ -19,13 +30,7 @@ const TITLES: Record<string, string> = {
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{
-    view?: string;
-    channel?: string;
-    sort?: string;
-    customer?: string;
-    assignee?: string;
-  }>;
+  searchParams: Promise<TicketViewParams>;
 }) {
   const params = await searchParams;
   const supabase = await createClient();
@@ -35,6 +40,26 @@ export default async function InboxPage({
 
   const view = params.view ?? "open";
   const sort = resolveSort(params.sort);
+
+  // My-tickets remembers its status scope for the session. When the URL does
+  // not carry one — e.g. the sidebar's static "My tickets" link — fall back to
+  // the cookie the toggle wrote, and NORMALISE the URL so the ordered list, the
+  // ticket links and "next ticket" all read the same scope. Without the
+  // redirect, TicketList's links (built from the URL) would drop the status and
+  // auto-advance would jump into the wrong list.
+  if (view === "mine" && params.status === undefined) {
+    const remembered = (await cookies()).get("mine_status")?.value;
+    if (remembered === "resolved" || remembered === "all") {
+      redirect(`/inbox${viewQueryString({ ...params, view: "mine", status: remembered })}`);
+    }
+  }
+
+  // The sender text is resolved to customer ids here (the filter builder is
+  // synchronous). undefined when there is no sender filter, so it is skipped;
+  // an empty array when the text matched nobody, which is zero results.
+  const senderCustomerIds = params.sender
+    ? await resolveSenderCustomerIds(supabase, params.sender)
+    : undefined;
 
   // Same builder the ticket page uses to work out what comes next, so the two
   // orderings can't drift apart.
@@ -47,16 +72,17 @@ export default async function InboxPage({
   // product can tell.
   const { data: tickets, error: ticketsError } = await applyTicketFilters(
     supabase
-      .from("tickets")
       // agents!tickets_assignee_id_fkey, not agents: 0015 added
       // tickets.risk_dismissed_by -> agents, so a bare `agents` embed is
       // ambiguous and PostgREST answers PGRST201 for the whole query.
+      .from("tickets")
       .select(
         "*, customer:customers(*), assignee:agents!tickets_assignee_id_fkey(*), ticket_tags(tag:tags(*))"
       )
       .limit(200),
     params,
-    user?.id ?? null
+    user?.id ?? null,
+    senderCustomerIds
   );
   const rows = (tickets as Ticket[]) ?? [];
 
@@ -72,21 +98,39 @@ export default async function InboxPage({
     ? (rows[0]?.customer?.name ?? rows[0]?.customer?.email ?? "this customer")
     : null;
 
+  const title = assigneeName
+    ? `Assigned to ${assigneeName}`
+    : params.sender
+      ? `Tickets from “${params.sender}”`
+      : customerName
+        ? `Tickets from ${customerName}`
+        : (TITLES[view] ?? "Tickets");
+
   return (
     <div className="mx-auto max-w-4xl px-0 pb-10 sm:px-6">
       <RealtimeRefresher />
       <InboxHeader
-        title={
-          assigneeName
-            ? `Assigned to ${assigneeName}`
-            : customerName
-              ? `Tickets from ${customerName}`
-              : (TITLES[view] ?? "Tickets")
-        }
+        title={title}
         count={rows.length}
         channelLabel={channelLabel}
         sort={sort}
       />
+
+      {/* Sender filter lives on the All view — it combines with the channel
+          filter rather than replacing it. */}
+      {view === "all" && (
+        <div className="px-3 pb-3 sm:px-0">
+          <SenderFilter initial={params.sender ?? ""} />
+        </div>
+      )}
+
+      {/* The Open / Resolved / All scope for My tickets. */}
+      {view === "mine" && (
+        <div className="px-3 pb-3 sm:px-0">
+          <MineStatusFilter status={resolveMineStatus(params.status)} />
+        </div>
+      )}
+
       <TicketList
         tickets={rows}
         view={view}

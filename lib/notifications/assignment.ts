@@ -36,7 +36,11 @@ export type NotificationVariant =
   | "assignment"
   | "reminder"
   | "escalation"
-  | "new_ticket";
+  | "new_ticket"
+  // Sent to the PREVIOUS owner when a reply reassigns a ticket away from them.
+  // Its whole reason to exist is that a ticket must never silently vanish from
+  // someone's queue.
+  | "reassigned_away";
 
 export interface ReminderLink {
   hours: number;
@@ -89,6 +93,9 @@ function defaultLead(ctx: AssignmentContext): string {
       return `${ctx.agentName}, this ticket is still unanswered.`;
     case "new_ticket":
       return `A new ticket just came in.`;
+    case "reassigned_away":
+      // A safe fallback; the caller overrides `lead` with who has it now.
+      return `${ctx.agentName}, this ticket has moved to someone else's queue.`;
     default:
       return `Hi ${ctx.agentName}, this ticket is now yours.`;
   }
