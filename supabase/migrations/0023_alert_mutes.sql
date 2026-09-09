@@ -29,10 +29,20 @@ create table if not exists alert_mutes (
   reason text
 );
 
--- "Is this kind muted right now" — asked on every alert.
+-- "Which kinds are muted" — asked on every alert. The kind lookup itself rides
+-- the primary key; this partial index narrows the table to the indefinite
+-- mutes, which is also the set the dashboard flags.
+--
+-- The predicate is `expires_at is null` and NOTHING ELSE on purpose. An index
+-- predicate must be IMMUTABLE, and `now()` is only STABLE — the original
+-- `where expires_at is null or expires_at > now()` raised
+-- `ERROR: functions in index predicate must be marked IMMUTABLE` and aborted
+-- the whole paste, which is why this migration never applied. The time-based
+-- half of "active" is checked on the fetched row at query time, where a
+-- non-immutable function is fine.
 create index if not exists alert_mutes_active_idx
   on alert_mutes (kind)
-  where expires_at is null or expires_at > now();
+  where expires_at is null;
 
 alter table alert_mutes enable row level security;
 
