@@ -312,11 +312,17 @@ const MIGRATIONS: Migration[] = [
   },
   {
     file: "0025_junk_folder.sql",
-    title: "Junk folder + correction loop — guards file instead of discarding",
+    title: "Junk status — the enum value, added alone (see the by-hand enum rule)",
     requires: {
-      // The enum value is the half a column probe cannot see, and it is the
-      // half that throws when the sync tries to file a message as junk.
+      // This file adds ONLY the enum value, because a value cannot be added and
+      // used in the same paste. The tables that USE it are 0026.
       enumValues: { ticket_status: ["junk"] },
+    },
+  },
+  {
+    file: "0026_junk_tables.sql",
+    title: "Junk folder tables + correction loop — guards file instead of discarding",
+    requires: {
       columns: ["tickets.junked_at", "tickets.junk_reason"],
       tables: ["spam_corrections", "sender_spam_overrides"],
     },

@@ -692,8 +692,9 @@ async function ingestMessage(
 
     // The junk columns are added ONLY when filing junk, so the ordinary
     // customer-mail insert references neither the new columns nor the new enum
-    // value. If this ships before 0025 is applied, normal mail still flows —
-    // only junk-filing needs the migration, which is the safe blast radius.
+    // value. If this ships before 0025/0026 are applied, normal mail still
+    // flows — only junk-filing needs the migrations, which is the safe blast
+    // radius.
     const ticketPayload: Record<string, unknown> = {
       customer_id: customerId,
       channel: "email",

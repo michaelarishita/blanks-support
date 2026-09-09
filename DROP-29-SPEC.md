@@ -1,6 +1,12 @@
 # Prompt 29 — Junk folder with a correction loop
 
-Branch `afk/junk-folder`. **Do not merge.** Migration **0025**.
+Branch `afk/junk-folder`. **Do not merge.** Migrations **0025** (the `junk`
+enum value, alone) and **0026** (the tables/columns that use it).
+
+> Split in Prompt 30: Postgres cannot add an enum value and use it in the same
+> transaction (55P04), and the Supabase SQL editor pastes a file as one
+> transaction — so the `alter type` lives alone in 0025 and everything that
+> references `junk` is in 0026. Both are idempotent; apply 0025, then 0026.
 
 ## The point
 
@@ -13,7 +19,8 @@ we never had.
 
 ## What ships
 
-- **`junk` status** (0025), plus `tickets.junked_at` / `tickets.junk_reason`.
+- **`junk` status** (0025 adds the enum value; 0026 adds `tickets.junked_at` /
+  `tickets.junk_reason` and the partial index that uses it).
   A dedicated status means every view that filters by status excludes it for
   free; the two places that don't (Unassigned, All) exclude it explicitly.
 - **Guards file, not drop** (`lib/inbound/junk.ts` `decideDisposition`, pure):
@@ -79,10 +86,11 @@ own, so it is nowhere near junking a customer at the current threshold.
 
 ## Deploy order (non-negotiable)
 
-**Apply 0025 before merging/deploying.** The junk-filing insert references the
-new enum value and columns; ordinary customer mail does not (the junk columns
-are added to the insert only when filing junk), so a pre-migration deploy keeps
-normal inbound flowing while the schema banner flags 0025. After applying:
+**Apply 0025 then 0026 before merging/deploying** (0025 first — 0026's index
+uses the enum value 0025 adds). The junk-filing insert references the new enum
+value and columns; ordinary customer mail does not (the junk columns are added
+to the insert only when filing junk), so a pre-migration deploy keeps normal
+inbound flowing while the schema banner flags 0025/0026. After applying:
 
 1. Dry run: `GET /api/admin/backfill-junk?token=$CRON_SECRET&days=60`
 2. File them: add `&apply=1`.
