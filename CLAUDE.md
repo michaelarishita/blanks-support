@@ -189,6 +189,25 @@ in the very next drop: `0023_alert_mutes.sql` (afk/alert-kill-switch, first, so
 it keeps 0023) versus `0023_search.sql` (afk/search-and-triage, renumbered to
 0024). "The number is free on main" is not the same as "the number is free."
 
+**Migrations land on `main` ahead of their feature code.** They are applied BY
+HAND from the Supabase SQL editor, but they are written on feature branches —
+where the person doing the applying cannot open them. That gap cost an hour:
+`0023_alert_mutes.sql` existed only on afk/alert-kill-switch, its copy there was
+broken (a `now()` index predicate that aborts the paste), and neither fact was
+visible from main. So commit the `.sql` (and its schema-checker registration) to
+`main` in its own commit as soon as it is written, separate from the code that
+uses it. Migrations are already meant to be applied before their deploy, so this
+matches reality: one canonical copy, the schema banner tracks it immediately
+(reading "not yet applied", which is correct), and the number is claimed on main
+early. When a feature branch later merges, its identical migration is a no-op.
+
+`npm run migrations:pending` is the backstop: it prints every migration that
+lives on an unmerged branch but NOT on main, with its full SQL ready to paste,
+and flags LOUDLY if the same file diverges across branches — the exact 0023
+hazard. The healthy state is "nothing pending". Run it in any AFK handoff that
+adds a migration, and paste its output beside the claim, the same discipline as
+`npm run migrations`.
+
 **A migration that adds an enum value must contain NOTHING else.** Postgres
 cannot add an enum value and USE it in the same transaction — `ERROR 55P04,
 unsafe use of new value` — and the Supabase SQL editor runs a pasted file as
