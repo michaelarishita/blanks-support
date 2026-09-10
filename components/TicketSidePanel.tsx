@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { useState, useTransition, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
-import { setPriority, setStatus, toggleTag } from "@/app/actions";
+import {
+  markAsSpam,
+  markNotSpam,
+  setPriority,
+  setStatus,
+  toggleTag,
+  undoSpamCorrection,
+} from "@/app/actions";
 import { customerDisplayName } from "@/lib/display";
 import {
   MANUAL_STATUSES,
@@ -157,6 +164,34 @@ export default function TicketSidePanel({
     });
   }
 
+  /** A correction, with the Undo the prompt requires attached to its toast. */
+  function correct(
+    fn: () => Promise<ActionResult & { correctionId?: string }>,
+    success: string
+  ) {
+    startTransition(async () => {
+      const res = await fn();
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast(success, {
+        tone: "success",
+        action: res.correctionId
+          ? {
+              label: "Undo",
+              onClick: () =>
+                startTransition(async () => {
+                  await undoSpamCorrection(res.correctionId!);
+                }),
+            }
+          : undefined,
+      });
+    });
+  }
+
+  const isJunk = ticket.status === "junk";
+
   return (
     <aside
       className={cn(
@@ -240,33 +275,60 @@ export default function TicketSidePanel({
         />
       </Section>
 
-      <Section title="Status">
-        <div className="grid grid-cols-2 gap-1.5">
-          {MANUAL_STATUSES.map((s) => {
-            const active = activeManualStatus(ticket.status) === s;
-            return (
-              <button
-                key={s}
-                disabled={pending}
-                onClick={() =>
-                  run(
-                    () => setStatus(ticket.id, s),
-                    `Marked ${STATUS_META[s].label.toLowerCase()}`
-                  )
-                }
-                className={cn(
-                  "rounded-sm border px-2 py-1.5 text-caption font-medium",
-                  "transition-colors duration-micro ease-out disabled:opacity-60",
-                  active
-                    ? "border-gray-900 bg-gray-900 text-white"
-                    : "border-subtle text-secondary hover:border-strong hover:text-primary"
-                )}
-              >
-                {STATUS_META[s].label}
-              </button>
-            );
-          })}
-        </div>
+      <Section title={isJunk ? "Junk" : "Status"}>
+        {isJunk ? (
+          // A junked ticket's move is "Not spam" — back to the inbox — not
+          // open/resolved, which would strand the junk_reason.
+          <button
+            disabled={pending}
+            onClick={() => correct(() => markNotSpam(ticket.id), "Moved to inbox · not spam")}
+            className={cn(
+              "w-full rounded-sm border border-gray-900 bg-gray-900 px-2 py-1.5",
+              "text-caption font-medium text-white",
+              "transition-opacity duration-micro ease-out disabled:opacity-60"
+            )}
+          >
+            Not spam
+          </button>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-1.5">
+              {MANUAL_STATUSES.map((s) => {
+                const active = activeManualStatus(ticket.status) === s;
+                return (
+                  <button
+                    key={s}
+                    disabled={pending}
+                    onClick={() =>
+                      run(
+                        () => setStatus(ticket.id, s),
+                        `Marked ${STATUS_META[s].label.toLowerCase()}`
+                      )
+                    }
+                    className={cn(
+                      "rounded-sm border px-2 py-1.5 text-caption font-medium",
+                      "transition-colors duration-micro ease-out disabled:opacity-60",
+                      active
+                        ? "border-gray-900 bg-gray-900 text-white"
+                        : "border-subtle text-secondary hover:border-strong hover:text-primary"
+                    )}
+                  >
+                    {STATUS_META[s].label}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              disabled={pending}
+              onClick={() =>
+                correct(() => markAsSpam(ticket.id), "Marked as spam · moved to Junk")
+              }
+              className="mt-2 text-caption text-tertiary underline-offset-2 hover:text-secondary hover:underline disabled:opacity-60"
+            >
+              Mark as spam
+            </button>
+          </>
+        )}
 
         {/* Passive, never a button: pending is set when a reply goes out and
             cleared when the customer answers. Escalation keys off it. */}

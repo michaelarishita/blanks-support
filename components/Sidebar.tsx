@@ -25,6 +25,7 @@ import {
   TagIcon,
   UserIcon,
   UsersIcon,
+  XIcon,
 } from "@/components/ui/icons";
 
 const VIEWS = [
@@ -43,6 +44,7 @@ const VIEWS = [
     href: "/inbox?view=resolved",
     Icon: InboxIcon,
   },
+  { key: "junk", label: "Junk", href: "/inbox?view=junk", Icon: XIcon },
 ];
 
 const CHANNELS: TicketChannel[] = ["web_form", "email", "instagram", "messenger"];
@@ -109,7 +111,7 @@ export default function Sidebar({
 }: {
   me: Agent | null;
   /** null when the count query FAILED — render nothing rather than zero. */
-  counts: { open: number; mine: number; unassigned: number } | null;
+  counts: { open: number; mine: number; unassigned: number; junk?: number } | null;
   /** Open tickets per channel — same new/open definition as the Open view. */
   channelCounts: Record<TicketChannel, number> | null;
 }) {
@@ -135,7 +137,9 @@ export default function Sidebar({
           ? counts.mine
           : key === "unassigned"
             ? counts.unassigned
-            : null;
+            : key === "junk"
+              ? (counts.junk ?? null)
+              : null;
 
   return (
     <aside className="flex w-[232px] flex-none flex-col border-r border-subtle bg-panel">

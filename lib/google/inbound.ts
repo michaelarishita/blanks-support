@@ -16,8 +16,12 @@ import {
 } from "@/lib/email/parse";
 import { runRulesSafely } from "@/lib/rules/engine";
 import { loadIgnoreList } from "@/lib/senders/ignored";
+import { loadSenderOverrides, matchOverride } from "@/lib/senders/overrides";
+import { decideDisposition } from "@/lib/inbound/junk";
+import { assessVendorOutreach } from "@/lib/vendor/outreach";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { assessTicketRisk } from "@/lib/risk/assess";
+import type { JunkReason } from "@/lib/types";
 import { MAX_FILE_BYTES } from "@/lib/uploads/limits";
 import { sniffFileType } from "@/lib/uploads/sniff";
 import { stripMetadata } from "@/lib/uploads/strip";
@@ -71,6 +75,13 @@ export interface SyncResult {
    * database was healthy at the exact moment it was not.
    */
   storedMessages: number;
+  /**
+   * New tickets filed straight into Junk this run — a guard, an override or a
+   * confident classifier verdict. Counted apart from `created`: these are not
+   * work arriving in the queue, and conflating them would inflate the "N new
+   * tickets" an agent reads after a sync.
+   */
+  junked: number;
   error?: string;
 }
 
@@ -90,6 +101,7 @@ function emptyResult(): SyncResult {
     failedMessages: [],
     quarantined: [],
     storedMessages: 0,
+    junked: 0,
   };
 }
 
@@ -651,13 +663,22 @@ export async function storeInboundAttachments(
 async function ingestMessage(
   accessToken: string,
   parsed: ParsedEmail,
-  result: SyncResult
+  result: SyncResult,
+  /**
+   * Set when a NEW ticket should be filed in Junk. Ignored on an APPEND: a
+   * message that routes to an existing conversation belongs to it, and routing
+   * is a stronger signal than a bulk header — junking a live thread because one
+   * reply carried mailing-list headers is exactly the wrong move. (It also
+   * quietly fixes a latent bug: such replies used to be dropped outright.)
+   */
+  junkReason: JunkReason | null = null
 ): Promise<{ ticketId: string; path: MatchPath } | null> {
   const admin = createAdminClient();
 
   const routed = await routeToTicket(parsed);
   let ticketId = routed?.ticketId ?? null;
   const path: MatchPath = routed?.path ?? "new";
+  const isNewJunk = !ticketId && Boolean(junkReason);
 
   if (!ticketId) {
     const customerId = await upsertCustomer(parsed);
@@ -669,15 +690,26 @@ async function ingestMessage(
     const subject =
       parsed.subject.replace(/\s*\[BLK-\d+\]\s*/gi, " ").trim() || "(no subject)";
 
+    // The junk columns are added ONLY when filing junk, so the ordinary
+    // customer-mail insert references neither the new columns nor the new enum
+    // value. If this ships before 0025/0026 are applied, normal mail still
+    // flows — only junk-filing needs the migrations, which is the safe blast
+    // radius.
+    const ticketPayload: Record<string, unknown> = {
+      customer_id: customerId,
+      channel: "email",
+      subject,
+      status: isNewJunk ? "junk" : "new",
+      gmail_thread_id: parsed.gmailThreadId,
+    };
+    if (isNewJunk) {
+      ticketPayload.junked_at = new Date().toISOString();
+      ticketPayload.junk_reason = junkReason;
+    }
+
     const { data: ticket, error } = await admin
       .from("tickets")
-      .insert({
-        customer_id: customerId,
-        channel: "email",
-        subject,
-        status: "new",
-        gmail_thread_id: parsed.gmailThreadId,
-      })
+      .insert(ticketPayload)
       .select("id")
       .single();
     if (error || !ticket) {
@@ -694,12 +726,15 @@ async function ingestMessage(
     }
 
     ticketId = ticket.id;
-    result.created++;
+    if (isNewJunk) result.junked++;
+    else result.created++;
 
     await admin.from("ticket_events").insert({
       ticket_id: ticketId,
-      event_type: "created",
-      detail: { via: "email", from: parsed.fromEmail },
+      event_type: isNewJunk ? "junked" : "created",
+      detail: isNewJunk
+        ? { via: "email", from: parsed.fromEmail, reason: junkReason }
+        : { via: "email", from: parsed.fromEmail },
     });
   } else {
     result.appended++;
@@ -768,28 +803,35 @@ async function ingestMessage(
     });
   }
 
-  // Routing. A new ticket fires ticket_created; anything appended to an
-  // existing one is a customer reply. Runs after the message is stored, so a
-  // body condition sees the mail that just arrived.
-  const rules = await runRulesSafely(
-    ticketId,
-    path === "new" ? "ticket_created" : "message_received"
-  );
+  // A junked new ticket routes to nobody, notifies nobody, and is not risk
+  // assessed. Routing junk is nonsense (there is no owner to find), a
+  // notification about junk is the noise this folder exists to remove, and the
+  // classifier score is already recorded in junk_reason. The message is still
+  // stored above, so the ticket is fully reviewable and recoverable.
+  if (!isNewJunk) {
+    // Routing. A new ticket fires ticket_created; anything appended to an
+    // existing one is a customer reply. Runs after the message is stored, so a
+    // body condition sees the mail that just arrived.
+    const rules = await runRulesSafely(
+      ticketId,
+      path === "new" ? "ticket_created" : "message_received"
+    );
 
-  // Only for a genuinely new ticket. A reply on an existing thread is not
-  // news to the watchers, and mailing them about every customer response
-  // would be the fastest possible way to get this feature turned off.
-  if (path === "new") await notifyNewTicketSafely(ticketId);
+    // Only for a genuinely new ticket. A reply on an existing thread is not
+    // news to the watchers, and mailing them about every customer response
+    // would be the fastest possible way to get this feature turned off.
+    if (path === "new") await notifyNewTicketSafely(ticketId);
 
-  // Advisory only, and last: it reads the attachments and the customer
-  // history, so it has to run after both exist. Nothing downstream acts on
-  // the result — it puts a sentence in front of a human.
-  await assessTicketRisk(ticketId);
-  for (const rule of rules.fired) {
-    // Surfaced in the same skip/count summary "Check mail now" already shows,
-    // so a rule firing on inbound mail isn't invisible until someone opens the
-    // ticket.
-    result.ruleHits[rule.name] = (result.ruleHits[rule.name] ?? 0) + 1;
+    // Advisory only, and last: it reads the attachments and the customer
+    // history, so it has to run after both exist. Nothing downstream acts on
+    // the result — it puts a sentence in front of a human.
+    await assessTicketRisk(ticketId);
+    for (const rule of rules.fired) {
+      // Surfaced in the same skip/count summary "Check mail now" already shows,
+      // so a rule firing on inbound mail isn't invisible until someone opens the
+      // ticket.
+      result.ruleHits[rule.name] = (result.ruleHits[rule.name] ?? 0) + 1;
+    }
   }
 
   return { ticketId, path };
@@ -973,6 +1015,15 @@ export async function syncSupportMailbox(
     result.error = `The sender ignore list could not be read (${ignoreError}) — vendor mail may create tickets until it is.`;
   }
 
+  // Per-sender corrections. A failed read falls back to no overrides — a
+  // rescued customer might be re-junked (still in the folder, still
+  // recoverable) and a marked spammer might reach the inbox (five seconds),
+  // neither of which is worth holding the cursor for.
+  const { list: overrides, error: overrideError } = await loadSenderOverrides();
+  if (overrideError) {
+    console.error("[inbound] sender overrides unavailable:", overrideError);
+  }
+
   // Drop ids we've already stored before spending a fetch on each one.
   const uniqueIds = [...new Set(collected.ids)];
   let pending = uniqueIds;
@@ -1039,12 +1090,36 @@ export async function syncSupportMailbox(
         ignoredDomains: ignoreList.domains,
         trustedForwarders,
       });
-      if (drop) {
+
+      // Where does it go? A guard that would once have DISCARDED the message
+      // now files it in Junk instead — unless it is provably our own mail, or
+      // an override rescues it. The classifier can also file a confident spam
+      // verdict; an uncertain one stays in the inbox. See lib/inbound/junk.ts.
+      const sender = effectiveSender(parsed, trustedForwarders);
+      const vendor = assessVendorOutreach({
+        subject: parsed.subject,
+        bodyText: parsed.bodyText,
+        fromEmail: sender,
+        bulkMarker: parsed.listReason,
+        // Text-only at decision time: the Shopify lookup and prior-ticket count
+        // happen later, in risk assessment. Their absence only LOWERS the
+        // score, which biases this toward the inbox — the safe direction.
+        shopifyCustomerFound: null,
+        priorTicketCount: 0,
+      });
+      const disposition = decideDisposition({
+        drop,
+        override: matchOverride(sender, overrides),
+        vendorScore: vendor.score,
+        vendorReasons: vendor.reasons,
+      });
+
+      if (disposition.kind === "drop") {
         // Named rule plus the specific reason, so a wrongly-dropped message
         // can be traced to the rule that dropped it rather than guessed at.
-        countSkip(result, `${drop.rule} (${drop.detail})`);
+        countSkip(result, disposition.reason);
         console.info(
-          `[inbound] dropped ${id} by rule=${drop.rule} detail="${drop.detail}" from=${parsed.fromEmail ?? "?"}`
+          `[inbound] dropped ${id} — ${disposition.reason} from=${parsed.fromEmail ?? "?"}`
         );
         continue;
       }
@@ -1053,7 +1128,8 @@ export async function syncSupportMailbox(
       await ingestMessage(
         accessToken,
         resolveAuthor(parsed, trustedForwarders),
-        result
+        result,
+        disposition.kind === "junk" ? disposition.junkReason : null
       );
     } catch (e) {
       countFailure(result, "store", id, e);
@@ -1091,6 +1167,13 @@ export interface BackfillCandidate {
   subject: string;
   /** null when it would be ingested; otherwise the rule that drops it. */
   droppedBy: string | null;
+  /**
+   * The disposition the current logic would give this message: "inbox", "junk"
+   * (filed, recoverable) or "drop" (discarded — provably not a customer). Lets
+   * reconciliation and the backfill report distinguish "we junk this" from "we
+   * throw this away".
+   */
+  disposition: "inbox" | "junk" | "drop";
   alreadyStored: boolean;
   /**
    * When the mail arrived. Null for a message we did not have to fetch.
@@ -1161,6 +1244,7 @@ export async function backfillFromMailbox(options: {
   const ourAddresses = await ourOwnAddresses(connection.account_ref);
   const trustedForwarders = parseTrustedForwarders(process.env.TRUSTED_FORWARD_ADDRESSES);
   const { list: ignoreList } = await loadIgnoreList();
+  const { list: overrides } = await loadSenderOverrides();
 
   const candidates: BackfillCandidate[] = [];
   let ingested = 0;
@@ -1178,6 +1262,9 @@ export async function backfillFromMailbox(options: {
         fromName: null,
         subject: "",
         droppedBy: null,
+        // Where it actually landed is read from its ticket status by the
+        // caller; "inbox" here is a placeholder for an id we did not re-derive.
+        disposition: "inbox",
         alreadyStored: true,
         receivedAt: null,
       });
@@ -1206,7 +1293,30 @@ export async function backfillFromMailbox(options: {
       ignoredDomains: ignoreList.domains,
       trustedForwarders,
     });
-    const author = drop ? parsed : resolveAuthor(parsed, trustedForwarders);
+
+    // The same disposition the live sync would reach, so the backfill FILES a
+    // recoverable guard-drop into Junk rather than discarding it — the whole
+    // point of the folder, applied to the mail that predates it.
+    const sender = effectiveSender(parsed, trustedForwarders);
+    const vendor = assessVendorOutreach({
+      subject: parsed.subject,
+      bodyText: parsed.bodyText,
+      fromEmail: sender,
+      bulkMarker: parsed.listReason,
+      shopifyCustomerFound: null,
+      priorTicketCount: 0,
+    });
+    const disposition = decideDisposition({
+      drop,
+      override: matchOverride(sender, overrides),
+      vendorScore: vendor.score,
+      vendorReasons: vendor.reasons,
+    });
+
+    // Filed under the real author even when a guard fired: a bulk-mail drop is
+    // exactly the wrongly-relayed group customer we want to recover under their
+    // own name, not the list's.
+    const author = resolveAuthor(parsed, trustedForwarders);
 
     candidates.push({
       id,
@@ -1214,15 +1324,22 @@ export async function backfillFromMailbox(options: {
       fromName: author.fromName,
       subject: author.subject,
       droppedBy: drop ? `${drop.rule} (${drop.detail})` : null,
+      disposition: disposition.kind,
       alreadyStored: false,
       receivedAt: parsed.date.toISOString(),
     });
 
-    if (!apply || drop) continue;
+    // A hard drop (own mail, auto-reply, no sender) is never filed as a ticket.
+    if (!apply || disposition.kind === "drop") continue;
 
     result.checked++;
     try {
-      await ingestMessage(accessToken, author, result);
+      await ingestMessage(
+        accessToken,
+        author,
+        result,
+        disposition.kind === "junk" ? disposition.junkReason : null
+      );
       ingested++;
     } catch (e) {
       countFailure(result, "store", id, e);

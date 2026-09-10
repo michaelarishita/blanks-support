@@ -49,12 +49,17 @@ export default async function DashboardLayout({
   const open = counts?.filter((t) => isOpen(t.status)).length ?? 0;
   const mine =
     counts?.filter(
-      (t) => t.assignee_id === user.id && !["resolved", "closed"].includes(t.status)
+      (t) =>
+        t.assignee_id === user.id &&
+        !["resolved", "closed", "junk"].includes(t.status)
     ).length ?? 0;
+  // Junk is unassigned by construction, so it must be excluded here or it would
+  // inflate the Unassigned badge with mail nobody needs to action.
   const unassigned =
     counts?.filter(
-      (t) => !t.assignee_id && !["resolved", "closed"].includes(t.status)
+      (t) => !t.assignee_id && !["resolved", "closed", "junk"].includes(t.status)
     ).length ?? 0;
+  const junk = counts?.filter((t) => t.status === "junk").length ?? 0;
 
   // Counted here rather than with four `head: true` count queries: the rows
   // are already loaded for the view counts above, so this is free.
@@ -81,7 +86,7 @@ export default async function DashboardLayout({
         <div className="hidden md:flex">
           <Sidebar
             me={me}
-            counts={measured ? { open, mine, unassigned } : null}
+            counts={measured ? { open, mine, unassigned, junk } : null}
             channelCounts={measured ? byChannel : null}
           />
         </div>
@@ -91,11 +96,11 @@ export default async function DashboardLayout({
             switch triage does most — but it only exists on the list, and
             changing view from an open ticket used to mean navigating away. */}
         <NavDrawer
-          counts={measured ? { open, mine, unassigned } : null}
+          counts={measured ? { open, mine, unassigned, junk } : null}
           channelCounts={measured ? byChannel : null}
         >
           <MobileTopBar
-            counts={measured ? { open, mine, unassigned } : null}
+            counts={measured ? { open, mine, unassigned, junk } : null}
             channelCounts={measured ? byChannel : null}
           />
           {/* Schema first: an unrun migration explains most other symptoms.

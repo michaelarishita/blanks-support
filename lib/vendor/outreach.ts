@@ -47,8 +47,36 @@ export interface VendorAssessment {
   likely: boolean;
 }
 
-/** At or above this, the ticket is marked and starts at Low. */
+/** At or above this, the ticket is marked and starts at Low — in the inbox. */
 export const VENDOR_THRESHOLD = 4;
+
+/**
+ * At or above this, the classifier files the ticket in JUNK instead of the
+ * inbox. THE ERRORS ARE BIASED ON PURPOSE, and this number is where.
+ *
+ * Missing spam costs an agent five seconds. Junking a customer can cost the
+ * customer — they wrote in with a problem and it vanished into a folder nobody
+ * reads. Those two mistakes are not symmetric, so the thresholds are not
+ * symmetric: the priority threshold is 4, the junk threshold is 8, and the gap
+ * between them (4–7) is the UNCERTAIN zone that stays in the visible inbox at
+ * Low priority. When the classifier is merely suspicious, it does not junk.
+ *
+ * 8 is not reachable on phrasing alone — the strongest phrasing signal is worth
+ * 4. Clearing 8 therefore requires STRUCTURAL corroboration a customer does not
+ * produce by accident: a marketing footer (unsubscribe/opt-out/tracked links,
+ * worth 3), mailing-list headers that survived the guard (worth 2), sales
+ * vocabulary, no order history. A message reaches the junk bar only when it is
+ * a marketing send AND reads like a cold pitch AND shows no customer language
+ * (the customer/business short-circuit above still runs first and vetoes it
+ * outright). This is deliberately conservative; we have already shipped one
+ * classifier that scored 0/25 on real mail.
+ *
+ * DO NOT LOWER THIS to "catch more spam" without first running the scoring
+ * harness (lib/inbound/harness.ts) against the stored corrections corpus. The
+ * whole reason corrections are recorded is so this number is changed with
+ * evidence, never by feel.
+ */
+export const VENDOR_JUNK_THRESHOLD = 8;
 
 /**
  * Phrases that belong to a pitch rather than a question about an order.

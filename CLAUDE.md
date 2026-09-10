@@ -189,6 +189,29 @@ in the very next drop: `0023_alert_mutes.sql` (afk/alert-kill-switch, first, so
 it keeps 0023) versus `0023_search.sql` (afk/search-and-triage, renumbered to
 0024). "The number is free on main" is not the same as "the number is free."
 
+**A migration that adds an enum value must contain NOTHING else.** Postgres
+cannot add an enum value and USE it in the same transaction — `ERROR 55P04,
+unsafe use of new value` — and the Supabase SQL editor runs a pasted file as
+ONE transaction. So `alter type ... add value 'junk'` followed anywhere later
+in the same file by a `where status = 'junk'` index, a `default 'junk'`, a
+check constraint, or any other reference fails on paste, in production, on the
+one path that matters. `0025_junk_folder.sql` did exactly this and had to be
+split into `0025` (the `alter type` alone) and `0026` (everything that uses the
+value). This is the SECOND time — `rule_trigger` in Drop 7 was a version of the
+same thing.
+
+It is a WHOLE-FILE constraint, not a statement-ordering one: put the `alter
+type ... add value if not exists` in its own migration with nothing else, and
+put every column/index/default/constraint that references the new value in the
+next migration, which runs after the first has committed. "It works via a
+migration tool" is not the bar — every migration here is a hand paste, and this
+error is invisible until someone pastes it into production. (Adding a value you
+do NOT use in the same file — as `0014` does with `new_ticket` — happens to
+survive, but do not rely on that: keep add-value files pure so nobody has to
+audit for a use that a later edit might introduce. Note `CREATE TYPE ... AS
+ENUM` is exempt — a brand-new type can be used in the same transaction; only
+`ALTER TYPE ... ADD VALUE` on an existing type is unsafe.)
+
 ### What is connected
 
 - **Gmail (Phase 2, live).** `hello@blankssportsnutrition.com` is the watched

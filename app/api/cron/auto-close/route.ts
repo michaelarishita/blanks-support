@@ -7,6 +7,7 @@ import {
 } from "@/lib/uploads/sweep";
 import { runReconciliation } from "@/lib/inbound/reconcile";
 import { runMessengerReconciliation } from "@/lib/meta/reconcile";
+import { purgeExpiredJunk } from "@/lib/inbound/purge";
 
 // Daily. Resolved tickets nobody has touched for a week become closed.
 //
@@ -68,6 +69,14 @@ export async function GET(request: NextRequest) {
     console.error("[cron] Messenger reconciliation threw:", e);
   }
 
+  // Junk older than its retention window is purged. Piggybacked here for the
+  // same reason as the sweeps above — daily, cheap, and a separate cron is one
+  // more thing that can be silently missing.
+  const junkPurge = await purgeExpiredJunk();
+  if (junkPurge.error) {
+    console.error("[cron] junk purge failed:", junkPurge.error);
+  }
+
   const admin = createAdminClient();
   const cutoff = new Date(Date.now() - AUTO_CLOSE_DAYS * 86_400_000).toISOString();
 
@@ -97,7 +106,15 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
   if (!stale?.length) {
-    return Response.json({ ok: true, closed: 0, uploads, ticketFiles, reconcile, metaReconcile });
+    return Response.json({
+      ok: true,
+      closed: 0,
+      uploads,
+      ticketFiles,
+      reconcile,
+      metaReconcile,
+      junkPurge,
+    });
   }
 
   const ids = stale.map((ticket) => ticket.id);
@@ -126,6 +143,7 @@ export async function GET(request: NextRequest) {
     ticketFiles,
     reconcile,
     metaReconcile,
+    junkPurge,
     closed: ids.length,
     numbers: stale.map((ticket) => ticket.number),
     // Surfaced so a persistent backlog above the cap is visible rather than

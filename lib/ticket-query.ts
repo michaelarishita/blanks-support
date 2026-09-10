@@ -92,8 +92,14 @@ export function applyTicketFilters<T extends any>(
     // "all" adds no status constraint.
   }
   if (view === "unassigned")
-    q = q.is("assignee_id", null).not("status", "in", "(resolved,closed)");
+    q = q.is("assignee_id", null).not("status", "in", "(resolved,closed,junk)");
   if (view === "resolved") q = q.in("status", ["resolved", "closed"]);
+
+  // Junk is its own view, and excluded from every other. Filed-not-dropped
+  // mail must not leak into Open, Unassigned, All or the queue counts — the
+  // whole point is that it stays out of the way until reviewed.
+  if (view === "junk") q = q.eq("status", "junk");
+  else q = q.not("status", "eq", "junk");
   if (params.channel) q = q.eq("channel", params.channel);
   if (params.customer) q = q.eq("customer_id", params.customer);
   if (params.assignee) q = q.eq("assignee_id", params.assignee);

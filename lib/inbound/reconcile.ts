@@ -37,8 +37,15 @@ export interface ReconcileReport {
   /** Ids the mailbox listed in the window. */
   examined: number;
   accounted: {
-    /** We have a message row for it. */
+    /** We have a message row for it, on a live (non-junk) ticket. */
     stored: number;
+    /**
+     * We have a message row for it, filed in JUNK. Reported apart from
+     * `stored`: a junked message is accounted for — we decided about it — but
+     * it is not in the inbox, and folding the two together would hide how much
+     * the guards are now filing rather than discarding.
+     */
+    junked: number;
     /** A guard dropped it, and the same guard drops it again now. */
     guardDropped: number;
     /** We gave up on it, on purpose, and said so. */
@@ -84,6 +91,7 @@ export async function reconcileMailbox(
     examined: 0,
     accounted: {
       stored: 0,
+      junked: 0,
       guardDropped: 0,
       quarantined: 0,
       goneFromMailbox: 0,
@@ -110,7 +118,15 @@ export async function reconcileMailbox(
   if (report.result.error) return { ...empty, error: report.result.error };
 
   const candidates = report.candidates;
-  const stored = candidates.filter((c) => c.alreadyStored).length;
+  const storedIds = candidates.filter((c) => c.alreadyStored).map((c) => c.id);
+
+  // Split stored into inbox vs junk by the status of each message's ticket. A
+  // failed read leaves junked at 0 and everything counted as stored — it never
+  // manufactures a discrepancy, which is the one thing this job must not do.
+  const junkedIds = await junkedMessageIds(storedIds);
+  const junked = junkedIds.size;
+  const stored = storedIds.length - junked;
+
   const guardDropped = candidates.filter((c) => !c.alreadyStored && c.droppedBy).length;
   const goneFromMailbox = report.result.skipped["no longer in the mailbox"] ?? 0;
 
@@ -151,6 +167,7 @@ export async function reconcileMailbox(
     examined: candidates.length,
     accounted: {
       stored,
+      junked,
       guardDropped,
       quarantined: settled.length - discrepancies.length,
       goneFromMailbox,
@@ -160,6 +177,28 @@ export async function reconcileMailbox(
     hitCap: candidates.length >= max,
     error: null,
   };
+}
+
+/**
+ * Of these stored gmail message ids, which belong to a JUNK ticket.
+ *
+ * A failed read returns an empty set — those messages then count as `stored`,
+ * never as missing. Being unable to tell inbox from junk is a reporting nicety;
+ * turning it into a phantom discrepancy would be an alarm about our own query.
+ */
+async function junkedMessageIds(gmailMessageIds: string[]): Promise<Set<string>> {
+  if (!gmailMessageIds.length) return new Set();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("messages")
+    .select("gmail_message_id, ticket:tickets!inner(status)")
+    .in("gmail_message_id", gmailMessageIds)
+    .eq("ticket.status", "junk");
+  if (error) {
+    console.error("[reconcile] could not classify junked messages:", error.message);
+    return new Set();
+  }
+  return new Set((data ?? []).map((m) => m.gmail_message_id as string));
 }
 
 /** How many discrepancies get named in the alert before it becomes a wall. */
@@ -323,7 +362,8 @@ export async function runReconciliation(
     reasons,
     detail:
       `Checked the last ${report.windowDays} days: ${report.examined} messages, ` +
-      `${report.accounted.stored} stored, ${report.accounted.guardDropped} dropped by a guard, ` +
+      `${report.accounted.stored} stored, ${report.accounted.junked} filed in Junk, ` +
+      `${report.accounted.guardDropped} dropped by a guard, ` +
       `${report.accounted.quarantined} quarantined. The messages above are none of those — ` +
       "they arrived and we have no record of deciding anything about them.",
   });

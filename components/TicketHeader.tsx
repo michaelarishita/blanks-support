@@ -4,7 +4,13 @@ import Link from "next/link";
 import { useCallback, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
-import { assignTicket, setStatus } from "@/app/actions";
+import {
+  assignTicket,
+  markAsSpam,
+  markNotSpam,
+  setStatus,
+  undoSpamCorrection,
+} from "@/app/actions";
 import { useHotkey } from "@/lib/shortcuts";
 import { CHANNEL_META, STATUS_META } from "@/lib/types";
 import { MANUAL_STATUSES, isWaitingOnCustomer } from "@/lib/ticket-status";
@@ -53,7 +59,58 @@ export default function TicketHeader({
   const searchParams = useSearchParams();
   const inboxHref = `/inbox${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
   const status = STATUS_META[ticket.status];
-  const isOpenStatus = ticket.status !== "resolved" && ticket.status !== "closed";
+  const isJunk = ticket.status === "junk";
+  const isOpenStatus =
+    ticket.status !== "resolved" && ticket.status !== "closed" && !isJunk;
+
+  /** "Not spam" — rescue a junked ticket to the inbox, then move on. */
+  const notSpam = useCallback(() => {
+    startTransition(async () => {
+      const res = await markNotSpam(ticket.id);
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast("Moved to inbox · not spam", {
+        tone: "success",
+        link: { label: `Ticket #${ticket.number}`, href: `/tickets/${ticket.id}` },
+        action: res.correctionId
+          ? {
+              label: "Undo",
+              onClick: () =>
+                startTransition(async () => {
+                  await undoSpamCorrection(res.correctionId!);
+                }),
+            }
+          : undefined,
+      });
+      router.push(advanceHref);
+    });
+  }, [ticket.id, ticket.number, toast, router, advanceHref]);
+
+  /** "Mark as spam" — file a normal ticket into Junk, then move on. */
+  const markSpam = useCallback(() => {
+    startTransition(async () => {
+      const res = await markAsSpam(ticket.id);
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast("Marked as spam · moved to Junk", {
+        tone: "success",
+        action: res.correctionId
+          ? {
+              label: "Undo",
+              onClick: () =>
+                startTransition(async () => {
+                  await undoSpamCorrection(res.correctionId!);
+                }),
+            }
+          : undefined,
+      });
+      router.push(advanceHref);
+    });
+  }, [ticket.id, toast, router, advanceHref]);
 
   function run(fn: () => Promise<ActionResult | void>, success: string) {
     startTransition(async () => {
@@ -184,6 +241,10 @@ export default function TicketHeader({
           <Badge tone={status.tone}>{status.label}</Badge>
         )}
 
+        {/* Assign and Snooze are meaningless on junk — it is unassigned by
+            construction and out of every queue — so they are hidden there. */}
+        {!isJunk && (
+          <>
         {/* Assign — controlled so the `a` shortcut can open it. */}
         <Dropdown
           align="end"
@@ -279,8 +340,14 @@ export default function TicketHeader({
             <SnoozeIcon />
           </Button>
         </Tooltip>
+          </>
+        )}
 
-        {isOpenStatus ? (
+        {isJunk ? (
+          <Button variant="primary" size="md" disabled={pending} onClick={notSpam}>
+            Not spam
+          </Button>
+        ) : isOpenStatus ? (
           <Button variant="primary" size="md" disabled={pending} onClick={resolve}>
             <CheckIcon size={14} />
             Resolve
@@ -309,30 +376,47 @@ export default function TicketHeader({
         >
           {(close) => (
             <>
-              <DropdownLabel>Set status</DropdownLabel>
-              {/* Only the manual statuses. `pending` and `closed` are
-                  consequences — set when a reply goes out, and by the
-                  auto-close cron — and offering them as buttons invited
-                  agents to fight the automation. */}
-              {MANUAL_STATUSES.map(
-                (s) => (
+              {/* A junked ticket's only meaningful move is "Not spam" (the
+                  primary button); setting open/resolved on it would leave the
+                  junk_reason dangling. So the status controls are hidden here
+                  and shown only for real tickets. */}
+              {!isJunk && (
+                <>
+                  <DropdownLabel>Set status</DropdownLabel>
+                  {/* Only the manual statuses. `pending` and `closed` are
+                      consequences — set when a reply goes out, and by the
+                      auto-close cron — and offering them as buttons invited
+                      agents to fight the automation. */}
+                  {MANUAL_STATUSES.map((s) => (
+                    <DropdownItem
+                      key={s}
+                      onClick={() => {
+                        close();
+                        changeStatus(s);
+                      }}
+                      icon={
+                        <span className={cn(ticket.status !== s && "invisible")}>
+                          <CheckIcon size={14} />
+                        </span>
+                      }
+                    >
+                      {STATUS_META[s].label}
+                    </DropdownItem>
+                  ))}
+                  <DropdownSeparator />
+                  {/* Files it into Junk and records the correction, so the
+                      classifier can be measured against it later. */}
                   <DropdownItem
-                    key={s}
                     onClick={() => {
                       close();
-                      changeStatus(s);
+                      markSpam();
                     }}
-                    icon={
-                      <span className={cn(ticket.status !== s && "invisible")}>
-                        <CheckIcon size={14} />
-                      </span>
-                    }
                   >
-                    {STATUS_META[s].label}
+                    Mark as spam
                   </DropdownItem>
-                )
+                  <DropdownSeparator />
+                </>
               )}
-              <DropdownSeparator />
               <DropdownItem
                 onClick={() => {
                   close();

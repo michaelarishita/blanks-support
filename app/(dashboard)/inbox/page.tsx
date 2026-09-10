@@ -16,6 +16,7 @@ import {
 import RealtimeRefresher from "@/components/RealtimeRefresher";
 import { agentDisplayName } from "@/lib/display";
 import { CHANNEL_META, type Ticket, type TicketChannel } from "@/lib/types";
+import { JUNK_RETENTION_DAYS } from "@/lib/inbound/junk";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,7 @@ const TITLES: Record<string, string> = {
   unassigned: "Unassigned",
   all: "All tickets",
   resolved: "Resolved",
+  junk: "Junk",
 };
 
 export default async function InboxPage({
@@ -115,6 +117,19 @@ export default async function InboxPage({
         channelLabel={channelLabel}
         sort={sort}
       />
+
+      {/* Junk is filed, not deleted — but it does not live forever. Say so, so
+          the purge is never a surprise and an agent knows the review window. */}
+      {view === "junk" && (
+        <div className="px-3 pb-3 sm:px-0">
+          <p className="rounded-md border border-subtle bg-panel px-3 py-2 text-caption text-tertiary">
+            Mail a guard, an override, or the classifier filed as junk. Nothing
+            here is in anyone&rsquo;s queue. Open one and choose{" "}
+            <span className="font-medium text-secondary">Not spam</span> to send it
+            back to the inbox. Junk is purged after {JUNK_RETENTION_DAYS} days.
+          </p>
+        </div>
+      )}
 
       {/* Sender filter lives on the All view — it combines with the channel
           filter rather than replacing it. */}

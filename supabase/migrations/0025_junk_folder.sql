@@ -1,0 +1,22 @@
+-- ============================================================
+-- Blanks Support — Junk status enum value (Drop / Prompt 29)
+-- Run in the Supabase SQL Editor after 0024_search.sql.
+--
+-- THIS FILE ADDS AN ENUM VALUE AND CONTAINS NOTHING ELSE. That is not a
+-- stylistic choice — it is the only shape that survives a paste.
+--
+-- Postgres cannot add an enum value and USE it in the same transaction
+-- (ERROR 55P04, "unsafe use of new value"), and the Supabase SQL editor runs
+-- a pasted file as one transaction. The original 0025 added `junk` and then
+-- built a `where status = 'junk'` index in the same file, which is exactly
+-- that error — it failed on paste in production. The table/column/index work
+-- that USES this value now lives in 0026, a separate paste that runs after
+-- this one has committed.
+--
+-- See CLAUDE.md, "A migration that adds an enum value must contain nothing
+-- else." It is a whole-file constraint, not a statement-ordering one.
+--
+-- IDEMPOTENT: `if not exists` makes a re-run a no-op rather than an error.
+-- ============================================================
+
+alter type ticket_status add value if not exists 'junk';

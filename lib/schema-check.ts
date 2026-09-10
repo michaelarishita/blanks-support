@@ -315,6 +315,23 @@ const MIGRATIONS: Migration[] = [
       functions: ["search_tickets"],
     },
   },
+  {
+    file: "0025_junk_folder.sql",
+    title: "Junk status — the enum value, added alone (see the by-hand enum rule)",
+    requires: {
+      // This file adds ONLY the enum value, because a value cannot be added and
+      // used in the same paste. The tables that USE it are 0026.
+      enumValues: { ticket_status: ["junk"] },
+    },
+  },
+  {
+    file: "0026_junk_tables.sql",
+    title: "Junk folder tables + correction loop — guards file instead of discarding",
+    requires: {
+      columns: ["tickets.junked_at", "tickets.junk_reason"],
+      tables: ["spam_corrections", "sender_spam_overrides"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

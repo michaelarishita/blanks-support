@@ -38,6 +38,11 @@ export default function CheckMailNow({ connected }: { connected: boolean }) {
           `Checked ${result.checked}`,
           `${result.created} new ticket${result.created === 1 ? "" : "s"}`,
           `${result.appended} added to existing`,
+          // Junk is filed, not dropped, and counted apart from new tickets so
+          // "1 new · 4 junked" reads honestly rather than as five arrivals.
+          result.junked
+            ? `${result.junked} filed in junk`
+            : null,
           // Surfacing skips matters: "checked 3, created 0" with no reason
           // reads as broken when it's usually loop protection working.
           skipped.length
