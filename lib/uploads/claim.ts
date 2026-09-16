@@ -34,16 +34,20 @@ export interface ClaimOutcome {
  * Deleting also makes a grant single-use without any bookkeeping: replay it
  * and there is nothing to download.
  */
-export async function claimUploads(grants: unknown): Promise<ClaimOutcome> {
+export async function claimUploads(
+  grants: unknown,
+  /** Count ceiling; intake uses MAX_FILES, outbound replies allow more. */
+  maxFiles: number = MAX_FILES
+): Promise<ClaimOutcome> {
   if (!Array.isArray(grants) || grants.length === 0) {
     return { result: { ok: true, files: [] }, paths: [] };
   }
 
-  if (grants.length > MAX_FILES) {
+  if (grants.length > maxFiles) {
     return {
       result: {
         ok: false,
-        message: `Please attach at most ${MAX_FILES} files.`,
+        message: `Please attach at most ${maxFiles} files.`,
         rejections: [{ name: `${grants.length} files`, reason: "too many grants" }],
       },
       paths: [],
@@ -101,7 +105,7 @@ export async function claimUploads(grants: unknown): Promise<ClaimOutcome> {
           "We couldn't accept your attachments. Please try adding them again.",
         rejections,
       }
-    : validateUploads(incoming);
+    : validateUploads(incoming, maxFiles);
 
   // The verdict, per grant. A rejection here is a file we HAD and refused —
   // materially different from one that never arrived, and the ledger is where

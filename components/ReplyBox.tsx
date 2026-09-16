@@ -23,14 +23,27 @@ import {
 } from "@/lib/shopify/macros";
 import {
   AlertTriangleIcon,
+  CopyIcon,
   LockIcon,
   MailIcon,
   PaperclipIcon,
+  RefreshIcon,
   SendIcon,
   UserIcon,
+  XIcon,
 } from "@/components/ui/icons";
+import { useComposerAttachments } from "@/components/useComposerAttachments";
+import { ACCEPT_ATTRIBUTE } from "@/lib/uploads/limits";
+import { isInlineSafe } from "@/lib/attachments";
 
 type Mode = "reply" | "note";
+
+/** An attachment already on the ticket, offered for re-sending. */
+export interface TicketAttachmentRef {
+  id: string;
+  filename: string;
+  mime_type: string | null;
+}
 
 export default function ReplyBox({
   ticketId,
@@ -40,6 +53,7 @@ export default function ReplyBox({
   emailCapable,
   assignedToOther,
   replyWindow = null,
+  ticketAttachments = [],
 }: {
   ticketId: string;
   macros: Macro[];
@@ -52,6 +66,8 @@ export default function ReplyBox({
   emailCapable: boolean;
   /** Present only on Instagram/Messenger tickets. */
   replyWindow?: ReplyWindow | null;
+  /** Attachments already on this ticket, offered for re-sending to the customer. */
+  ticketAttachments?: TicketAttachmentRef[];
 }) {
   // Holds HTML from the editor; the server sanitizes it and derives the
   // canonical plain text.
@@ -62,6 +78,20 @@ export default function ReplyBox({
   const editorRef = useRef<RichTextEditorHandle>(null);
   const toast = useToast();
   const keyboardInset = useKeyboardInset();
+
+  // Attachments: freshly-uploaded files and picks from the ticket's own
+  // attachments. Only ever sent on a public reply — a note is internal.
+  const uploads = useComposerAttachments();
+  const [reuseIds, setReuseIds] = useState<string[]>([]);
+  const [showTicketPicker, setShowTicketPicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasAttachments = uploads.items.length > 0 || reuseIds.length > 0;
+
+  const toggleReuse = useCallback((id: string) => {
+    setReuseIds((current) =>
+      current.includes(id) ? current.filter((x) => x !== id) : [...current, id]
+    );
+  }, []);
 
   /**
    * Drafts survive the app being backgrounded.
@@ -125,7 +155,8 @@ export default function ReplyBox({
    */
   const [openedByTap, setOpenedByTap] = useState(false);
   const wantsFocus = useRef(false);
-  const expanded = openedByTap || !isEmptyHtml(body) || Boolean(error);
+  const expanded =
+    openedByTap || !isEmptyHtml(body) || Boolean(error) || hasAttachments;
 
   const expand = useCallback(() => {
     wantsFocus.current = true;
@@ -171,9 +202,17 @@ export default function ReplyBox({
 
   function submit() {
     if (empty || pending) return;
+    // Never send while an upload is in flight, failed, or over the size cap —
+    // a reply that leaves without the photo the agent attached (or fails at
+    // Gmail after they think it sent) is the failure this must not produce.
+    if (!isNote && uploads.blockingSend) return;
     setError(null);
+    const attachments =
+      !isNote && (uploads.grants.length || reuseIds.length)
+        ? { grants: uploads.grants, reuseIds }
+        : undefined;
     startTransition(async () => {
-      const res = await sendReply(ticketId, body, isNote);
+      const res = await sendReply(ticketId, body, isNote, attachments);
       if (res?.error) {
         setError(res.error);
         return;
@@ -181,6 +220,9 @@ export default function ReplyBox({
       // Stored successfully — clear the draft even if delivery failed, since
       // resending the same text would post a duplicate to the thread.
       editorRef.current?.clear();
+      uploads.reset();
+      setReuseIds([]);
+      setShowTicketPicker(false);
       // Back to a single line, the way a message thread behaves once the
       // message has gone.
       setOpenedByTap(false);
@@ -370,13 +412,47 @@ export default function ReplyBox({
             <MacroPicker macros={macros} onPick={applyMacro} />
           )}
 
-          <Tooltip content="Attachments land with inbound email (Drop 4)">
-            <span>
-              <Button variant="ghost" size="sm" iconOnly disabled aria-label="Attach file">
-                <PaperclipIcon size={14} />
-              </Button>
-            </span>
-          </Tooltip>
+          {/* Attaching is for customer-facing replies; a note is internal. */}
+          {!isNote && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ACCEPT_ATTRIBUTE}
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  uploads.addFiles(Array.from(event.target.files ?? []));
+                  // Let the same file be picked again after a remove.
+                  event.target.value = "";
+                }}
+              />
+              {ticketAttachments.length > 0 && (
+                <Tooltip content="Attach a file already on this ticket">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    iconOnly
+                    aria-label="Attach from this ticket"
+                    onClick={() => setShowTicketPicker((v) => !v)}
+                  >
+                    <CopyIcon size={14} />
+                  </Button>
+                </Tooltip>
+              )}
+              <Tooltip content="Attach a photo or file">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  iconOnly
+                  aria-label="Attach file"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <PaperclipIcon size={14} />
+                </Button>
+              </Tooltip>
+            </>
+          )}
         </div>
 
         <RichTextEditor
@@ -391,6 +467,123 @@ export default function ReplyBox({
               : "Write a reply…"
           }
         />
+
+        {/* ATTACHMENTS — replies only. Picker for the ticket's own files, then
+            the chips for everything queued to send, with per-file progress. */}
+        {!isNote && (showTicketPicker || hasAttachments) && (
+          <div className="mt-2 space-y-2">
+            {showTicketPicker && ticketAttachments.length > 0 && (
+              <div className="rounded-md border border-subtle bg-surface p-2">
+                <p className="mb-1.5 text-caption text-tertiary">
+                  Attach a file already on this ticket
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {ticketAttachments.map((att) => {
+                    const selected = reuseIds.includes(att.id);
+                    return (
+                      <button
+                        key={att.id}
+                        type="button"
+                        onClick={() => toggleReuse(att.id)}
+                        className={cn(
+                          "flex max-w-[180px] items-center gap-1.5 rounded-full border px-2 py-1 text-caption",
+                          selected
+                            ? "border-brand-500 bg-brand-50 text-brand-800"
+                            : "border-subtle text-secondary hover:border-strong"
+                        )}
+                      >
+                        {isInlineSafe(att.mime_type) ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={`/api/attachments/${att.id}?inline=1`}
+                            alt=""
+                            className="h-4 w-4 flex-none rounded object-cover"
+                          />
+                        ) : (
+                          <PaperclipIcon size={12} className="flex-none" />
+                        )}
+                        <span className="truncate">{att.filename}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {hasAttachments && (
+              <div className="flex flex-wrap gap-1.5">
+                {reuseIds.map((id) => {
+                  const att = ticketAttachments.find((a) => a.id === id);
+                  return (
+                    <span
+                      key={`reuse-${id}`}
+                      className="flex max-w-[200px] items-center gap-1.5 rounded-full border border-subtle bg-surface px-2 py-1 text-caption text-secondary"
+                    >
+                      <PaperclipIcon size={12} className="flex-none text-tertiary" />
+                      <span className="truncate">{att?.filename ?? "attachment"}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleReuse(id)}
+                        aria-label="Remove attachment"
+                        className="flex-none text-tertiary hover:text-primary"
+                      >
+                        <XIcon size={12} />
+                      </button>
+                    </span>
+                  );
+                })}
+                {uploads.items.map((it) => (
+                  <span
+                    key={`up-${it.id}`}
+                    className={cn(
+                      "flex max-w-[220px] items-center gap-1.5 rounded-full border px-2 py-1 text-caption",
+                      it.status === "failed"
+                        ? "border-danger-border bg-danger-bg text-danger-text"
+                        : "border-subtle bg-surface text-secondary"
+                    )}
+                  >
+                    <PaperclipIcon size={12} className="flex-none text-tertiary" />
+                    <span className="truncate">{it.file.name}</span>
+                    {it.status === "uploading" && (
+                      <span className="tnum flex-none text-tertiary">{it.progress}%</span>
+                    )}
+                    {it.status === "failed" && (
+                      <button
+                        type="button"
+                        onClick={() => uploads.retry(it.id)}
+                        aria-label="Retry upload"
+                        className="flex-none hover:text-primary"
+                      >
+                        <RefreshIcon size={12} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => uploads.remove(it.id)}
+                      aria-label="Remove attachment"
+                      className="flex-none text-tertiary hover:text-primary"
+                    >
+                      <XIcon size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {uploads.capMessage && (
+              <p className="flex items-center gap-1.5 text-caption text-danger-text">
+                <AlertTriangleIcon size={12} className="flex-none" />
+                {uploads.capMessage}
+              </p>
+            )}
+            {uploads.hasFailed && !uploads.capMessage && (
+              <p className="flex items-center gap-1.5 text-caption text-danger-text">
+                <AlertTriangleIcon size={12} className="flex-none" />
+                An attachment didn&rsquo;t upload — retry or remove it before sending.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Context, not a warning and not a block: covering someone else's
             ticket is normal, but sending without noticing whose it is isn't.
@@ -448,7 +641,7 @@ export default function ReplyBox({
             size="md"
             onClick={submit}
             loading={pending}
-            disabled={empty || socialBlocked}
+            disabled={empty || socialBlocked || (!isNote && uploads.blockingSend)}
             className="h-12 flex-none px-5 sm:h-9 sm:px-3.5"
           >
             {isNote ? "Add note" : "Send reply"}

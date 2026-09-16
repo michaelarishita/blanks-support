@@ -201,6 +201,11 @@ export default async function TicketPage({
               : null
           }
           replyWindow={replyWindowState}
+          // Every attachment already on the ticket, offered for re-sending
+          // (a customer's own photo back to them, or forwarded elsewhere).
+          ticketAttachments={((messages as Message[]) ?? [])
+            .flatMap((m) => m.attachments ?? [])
+            .map((a) => ({ id: a.id, filename: a.filename, mime_type: a.mime_type }))}
         />
 
         {/* Context lives ONLY here on a phone — never as a side column. */}

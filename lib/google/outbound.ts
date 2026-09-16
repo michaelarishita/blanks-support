@@ -3,14 +3,18 @@ import {
   buildRawEmail,
   buildReplySubject,
   generateMessageId,
+  type EmailFilePart,
 } from "@/lib/email/mime";
 import {
   formatFromName,
   renderEmailHtml,
   renderEmailText,
   type QuotedHistory,
+  type InlineImageRef,
 } from "@/lib/email/template";
 import { getCompanySettings } from "@/lib/settings";
+import { isInlineSafe } from "@/lib/attachments";
+import { MAX_OUTBOUND_TOTAL_BYTES, formatBytes } from "@/lib/uploads/limits";
 import { sanitizeRichText } from "@/lib/html";
 import { AUTHOR_FALLBACK, customerDisplayName } from "@/lib/display";
 import { sendGmailMessage } from "./gmail";
@@ -27,6 +31,70 @@ import {
 export type DeliveryResult =
   | { ok: true; skipped?: string }
   | { ok: false; error: string };
+
+interface LoadedOutboundFiles {
+  /** Images embedded in the body via cid:. */
+  inline: EmailFilePart[];
+  /** Everything else, attached for download. */
+  files: EmailFilePart[];
+  totalBytes: number;
+}
+
+/**
+ * Loads this message's stored attachments and their bytes, split into inline
+ * images and downloadable files. Read from storage every time (not cached),
+ * because a retry re-delivers a message whose upload grants are long gone —
+ * the objects under `<ticketId>/<messageId>/…` are the durable copy.
+ *
+ * Throws if an object can't be read: a reply that silently arrives WITHOUT the
+ * photo the agent attached is the failure this feature must not produce, so we
+ * fail the send loudly instead.
+ */
+async function loadOutboundAttachments(
+  admin: ReturnType<typeof createAdminClient>,
+  messageId: string
+): Promise<LoadedOutboundFiles> {
+  const { data: rows, error } = await admin
+    .from("attachments")
+    .select("id, filename, mime_type, storage_path")
+    .eq("message_id", messageId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Could not read the attachment list: ${error.message}`);
+
+  const inline: EmailFilePart[] = [];
+  const files: EmailFilePart[] = [];
+  let totalBytes = 0;
+
+  for (const row of rows ?? []) {
+    const { data: blob, error: dlError } = await admin.storage
+      .from("attachments")
+      .download(row.storage_path as string);
+    if (dlError || !blob) {
+      throw new Error(`Could not read the attached file “${row.filename}”.`);
+    }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    totalBytes += bytes.length;
+    const mimeType = (row.mime_type as string) ?? "application/octet-stream";
+    const filename = row.filename as string;
+    if (isInlineSafe(mimeType)) {
+      inline.push({
+        filename,
+        mimeType,
+        bytes,
+        // uuid-based and namespaced: it can never collide with the signature
+        // logo (which is a URL, not a cid) nor with a Content-ID on a
+        // customer's photo when they quote our message back — the collision
+        // that would let the inbound parser misfile their photo.
+        contentId: `blkatt-${row.id}@blankssportsnutrition.com`,
+      });
+    } else {
+      files.push({ filename, mimeType, bytes });
+    }
+  }
+
+  return { inline, files, totalBytes };
+}
+
 
 /**
  * Where customer replies should land.
@@ -289,11 +357,44 @@ async function deliverLoadedMessage(message: LoadedMessage): Promise<DeliveryRes
       ? { name: agent.name, title: agent.title, phone: agent.phone }
       : null;
 
+  // Attachments the agent added to this reply. Loaded before building so the
+  // HTML can embed the inline images and the size can be checked up front.
+  let outboundFiles: LoadedOutboundFiles;
+  try {
+    outboundFiles = await loadOutboundAttachments(admin, message.id);
+  } catch (e) {
+    return failDelivery(
+      message.id,
+      ticket.id,
+      message.agent_id,
+      e instanceof Error ? e.message : String(e)
+    );
+  }
+
+  // Backstop for the composer's own cap: Gmail rejects an oversized message at
+  // the API, AFTER the agent believes it sent. Refuse before building instead.
+  if (outboundFiles.totalBytes > MAX_OUTBOUND_TOTAL_BYTES) {
+    return failDelivery(
+      message.id,
+      ticket.id,
+      message.agent_id,
+      `Attachments total ${formatBytes(outboundFiles.totalBytes)}, over the ${formatBytes(
+        MAX_OUTBOUND_TOTAL_BYTES
+      )} limit for one email. Send them across separate replies.`
+    );
+  }
+
+  const inlineRefs: InlineImageRef[] = outboundFiles.inline.map((img) => ({
+    contentId: img.contentId!,
+    filename: img.filename,
+  }));
+
   const htmlEmail = renderEmailHtml({
     bodyHtml,
     agent: signatureAgent,
     company,
     quoted,
+    inlineImages: inlineRefs,
   });
   const textEmail = renderEmailText({
     bodyHtml,
@@ -330,6 +431,8 @@ async function deliverLoadedMessage(message: LoadedMessage): Promise<DeliveryRes
     }),
     bodyText: textEmail,
     bodyHtml: htmlEmail,
+    inlineImages: outboundFiles.inline,
+    attachments: outboundFiles.files,
     messageId: rfcMessageId,
     inReplyTo,
     references,

@@ -42,11 +42,16 @@ function readMinted(value: unknown): MintedUpload | null {
  * expected pattern." — which is not something to show a customer.
  */
 export async function requestUploadUrls(
-  files: { name: string; size: number }[]
+  files: { name: string; size: number }[],
+  /**
+   * Which mint endpoint to hit. The public widget uses the default; an agent
+   * attaching to an outbound reply passes the authenticated reply endpoint.
+   */
+  endpoint = "/api/tickets/intake/upload-url"
 ): Promise<MintResult> {
   let response: Response;
   try {
-    response = await fetch("/api/tickets/intake/upload-url", {
+    response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

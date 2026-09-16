@@ -26,6 +26,7 @@ import {
   markTicketNotSpam,
   undoCorrection,
 } from "@/lib/inbound/corrections";
+import { storeOutboundAttachments } from "@/lib/uploads/outbound";
 
 async function requireAgent() {
   const supabase = await createClient();
@@ -55,7 +56,14 @@ export async function sendReply(
   ticketId: string,
   /** HTML from the composer — never trusted, sanitized here before storage. */
   bodyHtml: string,
-  isNote: boolean
+  isNote: boolean,
+  /**
+   * Attachments to send with the reply: freshly-uploaded files (signed grants,
+   * verified/sniffed/stripped on store) and/or attachments already on a ticket
+   * to re-send (referenced by id, copied by bytes). Optional — most replies
+   * have none.
+   */
+  attachments?: { grants?: string[]; reuseIds?: string[] }
 ) {
   const { supabase, userId } = await requireAgent();
 
@@ -126,6 +134,26 @@ export async function sendReply(
     .select("id")
     .single();
   if (error) return { error: error.message };
+
+  // Store attachments BEFORE delivery, so deliverMessage embeds them. Grants
+  // are claimed here (verified, sniffed, EXIF-stripped, fail-closed); reused
+  // ticket attachments are copied by bytes. A file that fails to store does
+  // NOT block the reply text, but the agent is warned — never silently.
+  let attachmentWarning: string | null = null;
+  const hasAttachments =
+    Boolean(attachments) &&
+    ((attachments!.grants?.length ?? 0) > 0 || (attachments!.reuseIds?.length ?? 0) > 0);
+  if (inserted && hasAttachments) {
+    const result = await storeOutboundAttachments(ticketId, inserted.id, {
+      grants: attachments!.grants,
+      reuseAttachmentIds: attachments!.reuseIds,
+    });
+    if (result.failed.length) {
+      attachmentWarning = `${result.failed.length} attachment${
+        result.failed.length === 1 ? "" : "s"
+      } could not be attached (${result.failed.map((f) => f.name).join(", ")}). Your reply was still sent.`;
+    }
+  }
 
   // Send inline: an agent needs to know immediately whether their reply
   // actually left the building.
@@ -229,18 +257,15 @@ export async function sendReply(
 
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
-  // The reply is saved and visible either way, so this is a warning rather
-  // than an error — the draft must be cleared to avoid a duplicate send, but
-  // the agent still needs to know the customer hasn't received it.
-  if (deliveryError) {
-    return {
-      ok: true,
-      claimed,
-      resolved,
-      reassignedFrom,
-      reassignedFromId,
-      warning: `Saved, but the email didn't send: ${deliveryError}`,
-    };
+  // The reply is saved and visible either way, so a failure here is a warning
+  // rather than an error — the draft must be cleared to avoid a duplicate send,
+  // but the agent still needs to know what didn't happen. A send failure and a
+  // dropped attachment are both surfaced, never swallowed.
+  const warning = deliveryError
+    ? `Saved, but the email didn't send: ${deliveryError}`
+    : attachmentWarning;
+  if (warning) {
+    return { ok: true, claimed, resolved, reassignedFrom, reassignedFromId, warning };
   }
   return { ok: true, claimed, resolved, reassignedFrom, reassignedFromId };
 }

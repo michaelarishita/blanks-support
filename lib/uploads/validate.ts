@@ -58,11 +58,15 @@ export type ValidationOutcome =
  * photos and gets a ticket containing two has been told nothing, and will
  * usually not notice until an agent asks about the missing one.
  */
-export function validateUploads(incoming: IncomingFile[]): ValidationOutcome {
-  if (incoming.length > MAX_FILES) {
+export function validateUploads(
+  incoming: IncomingFile[],
+  /** The count ceiling; intake uses MAX_FILES, outbound replies allow more. */
+  maxFiles: number = MAX_FILES
+): ValidationOutcome {
+  if (incoming.length > maxFiles) {
     return {
       ok: false,
-      message: `Please attach at most ${MAX_FILES} files.`,
+      message: `Please attach at most ${maxFiles} files.`,
       rejections: [{ name: `${incoming.length} files`, reason: "too many files" }],
     };
   }
