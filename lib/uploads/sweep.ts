@@ -1,6 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { resolveGrant } from "./ledger";
-import { INTAKE_PREFIX } from "./grant";
+import { INTAKE_PREFIX, OUTBOUND_PREFIX } from "./grant";
 
 /**
  * Deletes intake uploads that were never claimed by a submission.
@@ -63,8 +63,11 @@ export function planFolderSweep({
   const plan: FolderSweepPlan = { remove: [], keep: [], ignored: [] };
 
   for (const folder of folders) {
-    if (folder === INTAKE_PREFIX.replace(/\/$/, "")) {
-      plan.ignored.push({ folder, reason: "intake, swept by age instead" });
+    if (
+      folder === INTAKE_PREFIX.replace(/\/$/, "") ||
+      folder === OUTBOUND_PREFIX.replace(/\/$/, "")
+    ) {
+      plan.ignored.push({ folder, reason: "temp upload prefix, swept by age instead" });
       continue;
     }
     if (!UUID.test(folder)) {
@@ -87,10 +90,27 @@ export async function sweepOrphanedUploads(
   now = Date.now(),
   maxAgeMs = ORPHAN_MAX_AGE_MS
 ): Promise<SweepResult> {
+  // Both temp prefixes: intake/ (customer widget) and outbound/ (an agent who
+  // attached files to a reply and then abandoned it). A claimed upload is
+  // already deleted; this catches the ones that were never sent.
+  const intake = await sweepTempPrefix(INTAKE_PREFIX, now, maxAgeMs);
+  const outbound = await sweepTempPrefix(OUTBOUND_PREFIX, now, maxAgeMs);
+  return {
+    scanned: intake.scanned + outbound.scanned,
+    deleted: intake.deleted + outbound.deleted,
+    error: intake.error ?? outbound.error,
+  };
+}
+
+async function sweepTempPrefix(
+  prefix: string,
+  now: number,
+  maxAgeMs: number
+): Promise<SweepResult> {
   const admin = createAdminClient();
 
   // Trailing slash trimmed: Supabase's list() takes a folder, not a prefix.
-  const folder = INTAKE_PREFIX.replace(/\/$/, "");
+  const folder = prefix.replace(/\/$/, "");
   const { data, error } = await admin.storage
     .from("attachments")
     .list(folder, { limit: MAX_PER_RUN, sortBy: { column: "created_at", order: "asc" } });

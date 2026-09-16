@@ -127,7 +127,9 @@ describe("the composer blocks, but only public replies", () => {
   const box = read("../components/ReplyBox.tsx");
 
   it("disables send when the window is closed", () => {
-    expect(box).toContain("disabled={empty || socialBlocked}");
+    // socialBlocked still gates Send; the condition now also blocks while an
+    // outbound attachment is uploading/failed/over-cap.
+    expect(box).toContain("empty || socialBlocked");
   });
 
   it("still allows an internal note on an unanswerable ticket", () => {

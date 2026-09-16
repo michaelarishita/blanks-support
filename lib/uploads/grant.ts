@@ -35,6 +35,20 @@ export const GRANT_TTL_MS = 60 * 60 * 1000;
  */
 export const INTAKE_PREFIX = "intake/";
 
+/**
+ * Agents attaching files to an OUTBOUND reply upload here. Separate temp prefix
+ * from `intake/` so the two flows are independently sweepable, but the same
+ * grant machinery: the HMAC binds the exact path either way.
+ */
+export const OUTBOUND_PREFIX = "outbound/";
+
+/**
+ * The only prefixes a grant may name. Both are short-lived temp areas we mint
+ * into; a claimed object is deleted, and unclaimed ones are swept. A grant can
+ * never name a long-lived `<ticketId>/<messageId>/…` attachment path.
+ */
+export const TEMP_UPLOAD_PREFIXES = [INTAKE_PREFIX, OUTBOUND_PREFIX];
+
 export interface GrantPayload {
   /** storage path */
   p: string;
@@ -78,9 +92,10 @@ export function verifyUploadGrant(grant: unknown, now = Date.now()): GrantResult
 
   // Belt and braces over the signature. The MAC already covers the path, so
   // this can only fire on a bug at minting time — but "we signed a path
-  // outside the intake prefix" is exactly the bug worth failing loudly on
-  // rather than honouring.
-  if (!payload.p.startsWith(INTAKE_PREFIX) || payload.p.includes("..")) {
+  // outside a temp prefix" is exactly the bug worth failing loudly on rather
+  // than honouring.
+  const inTempPrefix = TEMP_UPLOAD_PREFIXES.some((prefix) => payload.p.startsWith(prefix));
+  if (!inTempPrefix || payload.p.includes("..")) {
     return { ok: false, reason: "malformed" };
   }
 

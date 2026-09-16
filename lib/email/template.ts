@@ -251,11 +251,42 @@ ${inner}
       </tr>`;
 }
 
+/** An image embedded in the body via `cid:`, referencing a related MIME part. */
+export interface InlineImageRef {
+  /** Matches the Content-ID on the MIME part (no angle brackets). */
+  contentId: string;
+  filename: string;
+}
+
+/**
+ * Images the agent attached, embedded at the END of the message body so the
+ * customer sees them without downloading. Placed after the reply and before
+ * the signature/quote. Each references a `multipart/related` part by `cid:`.
+ */
+function renderInlineImages(images: InlineImageRef[]): string {
+  if (!images.length) return "";
+  const imgs = images
+    .map(
+      (img) =>
+        `<img src="cid:${escapeAttribute(img.contentId)}" alt="${escapeAttribute(
+          img.filename
+        )}" style="max-width:100%;height:auto;border-radius:6px;margin:8px 0 0 0;display:block;" />`
+    )
+    .join("\n");
+  return `
+              <tr>
+                <td style="padding:12px 0 0 0;background-color:#ffffff;">
+${imgs}
+                </td>
+              </tr>`;
+}
+
 export function renderEmailHtml({
   bodyHtml,
   agent,
   company,
   quoted,
+  inlineImages = [],
 }: {
   bodyHtml: string;
   /** Null to send without a signature. */
@@ -263,9 +294,12 @@ export function renderEmailHtml({
   company: CompanySettings;
   /** Prior message quoted beneath the reply; omit on a first contact. */
   quoted?: QuotedHistory | null;
+  /** Attached images to embed at the end of the body. */
+  inlineImages?: InlineImageRef[];
 }): string {
   const signature = agent ? renderSignature(agent, company) : "";
   const history = quoted ? renderQuoted(quoted) : "";
+  const inline = renderInlineImages(inlineImages);
 
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -288,7 +322,7 @@ export function renderEmailHtml({
                 <td style="padding:0;background-color:#ffffff;color:${TEXT};font-size:15px;line-height:1.6;">
 ${bodyHtml}
                 </td>
-              </tr>${signature}${history}
+              </tr>${inline}${signature}${history}
             </table>
           </td>
         </tr>

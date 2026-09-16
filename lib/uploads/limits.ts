@@ -14,6 +14,18 @@
 export const MAX_FILES = 3;
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Agents attaching to an outbound reply get a few more slots than a customer,
+ * but the real ceiling is the TOTAL: Gmail caps a message at ~35MB, and base64
+ * inflates the payload by ~33%. Keeping the raw sum under 25MB leaves the
+ * encoded message (~33MB) safely under Gmail's limit. Enforced in the composer
+ * BEFORE the agent writes a word — a reply that fails at the API after they
+ * believe it sent is the failure this feature must not reproduce — and again
+ * on the server as the backstop.
+ */
+export const MAX_OUTBOUND_FILES = 5;
+export const MAX_OUTBOUND_TOTAL_BYTES = 25 * 1024 * 1024;
+
 /** Shown to the customer. Deliberately says what to do, not what went wrong. */
 export const ACCEPTED_DESCRIPTION = "JPEG, PNG, WebP, HEIC or PDF";
 
