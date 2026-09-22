@@ -164,6 +164,26 @@ export async function getGmailMessage(
   )) as GmailMessage;
 }
 
+/**
+ * Fetches headers + snippet WITHOUT the body (format=metadata). Used by the
+ * personal-inbox triage list, where the body is never stored — only the id,
+ * sender, subject, date, and Gmail's own snippet. The body is fetched on demand
+ * with getGmailMessage() and never persisted.
+ */
+export async function getGmailMessageMetadata(
+  accessToken: string,
+  id: string
+): Promise<GmailMessage> {
+  const params = new URLSearchParams({ format: "metadata" });
+  for (const header of ["From", "Subject", "Date", "To"]) {
+    params.append("metadataHeaders", header);
+  }
+  return (await gmailFetch(
+    accessToken,
+    `/messages/${encodeURIComponent(id)}?${params.toString()}`
+  )) as GmailMessage;
+}
+
 export async function getGmailAttachment(
   accessToken: string,
   messageId: string,

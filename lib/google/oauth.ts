@@ -27,6 +27,25 @@ export const SUPPORT_INBOX_SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
 ];
 
+/**
+ * Scopes for the PRIVATE personal-inbox triage (Phase A, Prompt 33).
+ *
+ * gmail.readonly and NOTHING that can write: this grant only ever lists and
+ * reads an agent's OWN inbox, and the promise to the owner is that nothing is
+ * deleted, archived, or modified. readonly cannot mark-read, cannot label,
+ * cannot send — so the read-only promise is enforced by the scope itself, not
+ * only by our code.
+ *
+ * Deliberately SEPARATE from AGENT_SCOPES and stored under its own provider
+ * (`google_personal`), so connecting or disconnecting a personal inbox can
+ * never touch the send-only connection an agent already relies on to reply.
+ */
+export const PERSONAL_INBOX_SCOPES = [
+  "openid",
+  "email",
+  "https://www.googleapis.com/auth/gmail.readonly",
+];
+
 export function googleClientId(): string {
   const id = process.env.GOOGLE_CLIENT_ID;
   if (!id) throw new Error("GOOGLE_CLIENT_ID is not set");

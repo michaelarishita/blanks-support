@@ -332,6 +332,14 @@ const MIGRATIONS: Migration[] = [
       tables: ["spam_corrections", "sender_spam_overrides"],
     },
   },
+  {
+    file: "0027_personal_triage.sql",
+    title: "Personal inbox triage (private, owner-only) — Phase A",
+    requires: {
+      tables: ["personal_messages", "personal_triage_corrections"],
+      indexes: ["personal_messages_owner_date_idx"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

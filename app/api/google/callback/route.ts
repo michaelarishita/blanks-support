@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { verifyState } from "@/lib/crypto";
 import {
+  PERSONAL_INBOX_SCOPES,
   SUPPORT_INBOX_SCOPES,
   exchangeCode,
   fetchGoogleEmail,
@@ -12,6 +13,7 @@ import {
   saveConnection,
   setLastHistoryId,
 } from "@/lib/google/tokens";
+import { savePersonalConnection } from "@/lib/google/personal-tokens";
 import { getGmailProfile } from "@/lib/google/gmail";
 import { STATE_COOKIE } from "../connect/route";
 
@@ -41,9 +43,13 @@ export async function GET(request: NextRequest) {
   const rawState = params.get("state");
   if (!code || !rawState) return back(request, { error: "Malformed response from Google." });
 
-  const state = verifyState<{ n: string; a: string; s: boolean; m?: boolean }>(
-    rawState
-  );
+  const state = verifyState<{
+    n: string;
+    a: string;
+    s: boolean;
+    m?: boolean;
+    p?: boolean;
+  }>(rawState);
   if (!state) return back(request, { error: "Invalid sign-in state. Please try again." });
 
   // CSRF: the nonce in the signed state must match the one we set as a cookie
@@ -88,6 +94,30 @@ export async function GET(request: NextRequest) {
     }
 
     const accountRef = await fetchGoogleEmail(tokens.access_token);
+
+    // Personal-inbox triage (Phase A). A completely separate provider row, so
+    // nothing here can affect the send-only connection. No mismatch check — the
+    // account is deliberately the agent's OWN, whichever they pick — and no
+    // watch cursor, because triage reads on demand rather than syncing.
+    if (state.p) {
+      const missing = PERSONAL_INBOX_SCOPES.filter(
+        (s) => s.startsWith("https://") && !grantedScopes.includes(s)
+      );
+      if (missing.length) {
+        return back(request, {
+          error: "Personal inbox triage needs read access to your Gmail. Please approve it.",
+        });
+      }
+      await savePersonalConnection({
+        agentId: user.id,
+        accountRef,
+        refreshToken: tokens.refresh_token,
+        accessToken: tokens.access_token,
+        expiresInSeconds: tokens.expires_in,
+        scopes: grantedScopes,
+      });
+      return back(request, { personalConnected: accountRef });
+    }
 
     // Connecting the wrong account as the support inbox is silent and total:
     // inbound mail to SUPPORT_EMAIL would simply never be read, with nothing
