@@ -239,6 +239,11 @@ export default function Sidebar({
               <DropdownItem href="/settings" icon={<SettingsIcon />} onClick={close}>
                 Settings
               </DropdownItem>
+              {me?.role === "admin" && (
+                <DropdownItem href="/triage" icon={<SettingsIcon />} onClick={close}>
+                  Personal triage
+                </DropdownItem>
+              )}
               <DropdownSeparator />
               <DropdownItem icon={<LogOutIcon />} onClick={signOut}>
                 Sign out

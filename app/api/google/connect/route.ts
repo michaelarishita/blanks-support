@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { randomNonce, signState } from "@/lib/crypto";
 import {
   AGENT_SCOPES,
+  PERSONAL_INBOX_SCOPES,
   SUPPORT_INBOX_SCOPES,
   buildAuthUrl,
   redirectUri,
@@ -14,6 +15,8 @@ export const STATE_COOKIE = "blanks_g_oauth";
  * Kicks off the Google consent flow.
  *   /api/google/connect                → connect the signed-in agent's own Gmail
  *   /api/google/connect?mode=support   → connect the shared support mailbox (admins)
+ *   /api/google/connect?mode=personal  → connect a PRIVATE personal inbox for
+ *                                         read-only triage (admin-only, Phase A)
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -33,7 +36,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const isSupport = request.nextUrl.searchParams.get("mode") === "support";
+  const mode = request.nextUrl.searchParams.get("mode");
+  const isSupport = mode === "support";
+  const isPersonal = mode === "personal";
   // Set only by the confirm link on the mismatch warning, and carried inside
   // the signed state so it can't be forged by editing the callback URL.
   const allowMismatch =
@@ -46,19 +51,43 @@ export async function GET(request: NextRequest) {
       )
     );
   }
+  // Phase A of personal triage is "me only" — admin-gated. The data is
+  // owner-scoped by RLS regardless, but there is no reason to offer the connect
+  // flow to anyone else while this is a private experiment.
+  if (isPersonal && me.role !== "admin") {
+    return NextResponse.redirect(
+      new URL(
+        "/settings?error=Personal+inbox+triage+is+not+available",
+        request.url
+      )
+    );
+  }
 
   const nonce = randomNonce();
-  const state = signState({ n: nonce, a: user.id, s: isSupport, m: allowMismatch });
+  const state = signState({
+    n: nonce,
+    a: user.id,
+    s: isSupport,
+    m: allowMismatch,
+    p: isPersonal,
+  });
+
+  const scopes = isSupport
+    ? SUPPORT_INBOX_SCOPES
+    : isPersonal
+      ? PERSONAL_INBOX_SCOPES
+      : AGENT_SCOPES;
 
   let authUrl: string;
   try {
     authUrl = buildAuthUrl({
       redirectUri: redirectUri(request.url),
-      scopes: isSupport ? SUPPORT_INBOX_SCOPES : AGENT_SCOPES,
+      scopes,
       state,
       // Nudges Google's account chooser toward the right account. For the
       // support mailbox that's SUPPORT_EMAIL — picking the wrong account here
-      // is the mistake this hint exists to prevent.
+      // is the mistake this hint exists to prevent. For a personal inbox it's
+      // the agent's own address.
       loginHint: isSupport ? process.env.SUPPORT_EMAIL : me.email,
     });
   } catch (e) {
