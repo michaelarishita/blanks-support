@@ -3,78 +3,155 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  setNotificationsEnabled,
+  setNotificationCadence,
+  setDigestHour,
   setWatchNewTickets,
   setWatchUnassignedDigest,
 } from "@/app/(dashboard)/settings/actions";
 import { useToast } from "@/components/ui/Toast";
 
+type Cadence = "immediate" | "daily" | "off";
+
+const CADENCE_LABELS: Record<Cadence, string> = {
+  immediate: "Immediate — email me as each thing happens",
+  daily: "Daily digest — one summary email a day",
+  off: "Off — no notification email",
+};
+
+/** "8:00 AM" from a 0–23 hour. */
+function hourLabel(h: number): string {
+  const period = h < 12 ? "AM" : "PM";
+  const twelve = h % 12 === 0 ? 12 : h % 12;
+  return `${twelve}:00 ${period}`;
+}
+
 export default function NotificationToggle({
-  enabled,
+  cadence,
+  digestHour,
   watchNewTickets,
   watchUnassignedDigest,
 }: {
-  enabled: boolean;
+  cadence: Cadence;
+  digestHour: number;
   watchNewTickets: boolean;
   watchUnassignedDigest: boolean;
 }) {
-  const [on, setOn] = useState(enabled);
+  const [mode, setMode] = useState<Cadence>(cadence);
+  const [hour, setHour] = useState(digestHour);
   const [pending, startTransition] = useTransition();
   const toast = useToast();
   const router = useRouter();
 
-  function toggle(next: boolean) {
-    // Optimistic, and reverted on failure — a checkbox that lags behind the
-    // click feels broken.
-    setOn(next);
+  function choose(next: Cadence) {
+    const previous = mode;
+    setMode(next); // optimistic
     startTransition(async () => {
-      const res = await setNotificationsEnabled(next);
+      const res = await setNotificationCadence(next);
       if (res?.error) {
-        setOn(!next);
+        setMode(previous);
         toast(res.error, { tone: "error" });
         return;
       }
-      toast(next ? "Notifications on" : "Notifications muted", { tone: "success" });
+      toast(
+        next === "immediate"
+          ? "Immediate notifications on"
+          : next === "daily"
+            ? "Switched to a daily digest"
+            : "Notifications off",
+        { tone: "success" }
+      );
+      router.refresh();
+    });
+  }
+
+  function changeHour(next: number) {
+    const previous = hour;
+    setHour(next); // optimistic
+    startTransition(async () => {
+      const res = await setDigestHour(next);
+      if (res?.error) {
+        setHour(previous);
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast(`Digest set for ${hourLabel(next)}`, { tone: "success" });
       router.refresh();
     });
   }
 
   return (
     <div className="space-y-3">
-    <label className="flex cursor-pointer items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={on}
-        disabled={pending}
-        onChange={(e) => toggle(e.target.checked)}
-        className="mt-0.5 h-4 w-4 flex-none accent-brand-500"
-      />
-      <span className="text-body text-secondary">
-        Email me when a ticket is assigned to me
-        <span className="mt-0.5 block text-caption text-tertiary">
-          Muting also stops reminders and escalation chasers. Tickets are still
-          assigned to you either way.
-        </span>
-      </span>
-    </label>
+      <fieldset className="space-y-2">
+        {(Object.keys(CADENCE_LABELS) as Cadence[]).map((value) => (
+          <label key={value} className="flex cursor-pointer items-start gap-2.5">
+            <input
+              type="radio"
+              name="notification-cadence"
+              checked={mode === value}
+              disabled={pending}
+              onChange={() => choose(value)}
+              className="mt-0.5 h-4 w-4 flex-none accent-brand-500"
+            />
+            <span className="text-body text-secondary">{CADENCE_LABELS[value]}</span>
+          </label>
+        ))}
+      </fieldset>
 
-    {/* A SEPARATE preference on purpose. The one above is about YOUR
-        tickets; this is about everyone's. Someone who wants their own
-        assignments but not a firehose of the whole inbox is a perfectly
-        reasonable person, and conflating the two would leave them no way to
-        say so except by muting both. */}
-    <WatchNewTickets initial={watchNewTickets} />
+      {mode === "daily" && (
+        <div className="ml-6 space-y-1">
+          <label className="flex items-center gap-2 text-body text-secondary">
+            Send it at
+            <select
+              value={hour}
+              disabled={pending}
+              onChange={(e) => changeHour(Number(e.target.value))}
+              className="rounded-lg border border-gray-300 px-2 py-1 text-sm"
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>
+                  {hourLabel(h)}
+                </option>
+              ))}
+            </select>
+            <span className="text-caption text-tertiary">Arizona time</span>
+          </label>
+          <p className="text-caption text-tertiary">
+            One email grouped by what needs you: tickets you own that are
+            overdue, tickets awaiting your reply (oldest first), and new
+            unassigned tickets. Nothing is sent on a day with nothing to report.
+            An urgent ticket assigned directly to you still arrives immediately.
+          </p>
+        </div>
+      )}
 
-    {/* The safety net for what the narrowing above leaves out. A Normal
-        ticket nobody claims now arrives in total silence; this is the once-a-
-        day summary rather than a per-ticket mail, because per-ticket mail is
-        exactly what made the old broadcast unreadable. */}
-    <WatchUnassignedDigest initial={watchUnassignedDigest} />
+      {mode === "off" && (
+        <p className="ml-6 text-caption text-tertiary">
+          You&apos;ll get no notification email. Tickets are still assigned to
+          you, and an ignored ticket still escalates to an admin.
+        </p>
+      )}
+
+      <div className="border-t border-gray-100 pt-3">
+        {/* Orthogonal opt-ins. On `daily`/`off` these fold into (or are covered
+            by) the cadence above — the send paths honour the cadence — so they
+            only take effect on `immediate`. */}
+        <WatchNewTickets initial={watchNewTickets} disabledByCadence={mode !== "immediate"} />
+        <WatchUnassignedDigest
+          initial={watchUnassignedDigest}
+          disabledByCadence={mode !== "immediate"}
+        />
+      </div>
     </div>
   );
 }
 
-function WatchUnassignedDigest({ initial }: { initial: boolean }) {
+function WatchUnassignedDigest({
+  initial,
+  disabledByCadence,
+}: {
+  initial: boolean;
+  disabledByCadence: boolean;
+}) {
   const [on, setOn] = useState(initial);
   const [pending, startTransition] = useTransition();
   const toast = useToast();
@@ -97,7 +174,7 @@ function WatchUnassignedDigest({ initial }: { initial: boolean }) {
   }
 
   return (
-    <label className="flex cursor-pointer items-start gap-2.5">
+    <label className="mt-3 flex cursor-pointer items-start gap-2.5">
       <input
         type="checkbox"
         checked={on}
@@ -111,13 +188,20 @@ function WatchUnassignedDigest({ initial }: { initial: boolean }) {
           One email each morning: how many open tickets have nobody assigned,
           the three that have waited longest, and anything past its response
           threshold. Nothing is sent on a day when the queue is empty.
+          {disabledByCadence && " (Included in your daily digest already.)"}
         </span>
       </span>
     </label>
   );
 }
 
-function WatchNewTickets({ initial }: { initial: boolean }) {
+function WatchNewTickets({
+  initial,
+  disabledByCadence,
+}: {
+  initial: boolean;
+  disabledByCadence: boolean;
+}) {
   const [on, setOn] = useState(initial);
   const [pending, startTransition] = useTransition();
   const toast = useToast();
@@ -155,9 +239,10 @@ function WatchNewTickets({ initial }: { initial: boolean }) {
         Email me about every new ticket
         <span className="mt-0.5 block text-caption text-tertiary">
           Off, you still hear about a new High or Urgent ticket that nobody has
-          picked up — the one nobody is acting on yet. On, you get one email per
-          ticket at any priority, whoever it ends up with. Either way, if a rule
-          assigns it to you, you get the assignment email instead — never both.
+          picked up. On, you get one email per ticket at any priority. Either
+          way, if a rule assigns it to you, you get the assignment email
+          instead — never both.
+          {disabledByCadence && " (Only applies on the Immediate cadence.)"}
         </span>
       </span>
     </label>

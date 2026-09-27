@@ -5,6 +5,7 @@ import { sendGmailMessage } from "@/lib/google/gmail";
 import { getCompanySettings, getSettingsBlob, patchSettingsBlob } from "@/lib/settings";
 import { localHour, QUIET_ZONE } from "./policy";
 import { NOTIFICATION_HEADERS } from "./send";
+import { loadNotificationMode } from "./preference";
 import {
   buildUnassignedDigest,
   digestSubject,
@@ -156,6 +157,17 @@ export async function sendUnassignedDigest(
   const bodyText = digestText(digest, site);
 
   for (const watcher of watchers) {
+    // A `daily` agent gets unassigned tickets inside their personal digest, so
+    // sending this too would be two daily emails; `off` gets nothing. Only
+    // `immediate` agents receive the standalone unassigned digest.
+    const mode = await loadNotificationMode(watcher.id as string);
+    if (mode !== "immediate") {
+      result.skipped.push(
+        `${watcher.email}: cadence ${mode} (unassigned folded into digest)`
+      );
+      continue;
+    }
+
     const raw = buildRawEmail({
       fromEmail: connection.account_ref,
       fromName: `${company.company_name} Support`,

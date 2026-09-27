@@ -326,6 +326,58 @@ export async function setWatchUnassignedDigest(
 }
 
 
+/**
+ * The one cadence setting (Prompt 34): immediate / daily / off.
+ *
+ * Writes `notification_frequency`, and keeps the legacy `notifications_enabled`
+ * boolean in sync (off ⇔ false) so anything still reading it agrees. This is
+ * the setting that replaces the old "email me when assigned" checkbox.
+ */
+export async function setNotificationCadence(
+  cadence: "immediate" | "daily" | "off"
+): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+  if (!["immediate", "daily", "off"].includes(cadence)) {
+    return { error: "Unknown cadence." };
+  }
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({
+      notification_frequency: cadence,
+      notifications_enabled: cadence !== "off",
+    })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save that preference.") };
+  }
+
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
+/** The hour (0–23, Arizona time) the daily digest is sent. */
+export async function setDigestHour(hour: number): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+  const h = Math.trunc(hour);
+  if (!Number.isFinite(h) || h < 0 || h > 23) {
+    return { error: "Pick an hour between 0 and 23." };
+  }
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({ digest_hour: h })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save the digest time.") };
+  }
+
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
 /** Opts this agent in or out of the every-new-ticket firehose. */
 export async function setWatchNewTickets(enabled: boolean): Promise<ActionResult> {
   const me = await requireAgent();

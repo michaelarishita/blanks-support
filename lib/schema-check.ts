@@ -340,6 +340,19 @@ const MIGRATIONS: Migration[] = [
       indexes: ["personal_messages_owner_date_idx"],
     },
   },
+  {
+    file: "0028_notification_frequency.sql",
+    title: "Per-agent notification cadence — immediate/daily/off, without which the digest cannot run",
+    requires: {
+      columns: [
+        "agents.notification_frequency",
+        "agents.digest_hour",
+        "agents.digest_last_run_date",
+      ],
+      // The enum value is the half a column probe cannot see.
+      enumValues: { notification_frequency: ["immediate", "daily", "off"] },
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */
