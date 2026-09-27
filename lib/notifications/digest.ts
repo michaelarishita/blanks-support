@@ -21,9 +21,11 @@ import type { TicketPriority } from "@/lib/types";
  *   2. Assigned to you and still unanswered (awaiting) — oldest first.
  *   3. New unassigned tickets — a count, with the oldest few named.
  *
- * If there is nothing to report, it SENDS NOTHING. A daily "all clear" becomes
- * noise within a week, and then the real one is ignored too — the same lesson
- * as the unassigned digest and the system-alert rebuild.
+ * The SCHEDULED digest sends NOTHING when there is nothing to report — a daily
+ * "all clear" becomes noise within a week, and then the real one is ignored
+ * too. The ON-DEMAND test send (sendDigestNow) is the one exception: it always
+ * delivers, so you can confirm the plumbing and see the format even on a quiet
+ * day.
  *
  * Bounded so one bad morning cannot become an unbounded query.
  */
@@ -55,6 +57,9 @@ export interface DigestModel {
   unassignedOldest: DigestLine[];
   hasContent: boolean;
 }
+
+/** 'sent' — an email went out; 'empty' — ran, nothing to report; 'failed'. */
+export type DigestOutcome = "sent" | "empty" | "failed";
 
 function waitHours(t: DigestTicketInput, nowMs: number): number {
   const at = t.lastCustomerMessageAt ?? t.createdAt;
@@ -108,20 +113,25 @@ export function buildDigestModel(
   };
 }
 
-/** Whether this tick should run the digest for an agent — pure, date-keyed. */
+/**
+ * Whether this tick should run the digest for an agent — pure, date-keyed.
+ * `lastRunAt` is the timestamp of the last completed run; the once-per-day
+ * dedup compares its LOCAL DATE against today's.
+ */
 export function digestDue({
   now,
   digestHour,
-  lastRunDate,
+  lastRunAt,
   timeZone = QUIET_ZONE,
 }: {
   now: Date;
   digestHour: number;
-  lastRunDate: string | null;
+  lastRunAt: string | null;
   timeZone?: string;
 }): boolean {
   if (localHour(now, timeZone) < digestHour) return false;
-  return lastRunDate !== localDateKey(now, timeZone);
+  const lastDate = lastRunAt ? localDateKey(new Date(lastRunAt), timeZone) : null;
+  return lastDate !== localDateKey(now, timeZone);
 }
 
 const PRIORITY_TAG: Record<TicketPriority, string> = {
@@ -137,6 +147,7 @@ function line(l: DigestLine): string {
 }
 
 export function digestSubject(model: DigestModel): string {
+  if (!model.hasContent) return "Your support digest — all clear";
   const need = model.overdue.length + model.awaiting.length;
   const parts: string[] = [];
   if (need) parts.push(`${need} awaiting you`);
@@ -145,6 +156,17 @@ export function digestSubject(model: DigestModel): string {
 }
 
 export function digestText(model: DigestModel, site: string): string {
+  if (!model.hasContent) {
+    return [
+      "Nothing needs your attention right now — you're all clear.",
+      "",
+      "(On a normal day the scheduled digest sends nothing when there's nothing",
+      "to report. You're seeing this because you asked for one on demand.)",
+      "",
+      `Open the dashboard: ${site}/inbox`,
+    ].join("\n");
+  }
+
   const out: string[] = ["Here is your once-a-day summary of what needs you.", ""];
 
   if (model.overdue.length) {
@@ -200,6 +222,103 @@ async function lastCustomerByTicket(
   return map;
 }
 
+interface TicketRow {
+  id: string;
+  number: number;
+  subject: string | null;
+  priority: TicketPriority;
+  created_at: string;
+}
+
+async function toInputs(
+  admin: ReturnType<typeof createAdminClient>,
+  rows: TicketRow[]
+): Promise<DigestTicketInput[]> {
+  const last = await lastCustomerByTicket(admin, rows.map((r) => r.id));
+  return rows.map((r) => ({
+    number: r.number,
+    subject: r.subject ?? "",
+    priority: r.priority,
+    createdAt: r.created_at,
+    lastCustomerMessageAt: last.get(r.id) ?? null,
+  }));
+}
+
+/** The unassigned queue — the same for every agent, so read once. */
+async function gatherUnassigned(
+  admin: ReturnType<typeof createAdminClient>
+): Promise<{ tickets: DigestTicketInput[]; error?: string }> {
+  const { data, error } = await admin
+    .from("tickets")
+    .select("id, number, subject, priority, created_at")
+    .is("assignee_id", null)
+    .in("status", STATUSES_AWAITING_AGENT)
+    .limit(MAX_TICKETS);
+  if (error) return { tickets: [], error: error.message };
+  return { tickets: await toInputs(admin, (data ?? []) as TicketRow[]) };
+}
+
+interface DigestAgent {
+  id: string;
+  email: string;
+}
+
+/**
+ * Builds and (unless empty and not forced) sends one agent's digest. Returns
+ * the outcome; the CALLER decides whether to stamp it — the scheduled path
+ * stamps on a completed run, the on-demand test does not touch the schedule.
+ */
+async function sendDigestForAgent(
+  admin: ReturnType<typeof createAdminClient>,
+  agent: DigestAgent,
+  unassigned: DigestTicketInput[],
+  now: Date,
+  connection: Awaited<ReturnType<typeof getSupportInboxConnection>>,
+  companyName: string,
+  site: string,
+  opts: { sendWhenEmpty: boolean }
+): Promise<{ outcome: DigestOutcome; error?: string }> {
+  if (!connection) return { outcome: "failed", error: "no support mailbox connected" };
+
+  const { data: assignedRows, error } = await admin
+    .from("tickets")
+    .select("id, number, subject, priority, created_at")
+    .eq("assignee_id", agent.id)
+    .in("status", STATUSES_AWAITING_AGENT)
+    .limit(MAX_TICKETS);
+  if (error) return { outcome: "failed", error: error.message };
+
+  const assigned = await toInputs(admin, (assignedRows ?? []) as TicketRow[]);
+  const model = buildDigestModel(assigned, unassigned, now.getTime());
+
+  // Scheduled path on a quiet day: send nothing.
+  if (!model.hasContent && !opts.sendWhenEmpty) return { outcome: "empty" };
+
+  const raw = buildRawEmail({
+    fromEmail: connection.account_ref,
+    fromName: `${companyName} Support`,
+    to: agent.email,
+    // Never hello@: replying to a digest must not open a ticket.
+    replyTo: agent.email,
+    subject: digestSubject(model),
+    bodyText: digestText(model, site),
+    bodyHtml: `<pre style="font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:pre-wrap;margin:0">${escapeHtml(digestText(model, site))}</pre>`,
+    messageId: generateMessageId(connection.account_ref),
+    // Never threaded, and never the [⚠️ BLANKS SYSTEM] prefix: an FYI, not an alarm.
+    extraHeaders: { ...NOTIFICATION_HEADERS },
+  });
+
+  try {
+    const accessToken = await getAccessToken(connection.id);
+    await sendGmailMessage(accessToken, { raw });
+    return { outcome: model.hasContent ? "sent" : "empty" };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`[digest] send failed for ${agent.email}:`, message);
+    return { outcome: "failed", error: message };
+  }
+}
+
 /**
  * Runs the daily digest for every `daily` agent whose hour has arrived and who
  * has not had one today. Resilient to 0028 not being applied: if the cadence
@@ -210,14 +329,13 @@ export async function runDailyDigests(
   options: { now?: Date; force?: boolean } = {}
 ): Promise<DailyDigestResult> {
   const now = options.now ?? new Date();
-  const nowMs = now.getTime();
   const result: DailyDigestResult = { considered: 0, sent: 0, empty: 0, skipped: [] };
 
   const admin = createAdminClient();
 
   const { data: agents, error: agentError } = await admin
     .from("agents")
-    .select("id, email, name, display_name, is_active, notification_frequency, digest_hour, digest_last_run_date")
+    .select("id, email, is_active, notification_frequency, digest_hour, digest_last_run_at")
     .eq("notification_frequency", "daily")
     .eq("is_active", true);
   if (agentError) {
@@ -227,112 +345,96 @@ export async function runDailyDigests(
   }
   if (!agents?.length) return result;
 
-  // Shared inputs, read once.
   const connection = await getSupportInboxConnection();
   if (!connection) return { ...result, error: "no support mailbox connected" };
   const company = await getCompanySettings();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
-  // The unassigned set is the same for everyone.
-  const { data: unassignedRows, error: unassignedError } = await admin
-    .from("tickets")
-    .select("id, number, subject, priority, created_at")
-    .is("assignee_id", null)
-    .in("status", STATUSES_AWAITING_AGENT)
-    .limit(MAX_TICKETS);
-  if (unassignedError) return { ...result, error: unassignedError.message };
-  const unassignedLast = await lastCustomerByTicket(
-    admin,
-    (unassignedRows ?? []).map((r) => r.id as string)
-  );
-  const unassigned: DigestTicketInput[] = (unassignedRows ?? []).map((r) => ({
-    number: r.number as number,
-    subject: (r.subject as string) ?? "",
-    priority: r.priority as TicketPriority,
-    createdAt: r.created_at as string,
-    lastCustomerMessageAt: unassignedLast.get(r.id as string) ?? null,
-  }));
+  const unassigned = await gatherUnassigned(admin);
+  if (unassigned.error) return { ...result, error: unassigned.error };
 
   for (const agent of agents) {
     const digestHour = (agent.digest_hour as number | null) ?? 8;
-    const lastRun = (agent.digest_last_run_date as string | null) ?? null;
-    if (!options.force && !digestDue({ now, digestHour, lastRunDate: lastRun })) {
-      continue;
-    }
+    const lastRunAt = (agent.digest_last_run_at as string | null) ?? null;
+    if (!options.force && !digestDue({ now, digestHour, lastRunAt })) continue;
     result.considered++;
 
-    const { data: assignedRows, error: assignedError } = await admin
-      .from("tickets")
-      .select("id, number, subject, priority, created_at")
-      .eq("assignee_id", agent.id)
-      .in("status", STATUSES_AWAITING_AGENT)
-      .limit(MAX_TICKETS);
-    if (assignedError) {
-      result.skipped.push(`${agent.email}: ${assignedError.message}`);
-      continue;
-    }
-    const assignedLast = await lastCustomerByTicket(
+    const res = await sendDigestForAgent(
       admin,
-      (assignedRows ?? []).map((r) => r.id as string)
+      { id: agent.id as string, email: agent.email as string },
+      unassigned.tickets,
+      now,
+      connection,
+      company.company_name,
+      site,
+      { sendWhenEmpty: false }
     );
-    const assigned: DigestTicketInput[] = (assignedRows ?? []).map((r) => ({
-      number: r.number as number,
-      subject: (r.subject as string) ?? "",
-      priority: r.priority as TicketPriority,
-      createdAt: r.created_at as string,
-      lastCustomerMessageAt: assignedLast.get(r.id as string) ?? null,
-    }));
 
-    const model = buildDigestModel(assigned, unassigned, nowMs);
-
-    // Nothing to report: send NOTHING, but stamp the date so this counts as
-    // today's (single) consideration and we don't re-run all day.
-    if (!model.hasContent) {
-      await stampRun(admin, agent.id as string, now);
-      result.empty++;
+    if (res.outcome === "failed") {
+      // Don't stamp — retry on the next tick.
+      result.skipped.push(`${agent.email}: ${res.error}`);
       continue;
     }
-
-    const raw = buildRawEmail({
-      fromEmail: connection.account_ref,
-      fromName: `${company.company_name} Support`,
-      to: agent.email as string,
-      // Never hello@: replying to a digest must not open a ticket.
-      replyTo: agent.email as string,
-      subject: digestSubject(model),
-      bodyText: digestText(model, site),
-      bodyHtml: `<pre style="font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:pre-wrap;margin:0">${escapeHtml(digestText(model, site))}</pre>`,
-      messageId: generateMessageId(connection.account_ref),
-      // Never threaded, and never the [⚠️ BLANKS SYSTEM] prefix: this is an
-      // FYI, not an alarm.
-      extraHeaders: { ...NOTIFICATION_HEADERS },
-    });
-
-    try {
-      const accessToken = await getAccessToken(connection.id);
-      await sendGmailMessage(accessToken, { raw });
-      // Stamp only AFTER a successful send, so a failed morning retries on the
-      // next tick rather than being counted as done.
-      await stampRun(admin, agent.id as string, now);
-      result.sent++;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.error(`[digest] send failed for ${agent.email}:`, message);
-      result.skipped.push(`${agent.email}: ${message}`);
-    }
+    // Stamp only a COMPLETED run (sent or empty), so a quiet day is recorded as
+    // "ran, nothing to report" and a failure retries.
+    await stampRun(admin, agent.id as string, now, res.outcome);
+    if (res.outcome === "sent") result.sent++;
+    else result.empty++;
   }
 
   return result;
 }
 
+/**
+ * Sends ONE agent their digest right now, on demand, regardless of hour or
+ * whether it already ran today — and ALWAYS delivers (even on a quiet day) so
+ * the plumbing and the format can be confirmed. Does NOT touch the scheduled
+ * last-run tracking: this is a preview, not the daily run.
+ */
+export async function sendDigestNow(
+  agentId: string,
+  options: { now?: Date } = {}
+): Promise<{ outcome: DigestOutcome; error?: string }> {
+  const now = options.now ?? new Date();
+  const admin = createAdminClient();
+
+  const { data: agent, error } = await admin
+    .from("agents")
+    .select("id, email, is_active")
+    .eq("id", agentId)
+    .maybeSingle();
+  if (error) return { outcome: "failed", error: error.message };
+  if (!agent) return { outcome: "failed", error: "agent not found" };
+
+  const connection = await getSupportInboxConnection();
+  if (!connection) return { outcome: "failed", error: "no support mailbox connected" };
+  const company = await getCompanySettings();
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  const unassigned = await gatherUnassigned(admin);
+  if (unassigned.error) return { outcome: "failed", error: unassigned.error };
+
+  return sendDigestForAgent(
+    admin,
+    { id: agent.id as string, email: agent.email as string },
+    unassigned.tickets,
+    now,
+    connection,
+    company.company_name,
+    site,
+    { sendWhenEmpty: true }
+  );
+}
+
 async function stampRun(
   admin: ReturnType<typeof createAdminClient>,
   agentId: string,
-  now: Date
+  now: Date,
+  outcome: "sent" | "empty"
 ): Promise<void> {
   await admin
     .from("agents")
-    .update({ digest_last_run_date: localDateKey(now) })
+    .update({ digest_last_run_at: now.toISOString(), digest_last_outcome: outcome })
     .eq("id", agentId);
 }
 

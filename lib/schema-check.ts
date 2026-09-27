@@ -347,7 +347,8 @@ const MIGRATIONS: Migration[] = [
       columns: [
         "agents.notification_frequency",
         "agents.digest_hour",
-        "agents.digest_last_run_date",
+        "agents.digest_last_run_at",
+        "agents.digest_last_outcome",
       ],
       // The enum value is the half a column probe cannot see.
       enumValues: { notification_frequency: ["immediate", "daily", "off"] },

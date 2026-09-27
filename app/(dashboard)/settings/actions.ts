@@ -357,6 +357,26 @@ export async function setNotificationCadence(
   return { ok: true };
 }
 
+/**
+ * Sends the caller their digest RIGHT NOW, on demand — regardless of hour or
+ * whether it already ran today, and always delivers (even on a quiet day) so
+ * the plumbing and format can be confirmed. Does not touch the scheduled
+ * last-run tracking.
+ */
+export async function sendTestDigest(): Promise<
+  ActionResult & { outcome?: "sent" | "empty" | "failed" }
+> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const { sendDigestNow } = await import("@/lib/notifications/digest");
+  const res = await sendDigestNow(me.id);
+  if (res.outcome === "failed") {
+    return { error: res.error ?? "Could not send the digest." };
+  }
+  return { ok: true, outcome: res.outcome };
+}
+
 /** The hour (0–23, Arizona time) the daily digest is sent. */
 export async function setDigestHour(hour: number): Promise<ActionResult> {
   const me = await requireAgent();

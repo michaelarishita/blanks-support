@@ -82,24 +82,36 @@ describe("digestDue — hour gate then once-per-local-date", () => {
   it("does not fire before the chosen hour", () => {
     // 13:00Z ≈ 06:00 Phoenix (UTC-7), before an 8am digest hour.
     expect(
-      digestDue({ now: at("2026-09-27T13:00:00Z"), digestHour: 8, lastRunDate: null })
+      digestDue({ now: at("2026-09-27T13:00:00Z"), digestHour: 8, lastRunAt: null })
     ).toBe(false);
   });
 
   it("fires once the hour is reached and not yet run today", () => {
     // 16:00Z ≈ 09:00 Phoenix.
     expect(
-      digestDue({ now: at("2026-09-27T16:00:00Z"), digestHour: 8, lastRunDate: null })
+      digestDue({ now: at("2026-09-27T16:00:00Z"), digestHour: 8, lastRunAt: null })
     ).toBe(true);
   });
 
   it("does not fire twice on the same local date", () => {
+    // Last run earlier today (15:00Z ≈ 08:00 Phoenix, same local date as now).
     expect(
       digestDue({
         now: at("2026-09-27T16:00:00Z"),
         digestHour: 8,
-        lastRunDate: "2026-09-27",
+        lastRunAt: "2026-09-27T15:00:00Z",
       })
     ).toBe(false);
+  });
+
+  it("fires again the next local day even though a run exists", () => {
+    // Yesterday's run must not suppress today's.
+    expect(
+      digestDue({
+        now: at("2026-09-28T16:00:00Z"),
+        digestHour: 8,
+        lastRunAt: "2026-09-27T15:00:00Z",
+      })
+    ).toBe(true);
   });
 });

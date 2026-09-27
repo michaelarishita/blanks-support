@@ -55,18 +55,27 @@ export default async function SettingsPage({
   let cadence: "immediate" | "daily" | "off" =
     me?.notifications_enabled === false ? "off" : "immediate";
   let digestHour = 8;
+  let digestLastRunAt: string | null = null;
+  let digestLastOutcome: "sent" | "empty" | null = null;
   {
     const cadenceRes = await supabase
       .from("agents")
-      .select("notification_frequency, digest_hour")
+      .select("notification_frequency, digest_hour, digest_last_run_at, digest_last_outcome")
       .eq("id", user.id)
       .maybeSingle();
     const row = cadenceRes.data as
-      | { notification_frequency?: "immediate" | "daily" | "off" | null; digest_hour?: number | null }
+      | {
+          notification_frequency?: "immediate" | "daily" | "off" | null;
+          digest_hour?: number | null;
+          digest_last_run_at?: string | null;
+          digest_last_outcome?: "sent" | "empty" | null;
+        }
       | null;
     if (!cadenceRes.error && row) {
       if (row.notification_frequency) cadence = row.notification_frequency;
       if (typeof row.digest_hour === "number") digestHour = row.digest_hour;
+      digestLastRunAt = row.digest_last_run_at ?? null;
+      digestLastOutcome = row.digest_last_outcome ?? null;
     }
   }
 
@@ -250,6 +259,8 @@ export default async function SettingsPage({
         <NotificationToggle
           cadence={cadence}
           digestHour={digestHour}
+          digestLastRunAt={digestLastRunAt}
+          digestLastOutcome={digestLastOutcome}
           watchNewTickets={me?.watch_new_tickets === true}
           watchUnassignedDigest={me?.watch_unassigned_digest === true}
         />

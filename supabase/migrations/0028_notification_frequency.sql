@@ -45,12 +45,29 @@ do $$ begin
   end if;
 end $$;
 
--- Local date key (YYYY-MM-DD) of the last digest RUN for this agent — set once
--- the digest hour is reached and the digest is either sent or found empty, so a
--- missed cron tick catches up rather than skipping the day, and an empty
--- morning doesn't make the next one look overdue.
+-- When the daily digest last COMPLETED a run for this agent, and how it ended:
+--   'sent'  — an email went out (there was something to report)
+--   'empty' — it ran and there was nothing to report (a quiet day)
+-- Together these make a STOPPED digest distinguishable from a quiet day, which
+-- is the whole point: a recent timestamp with 'empty' is a quiet day; an old
+-- timestamp is a digest that has stopped. Stamped only on a completed run, so a
+-- failed send retries on the next tick rather than showing as done — and shown
+-- in Settings. The date dedup (once per local day) is derived from the
+-- timestamp, so no separate date column is needed.
 alter table agents
-  add column if not exists digest_last_run_date text;
+  add column if not exists digest_last_run_at timestamptz;
+alter table agents
+  add column if not exists digest_last_outcome text;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'agents_digest_outcome_valid'
+  ) then
+    alter table agents
+      add constraint agents_digest_outcome_valid
+      check (digest_last_outcome is null or digest_last_outcome in ('sent', 'empty'));
+  end if;
+end $$;
 
 -- Backfill so NOBODY's cadence changes silently: whatever they have today is
 -- what they keep. notifications off -> 'off', otherwise 'immediate'.

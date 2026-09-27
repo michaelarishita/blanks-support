@@ -7,10 +7,24 @@ import {
   setDigestHour,
   setWatchNewTickets,
   setWatchUnassignedDigest,
+  sendTestDigest,
 } from "@/app/(dashboard)/settings/actions";
 import { useToast } from "@/components/ui/Toast";
 
 type Cadence = "immediate" | "daily" | "off";
+
+/** "just now" / "3h ago" / "Sep 27" — enough to spot a digest that has stopped. */
+function relativeTime(iso: string | null): string {
+  if (!iso) return "never";
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "never";
+  const mins = Math.round((Date.now() - then) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return new Date(then).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 const CADENCE_LABELS: Record<Cadence, string> = {
   immediate: "Immediate — email me as each thing happens",
@@ -28,19 +42,41 @@ function hourLabel(h: number): string {
 export default function NotificationToggle({
   cadence,
   digestHour,
+  digestLastRunAt,
+  digestLastOutcome,
   watchNewTickets,
   watchUnassignedDigest,
 }: {
   cadence: Cadence;
   digestHour: number;
+  digestLastRunAt: string | null;
+  digestLastOutcome: "sent" | "empty" | null;
   watchNewTickets: boolean;
   watchUnassignedDigest: boolean;
 }) {
   const [mode, setMode] = useState<Cadence>(cadence);
   const [hour, setHour] = useState(digestHour);
   const [pending, startTransition] = useTransition();
+  const [sending, startSend] = useTransition();
   const toast = useToast();
   const router = useRouter();
+
+  function sendNow() {
+    startSend(async () => {
+      const res = await sendTestDigest();
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toast(
+        res.outcome === "empty"
+          ? "Sent — nothing needs you right now, so it's an 'all clear'"
+          : "Digest sent — check your inbox",
+        { tone: "success" }
+      );
+      router.refresh();
+    });
+  }
 
   function choose(next: Cadence) {
     const previous = mode;
@@ -121,6 +157,30 @@ export default function NotificationToggle({
             unassigned tickets. Nothing is sent on a day with nothing to report.
             An urgent ticket assigned directly to you still arrives immediately.
           </p>
+
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <button
+              type="button"
+              onClick={sendNow}
+              disabled={sending}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-caption font-semibold text-secondary hover:bg-gray-50 disabled:opacity-50"
+            >
+              {sending ? "Sending…" : "Send me one now"}
+            </button>
+            <span className="text-caption text-tertiary">
+              {/* A stopped digest must look different from a quiet day: a recent
+                  time with "nothing to report" is quiet; an old time is stopped. */}
+              Last scheduled digest:{" "}
+              {digestLastRunAt ? (
+                <span className="text-secondary">
+                  {relativeTime(digestLastRunAt)} —{" "}
+                  {digestLastOutcome === "empty" ? "nothing to report" : "sent"}
+                </span>
+              ) : (
+                <span className="text-secondary">not yet</span>
+              )}
+            </span>
+          </div>
         </div>
       )}
 
