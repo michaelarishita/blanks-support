@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import {
   assignTicket,
+  blockSenderForTicket,
   markAsSpam,
   markNotSpam,
   setStatus,
@@ -98,6 +99,16 @@ export default function TicketHeader({
       }
       toast("Marked as spam · moved to Junk", {
         tone: "success",
+        duration: 12000,
+        // "Never ticket this sender again" — the deliberate second click, not
+        // applied by junking itself.
+        secondaryAction: {
+          label: "Block sender",
+          onClick: () =>
+            startTransition(async () => {
+              await blockSenderForTicket(ticket.id);
+            }),
+        },
         action: res.correctionId
           ? {
               label: "Undo",

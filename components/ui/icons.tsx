@@ -277,3 +277,12 @@ export const ListNumberedIcon = (p: IconProps) => (
     <path d="M2 2.9h1v2.6M1.9 8.1h1.9L1.9 10.4h2M1.9 11.4h2l-1.4 1.1 1.4 1.1h-2" strokeWidth={1.2} />
   </Icon>
 );
+
+// A "no entry" circle — spam / block the sender. Not a trash can: junk is
+// reversible and keeps the record, so a delete glyph would misdescribe it.
+export const BanIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M3.8 3.8l8.4 8.4" />
+  </Icon>
+);

@@ -23,10 +23,25 @@ import { CheckIcon, UserIcon } from "@/components/ui/icons";
  * click away in the ticket, and a mouse "swipe" is a drag nobody would guess
  * at. Nothing here is the ONLY way to reach an action.
  */
+/**
+ * A long, stationary hold — the mobile gesture for junk and multi-select.
+ *
+ * Junking by accident is worse than an accidental resolve or claim, so junk is
+ * deliberately NOT a swipe direction: a third direction would crowd the two
+ * that exist and lower the bar for firing them. A hold is the opposite of a
+ * flick — it cannot happen while scrolling, and it takes a held half-second —
+ * so it biases hard against the misfire. It opens a menu rather than acting
+ * directly, which is a second deliberate tap on top of the hold.
+ */
+const LONG_PRESS_MS = 500;
+/** Any finger travel past this cancels the hold — it was a swipe or a scroll. */
+const LONG_PRESS_SLOP_PX = 10;
+
 export default function SwipeRow({
   children,
   onResolve,
   onClaim,
+  onLongPress,
   canResolve,
   canClaim,
   label,
@@ -34,6 +49,8 @@ export default function SwipeRow({
   children: ReactNode;
   onResolve: () => void;
   onClaim: () => void;
+  /** A held press (for the junk / select menu). Omitted → no hold is armed. */
+  onLongPress?: () => void;
   /** Already resolved? Then the left swipe is inert rather than confusing. */
   canResolve: boolean;
   /** Already owned by this agent? Then so is the right one. */
@@ -44,12 +61,24 @@ export default function SwipeRow({
   const [settling, setSettling] = useState(false);
   const start = useRef<{ x: number; y: number } | null>(null);
   const engaged = useRef(false);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set the instant a hold fires, read by onClickCapture to swallow the tap the
+  // browser synthesises on release so the row does not also navigate.
+  const heldFired = useRef(false);
 
   const intent: SwipeIntent = intentFor(offset);
   const allowed =
     intent === "resolve" ? canResolve : intent === "claim" ? canClaim : true;
 
+  function clearHold() {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  }
+
   function reset() {
+    clearHold();
     setSettling(true);
     setOffset(0);
     start.current = null;
@@ -96,6 +125,15 @@ export default function SwipeRow({
           settling && "transition-transform duration-panel ease-out"
         )}
         style={{ transform: `translateX(${offset}px)` }}
+        onClickCapture={(event) => {
+          // Swallow the click the browser fires after a hold, so the row's
+          // navigation overlay doesn't open the ticket the menu is about.
+          if (heldFired.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            heldFired.current = false;
+          }
+        }}
         onTouchStart={(event) => {
           const touch = event.touches[0];
           // The left edge belongs to the navigation drawer. Without this the
@@ -109,12 +147,28 @@ export default function SwipeRow({
           }
           start.current = { x: touch.clientX, y: touch.clientY };
           engaged.current = false;
+          heldFired.current = false;
+          // Arm the hold. It is cancelled by any real movement below, so only a
+          // stationary press survives to fire.
+          if (onLongPress) {
+            clearHold();
+            holdTimer.current = setTimeout(() => {
+              heldFired.current = true;
+              holdTimer.current = null;
+              onLongPress();
+            }, LONG_PRESS_MS);
+          }
         }}
         onTouchMove={(event) => {
           if (!start.current) return;
           const touch = event.touches[0];
           const dx = touch.clientX - start.current.x;
           const dy = touch.clientY - start.current.y;
+
+          // Any travel means this is a swipe or a scroll, not a hold.
+          if (Math.abs(dx) > LONG_PRESS_SLOP_PX || Math.abs(dy) > LONG_PRESS_SLOP_PX) {
+            clearHold();
+          }
 
           if (!engaged.current) {
             // Undecided until the gesture proves itself horizontal, so a
@@ -125,6 +179,13 @@ export default function SwipeRow({
           setOffset(travelFor(dx));
         }}
         onTouchEnd={() => {
+          clearHold();
+          // A hold already did its thing; don't also treat the release as a tap
+          // or a swipe.
+          if (heldFired.current) {
+            reset();
+            return;
+          }
           if (!engaged.current) {
             reset();
             return;

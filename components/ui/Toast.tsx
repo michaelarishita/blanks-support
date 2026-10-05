@@ -21,6 +21,12 @@ export interface ToastOptions {
   /** Label + handler for a single inline action, e.g. Undo. */
   action?: { label: string; onClick: () => void };
   /**
+   * A second inline action, e.g. "Block sender" beside "Undo". Deliberately
+   * kept separate from `action` so the primary (usually Undo) always reads the
+   * same way, and a toast with neither stays simple.
+   */
+  secondaryAction?: { label: string; onClick: () => void };
+  /**
    * Optional navigation alongside the action — used when a toast outlives the
    * page that raised it, so there's still a way back to what it refers to.
    */
@@ -33,6 +39,7 @@ interface ToastRecord extends Required<Pick<ToastOptions, "tone">> {
   id: number;
   message: string;
   action?: ToastOptions["action"];
+  secondaryAction?: ToastOptions["secondaryAction"];
   link?: ToastOptions["link"];
 }
 
@@ -66,14 +73,25 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       setToasts((current) => [
         // Cap the stack so a burst of realtime updates can't cover the screen.
         ...current.slice(-2),
-        { id, message, tone, action: options.action, link: options.link },
+        {
+          id,
+          message,
+          tone,
+          action: options.action,
+          secondaryAction: options.secondaryAction,
+          link: options.link,
+        },
       ]);
 
       // A toast carrying navigation is one the reader has to act on, so it
       // stays put longer than a simple confirmation.
       const duration =
         options.duration ??
-        (tone === "error" ? 7000 : options.link || options.action ? 8000 : 4000);
+        (tone === "error"
+          ? 7000
+          : options.link || options.action || options.secondaryAction
+            ? 8000
+            : 4000);
       timers.current.set(
         id,
         setTimeout(() => dismiss(id), duration)
@@ -131,6 +149,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               >
                 {t.link.label}
               </Link>
+            )}
+            {t.secondaryAction && (
+              <button
+                type="button"
+                onClick={() => {
+                  t.secondaryAction?.onClick();
+                  dismiss(t.id);
+                }}
+                className="flex-none rounded-sm px-2 py-1 text-label font-semibold text-gray-300 transition-colors duration-micro ease-out hover:bg-white/10 hover:text-white"
+              >
+                {t.secondaryAction.label}
+              </button>
             )}
             {t.action && (
               <button

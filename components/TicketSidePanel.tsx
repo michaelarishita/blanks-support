@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState, useTransition, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import {
+  blockSenderForTicket,
   markAsSpam,
   markNotSpam,
   setPriority,
@@ -164,10 +165,15 @@ export default function TicketSidePanel({
     });
   }
 
-  /** A correction, with the Undo the prompt requires attached to its toast. */
+  /**
+   * A correction, with the Undo the prompt requires attached to its toast.
+   * `secondary` carries the deliberate "Block sender" offer for the spam
+   * direction — junking no longer blocks the sender on its own.
+   */
   function correct(
     fn: () => Promise<ActionResult & { correctionId?: string }>,
-    success: string
+    success: string,
+    secondary?: { label: string; onClick: () => Promise<unknown> }
   ) {
     startTransition(async () => {
       const res = await fn();
@@ -177,6 +183,13 @@ export default function TicketSidePanel({
       }
       toast(success, {
         tone: "success",
+        duration: 12000,
+        secondaryAction: secondary
+          ? {
+              label: secondary.label,
+              onClick: () => startTransition(async () => void (await secondary.onClick())),
+            }
+          : undefined,
         action: res.correctionId
           ? {
               label: "Undo",
@@ -321,7 +334,14 @@ export default function TicketSidePanel({
             <button
               disabled={pending}
               onClick={() =>
-                correct(() => markAsSpam(ticket.id), "Marked as spam · moved to Junk")
+                correct(
+                  () => markAsSpam(ticket.id),
+                  "Marked as spam · moved to Junk",
+                  {
+                    label: "Block sender",
+                    onClick: () => blockSenderForTicket(ticket.id),
+                  }
+                )
               }
               className="mt-2 text-caption text-tertiary underline-offset-2 hover:text-secondary hover:underline disabled:opacity-60"
             >

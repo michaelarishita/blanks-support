@@ -16,9 +16,19 @@ import type { JunkReason } from "@/lib/types";
  * "Not spam" on a junked ticket sends it to the inbox, unassigned. "Mark as
  * spam" on a normal ticket sends it to Junk. BOTH write a spam_corrections row
  * that captures the message, the classifier's verdict AND score at the time,
- * who corrected it and when — the labelled eval set — and BOTH set an immediate
- * per-sender override so the very next message from them is filed the same way
- * without waiting for anyone to change a threshold.
+ * who corrected it and when — the labelled eval set.
+ *
+ * The two directions treat the PER-SENDER OVERRIDE differently, and the
+ * asymmetry is deliberate (Prompt 35):
+ *
+ *   not_spam → ALSO writes a not_spam override immediately. Rescuing a real
+ *              customer to the inbox and then junking their next message would
+ *              be the worst outcome, so this direction stays automatic.
+ *   spam     → does NOT write an override. "Never ticket this sender again" is
+ *              offered as a DELIBERATE second click (blockSenderFromTicket),
+ *              not applied silently — junking fast from the list must not build
+ *              a block list nobody chose, especially for the freemail senders
+ *              who rotate addresses anyway.
  *
  * All writes go through the service-role client: the caller (a server action)
  * has already authorised the agent, and spam_corrections / sender overrides are
@@ -150,12 +160,8 @@ export async function markTicketAsSpam(
   if (error) return { error: error.message };
 
   const correctionId = await recordCorrection(admin, ticketId, agentId, "spam", snapshot);
-  await applyCorrectionOverride(admin, {
-    email: snapshot.fromEmail,
-    label: "spam",
-    ticketId,
-    agentId,
-  });
+  // No per-sender override here — see the module note. Blocking the sender is a
+  // separate, deliberate action (blockSenderFromTicket), offered inline.
   await admin.from("ticket_events").insert({
     ticket_id: ticketId,
     agent_id: agentId,
@@ -163,6 +169,56 @@ export async function markTicketAsSpam(
     detail: { classifier_score: snapshot.score, from: snapshot.fromEmail },
   });
   return { correctionId: correctionId ?? undefined };
+}
+
+/**
+ * "Never ticket this sender again" — the deliberate second click.
+ *
+ * Writes the spam override that `markTicketAsSpam` deliberately does not, so
+ * the next message from this sender (and their domain, where safe) files
+ * straight to Junk. Reversible: `undoCorrection` for the same ticket's spam
+ * correction removes this override by (value, label), so a batch undo cleans up
+ * the block it created.
+ *
+ * Returns the human-readable target that was blocked, for the toast.
+ */
+export async function blockSenderFromTicket(
+  ticketId: string,
+  agentId: string
+): Promise<{ error?: string; blocked?: string }> {
+  const admin = createAdminClient();
+  const { data: ticket } = await admin
+    .from("tickets")
+    .select("id, customer:customers(email)")
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (!ticket) return { error: "Ticket not found." };
+
+  const customer = (
+    Array.isArray(ticket.customer) ? ticket.customer[0] : ticket.customer
+  ) as { email: string | null } | null;
+  const email = customer?.email ?? null;
+
+  const targets = overrideTargetsFor(email);
+  if (!targets.address && !targets.domain) {
+    return { error: "That ticket has no email address to block." };
+  }
+
+  await applyCorrectionOverride(admin, {
+    email,
+    label: "spam",
+    ticketId,
+    agentId,
+  });
+  await admin.from("ticket_events").insert({
+    ticket_id: ticketId,
+    agent_id: agentId,
+    event_type: "sender_blocked",
+    detail: { scope: targets.domain ? "domain" : "address", value: targets.domain ?? targets.address },
+  });
+  // Prefer naming the domain when one was blocked: that is the broader rule and
+  // the one worth telling the agent about.
+  return { blocked: targets.domain ?? targets.address ?? undefined };
 }
 
 /** "Not spam" — a junked ticket to the inbox, unassigned, with a not_spam label. */

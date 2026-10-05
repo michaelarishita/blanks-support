@@ -128,11 +128,25 @@ describe("mobile platform behaviour", () => {
     expect(row).toContain("touch-pan-y-only");
   });
 
-  it("gives both swipe actions an undo", () => {
+  it("gives every destructive list action an undo", () => {
     // The gesture is easy to fire by accident, so being wrong must cost one
-    // tap rather than a conversation.
-    const undos = list.match(/label: "Undo"/g) ?? [];
-    expect(undos.length).toBe(2);
+    // tap rather than a conversation. Undo is centralised in one helper so the
+    // label can't drift between resolve, claim and junk.
+    expect(list).toContain('label: "Undo"');
+    const calls = list.match(/toastWithUndo\(/g) ?? [];
+    // resolve, claim, single junk, bulk junk — at least the two swipe actions.
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps junk off the swipe axis — a hold, not a third direction", () => {
+    // A third swipe direction would crowd resolve/claim and lower the bar for
+    // firing them; junking by accident is the worst of the three, so it is a
+    // deliberate held press instead.
+    expect(row).toContain("onLongPress");
+    expect(row).toContain("LONG_PRESS_MS");
+    const swipe = read("../lib/swipe.ts");
+    expect(swipe).toContain('"none" | "resolve" | "claim"');
+    expect(swipe).not.toContain("junk");
   });
 
   it("goes back through history so list scroll survives", () => {

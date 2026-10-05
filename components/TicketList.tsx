@@ -3,7 +3,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { assignTicket, setStatus } from "@/app/actions";
+import {
+  assignTicket,
+  blockSenderForTicket,
+  blockSendersForTickets,
+  markAsSpam,
+  markManyAsSpam,
+  setStatus,
+  undoSpamCorrection,
+  undoSpamCorrections,
+} from "@/app/actions";
 import SwipeRow from "@/components/SwipeRow";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
@@ -18,8 +27,7 @@ import Badge from "@/components/ui/Badge";
 import ChannelIcon from "@/components/ui/ChannelIcon";
 import EmptyState from "@/components/ui/EmptyState";
 import QueryError from "@/components/QueryError";
-import Tooltip from "@/components/ui/Tooltip";
-import { AlertTriangleIcon, InboxIcon } from "@/components/ui/icons";
+import { AlertTriangleIcon, BanIcon, CheckIcon, InboxIcon, XIcon } from "@/components/ui/icons";
 
 /**
  * Only Urgent and High appear in the list. Normal and Low are the default
@@ -67,6 +75,9 @@ const EMPTY_COPY: Record<string, { title: string; description: string }> = {
   },
 };
 
+/** A ticket can be junked unless it is already there. */
+const canJunkTicket = (t: Ticket) => t.status !== "junk";
+
 export default function TicketList({
   tickets,
   view = "open",
@@ -96,6 +107,13 @@ export default function TicketList({
   const [cursor, setCursor] = useState(-1);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
+  // Multi-select for the bulk junk. A row is selectable only if it can be
+  // junked, so the junk view (every row already junk) stays inert.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selectionActive = selected.size > 0;
+  // The ticket whose long-press menu is open on mobile (null = closed).
+  const [sheetFor, setSheetFor] = useState<Ticket | null>(null);
+
   const move = useCallback(
     (delta: number) => {
       setCursor((current) => {
@@ -110,26 +128,55 @@ export default function TicketList({
     [tickets.length]
   );
 
-  useHotkey("j", useCallback(() => move(1), [move]));
-  useHotkey("k", useCallback(() => move(-1), [move]));
-  useHotkey(
-    "enter",
-    useCallback(() => {
-      const target = tickets[cursor];
-      if (target) router.push(`/tickets/${target.id}${viewSuffix}`);
-    }, [cursor, tickets, router, viewSuffix])
-  );
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
-  // A shorter list after a filter change must not leave the cursor dangling.
-  useEffect(() => {
-    setCursor((c) => (c >= tickets.length ? tickets.length - 1 : c));
-  }, [tickets.length]);
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
 
   /**
-   * Both swipe actions post an undo, and that is what makes a swipe an
-   * acceptable trigger for them: the gesture is easy to fire by accident on a
-   * moving train, so the cost of being wrong has to be one tap.
+   * Every destructive list action posts an undo, and junk also offers the
+   * deliberate "block the sender" as a second button. 12 seconds, matching the
+   * resolve-on-reply decision window: undoing a junk is a decision, not the
+   * reflex an 8-second confirmation assumes.
    */
+  const toastWithUndo = useCallback(
+    (
+      message: string,
+      undo: () => Promise<unknown>,
+      secondary?: { label: string; onClick: () => Promise<unknown> }
+    ) => {
+      toast(message, {
+        tone: "success",
+        duration: 12000,
+        action: {
+          label: "Undo",
+          onClick: () =>
+            startTransition(async () => {
+              await undo();
+              router.refresh();
+            }),
+        },
+        secondaryAction: secondary
+          ? {
+              label: secondary.label,
+              onClick: () =>
+                startTransition(async () => {
+                  await secondary.onClick();
+                  router.refresh();
+                }),
+            }
+          : undefined,
+      });
+    },
+    [toast, router]
+  );
+
   function resolveTicket(ticket: Ticket) {
     const previous = ticket.status;
     startTransition(async () => {
@@ -138,18 +185,7 @@ export default function TicketList({
         toast(res.error, { tone: "error" });
         return;
       }
-      toast(`#${ticket.number} resolved`, {
-        tone: "success",
-        action: {
-          label: "Undo",
-          onClick: () => {
-            startTransition(async () => {
-              await setStatus(ticket.id, previous);
-              router.refresh();
-            });
-          },
-        },
-      });
+      toastWithUndo(`#${ticket.number} resolved`, () => setStatus(ticket.id, previous));
       router.refresh();
     });
   }
@@ -163,21 +199,103 @@ export default function TicketList({
         toast(res.error, { tone: "error" });
         return;
       }
-      toast(`#${ticket.number} is yours`, {
-        tone: "success",
-        action: {
-          label: "Undo",
-          onClick: () => {
-            startTransition(async () => {
-              await assignTicket(ticket.id, previous);
-              router.refresh();
-            });
-          },
-        },
-      });
+      toastWithUndo(`#${ticket.number} is yours`, () => assignTicket(ticket.id, previous));
       router.refresh();
     });
   }
+
+  /**
+   * Junk one ticket. The undo reverses it; the second button offers "never
+   * ticket this sender again" — the block the junk itself deliberately does
+   * NOT apply, so the agent chooses to build the block list rather than having
+   * it grow silently under them.
+   */
+  function junkTicket(ticket: Ticket) {
+    if (!canJunkTicket(ticket)) return;
+    startTransition(async () => {
+      const res = await markAsSpam(ticket.id);
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toastWithUndo(
+        `#${ticket.number} marked as spam`,
+        () => (res.correctionId ? undoSpamCorrection(res.correctionId) : Promise.resolve()),
+        { label: "Block sender", onClick: () => blockSenderForTicket(ticket.id) }
+      );
+      router.refresh();
+    });
+  }
+
+  function bulkJunk() {
+    const ids = [...selected];
+    if (!ids.length) return;
+    startTransition(async () => {
+      const res = await markManyAsSpam(ids);
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      clearSelection();
+      const n = res.correctionIds?.length ?? 0;
+      const base = `${n} marked as spam`;
+      toastWithUndo(
+        res.warning ? `${base} · ${res.warning}` : base,
+        () => undoSpamCorrections(res.correctionIds ?? []),
+        {
+          label: `Block ${n === 1 ? "sender" : `${n} senders`}`,
+          onClick: () => blockSendersForTickets(ids),
+        }
+      );
+      router.refresh();
+    });
+  }
+
+  useHotkey("j", useCallback(() => move(1), [move]));
+  useHotkey("k", useCallback(() => move(-1), [move]));
+  useHotkey(
+    "enter",
+    useCallback(() => {
+      const target = tickets[cursor];
+      if (target) router.push(`/tickets/${target.id}${viewSuffix}`);
+    }, [cursor, tickets, router, viewSuffix])
+  );
+  // `x` selects (Gmail's muscle memory), `!` junks (Gmail's "report spam"), both
+  // on the row under the cursor — so the whole feature is reachable from the
+  // keyboard, not only the mouse.
+  useHotkey(
+    "x",
+    useCallback(() => {
+      const t = tickets[cursor];
+      if (t && canJunkTicket(t)) toggleSelect(t.id);
+    }, [tickets, cursor, toggleSelect])
+  );
+  useHotkey(
+    "!",
+    useCallback(() => {
+      const t = tickets[cursor];
+      if (t && canJunkTicket(t)) junkTicket(t);
+    }, [tickets, cursor]) // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  useHotkey(
+    "escape",
+    useCallback(() => {
+      setSheetFor(null);
+      clearSelection();
+    }, [clearSelection]),
+    { enabled: selectionActive || sheetFor !== null }
+  );
+
+  // A shorter list after a filter change must not leave the cursor dangling,
+  // or keep selecting rows that are no longer on screen.
+  useEffect(() => {
+    setCursor((c) => (c >= tickets.length ? tickets.length - 1 : c));
+    const present = new Set(tickets.map((t) => t.id));
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => present.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [tickets]);
 
   // An error is NOT an empty inbox. Checked before the empty state, because
   // the two are otherwise indistinguishable on screen and one of them is a
@@ -207,6 +325,33 @@ export default function TicketList({
 
   return (
     <div className="overflow-hidden rounded-lg border border-subtle bg-panel shadow-sm">
+      {/* Bulk toolbar: appears the moment anything is selected, sticks to the
+          top of the list so it stays reachable while scrolling a long backlog. */}
+      {selectionActive && (
+        <div className="sticky top-0 z-30 flex items-center gap-2 border-b border-subtle bg-gray-900 px-4 py-2 text-white">
+          <span className="text-caption font-medium">
+            {selected.size} selected
+          </span>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={bulkJunk}
+            className="inline-flex items-center gap-1.5 rounded-sm bg-white/10 px-2.5 py-1 text-caption font-semibold transition-colors duration-micro ease-out hover:bg-white/20"
+          >
+            <BanIcon size={14} />
+            Mark as spam
+          </button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            aria-label="Clear selection"
+            className="rounded-sm p-1 text-gray-300 transition-colors duration-micro ease-out hover:bg-white/10 hover:text-white"
+          >
+            <XIcon size={16} />
+          </button>
+        </div>
+      )}
+
       {tickets.map((t, index) => {
         const status = STATUS_META[t.status];
         // "New" means nobody has picked it up yet — worth pulling the eye.
@@ -216,6 +361,8 @@ export default function TicketList({
         const chip = PRIORITY_CHIP[priority];
         const customerName = customerDisplayName(t.customer);
         const focused = index === cursor;
+        const canJunk = canJunkTicket(t);
+        const isSelected = selected.has(t.id);
 
         return (
           // Stretched-link pattern: the whole row navigates via an absolutely
@@ -228,6 +375,10 @@ export default function TicketList({
             canClaim={Boolean(currentAgentId) && t.assignee_id !== currentAgentId}
             onResolve={() => resolveTicket(t)}
             onClaim={() => claimTicket(t)}
+            // A held press opens the junk/select menu. Armed only when the row
+            // can be junked and nothing is being selected yet; during selection
+            // a plain tap already toggles the row.
+            onLongPress={canJunk && !selectionActive ? () => setSheetFor(t) : undefined}
           >
           <div
             ref={(el) => {
@@ -244,7 +395,8 @@ export default function TicketList({
               "hover:z-10 hover:bg-panel hover:shadow-md",
               // Focus is a ring rather than a left rail, so the left edge is
               // free to carry priority.
-              focused && "z-10 bg-panel shadow-md ring-2 ring-inset ring-brand-400"
+              focused && "z-10 bg-panel shadow-md ring-2 ring-inset ring-brand-400",
+              isSelected && "bg-brand-50"
             )}
           >
             {rail && (
@@ -253,11 +405,49 @@ export default function TicketList({
                 className={cn("absolute inset-y-0 left-0 z-20 w-[3px]", rail)}
               />
             )}
-            <Link
-              href={`/tickets/${t.id}${viewSuffix}`}
-              aria-label={`Open ticket #${t.number}: ${t.subject}`}
-              className="absolute inset-0 z-10"
-            />
+            {/* The overlay: during selection it toggles the row, otherwise it
+                opens the ticket. One or the other, never both. */}
+            {selectionActive ? (
+              <button
+                type="button"
+                aria-label={`${isSelected ? "Deselect" : "Select"} ticket #${t.number}`}
+                aria-pressed={isSelected}
+                onClick={() => canJunk && toggleSelect(t.id)}
+                className="absolute inset-0 z-10"
+              />
+            ) : (
+              <Link
+                href={`/tickets/${t.id}${viewSuffix}`}
+                aria-label={`Open ticket #${t.number}: ${t.subject}`}
+                className="absolute inset-0 z-10"
+              />
+            )}
+
+            {/* Select checkbox. On desktop it reveals on hover/focus so the
+                row stays calm until you reach for it; during selection it is
+                always shown. Hidden entirely for a row that can't be junked. */}
+            {canJunk && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleSelect(t.id);
+                }}
+                aria-label={`${isSelected ? "Deselect" : "Select"} ticket #${t.number}`}
+                aria-pressed={isSelected}
+                className={cn(
+                  "relative z-20 flex h-4 w-4 flex-none items-center justify-center rounded border transition-colors duration-micro ease-out",
+                  selectionActive || focused
+                    ? "flex"
+                    : "hidden sm:group-hover:flex sm:group-focus-within:flex",
+                  isSelected
+                    ? "border-brand-500 bg-brand-500 text-white"
+                    : "border-strong bg-panel text-transparent hover:text-tertiary"
+                )}
+              >
+                <CheckIcon size={12} />
+              </button>
+            )}
 
             <span className="flex w-2 flex-none justify-center">
               {isNew && (
@@ -326,6 +516,29 @@ export default function TicketList({
             </div>
 
             <div className="flex flex-none items-center gap-2.5">
+              {/* Mark-as-spam, reachable without opening the ticket. Desktop
+                  hover/keyboard-focus only: on a phone the held-press menu is
+                  the deliberate path, and an always-visible button here would
+                  be a misfire waiting to happen beside the thumb. */}
+              {canJunk && !selectionActive && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    junkTicket(t);
+                  }}
+                  aria-label={`Mark ticket #${t.number} as spam`}
+                  title="Mark as spam (!)"
+                  className={cn(
+                    "relative z-20 hidden flex-none rounded-sm p-1 text-tertiary transition-colors duration-micro ease-out",
+                    "hover:bg-danger-bg hover:text-danger-text",
+                    "sm:group-hover:block sm:group-focus-within:block",
+                    focused && "sm:block"
+                  )}
+                >
+                  <BanIcon size={15} />
+                </button>
+              )}
               {chip && (
                 <span
                   className={cn(
@@ -382,6 +595,79 @@ export default function TicketList({
           </SwipeRow>
         );
       })}
+
+      {sheetFor && (
+        <MobileRowSheet
+          ticket={sheetFor}
+          onClose={() => setSheetFor(null)}
+          onJunk={() => {
+            junkTicket(sheetFor);
+            setSheetFor(null);
+          }}
+          onSelect={() => {
+            toggleSelect(sheetFor.id);
+            setSheetFor(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The held-press menu on mobile. A sheet, not an inline button: the hold is
+ * the first deliberate step and tapping an item here is the second, which is
+ * the bar junking-by-accident has to clear.
+ */
+function MobileRowSheet({
+  ticket,
+  onClose,
+  onJunk,
+  onSelect,
+}: {
+  ticket: Ticket;
+  onClose: () => void;
+  onJunk: () => void;
+  onSelect: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] sm:hidden" role="dialog" aria-modal="true">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 animate-fade-in bg-gray-950/40"
+      />
+      <div className="absolute inset-x-0 bottom-0 animate-slide-up rounded-t-2xl bg-panel pb-safe-3 pt-2 shadow-lg">
+        <div className="mx-auto mb-1 h-1 w-9 rounded-full bg-gray-300" />
+        <div className="px-4 py-2 text-caption text-tertiary">
+          Ticket #{ticket.number}
+        </div>
+        <button
+          type="button"
+          onClick={onJunk}
+          className="flex w-full items-center gap-3 px-4 py-3 text-body font-medium text-danger-text active:bg-gray-100"
+        >
+          <BanIcon size={18} />
+          Mark as spam
+        </button>
+        <button
+          type="button"
+          onClick={onSelect}
+          className="flex w-full items-center gap-3 px-4 py-3 text-body font-medium text-primary active:bg-gray-100"
+        >
+          <CheckIcon size={18} />
+          Select
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex w-full items-center gap-3 border-t border-subtle px-4 py-3 text-body text-secondary active:bg-gray-100"
+        >
+          <XIcon size={18} />
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

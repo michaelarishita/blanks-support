@@ -22,6 +22,7 @@ import { describeWindow } from "@/lib/meta/window";
 import { humanizePostgresError } from "@/lib/supabase/errors";
 import { normalizeIgnoreValue } from "@/lib/senders/ignored";
 import {
+  blockSenderFromTicket,
   markTicketAsSpam,
   markTicketNotSpam,
   undoCorrection,
@@ -412,6 +413,85 @@ export async function undoSpamCorrection(correctionId: string): Promise<ActionRe
   if (ticketId) revalidatePath(`/tickets/${ticketId}`);
   revalidatePath("/inbox");
   return { ok: true };
+}
+
+/**
+ * "Never ticket this sender again" — the deliberate second click offered when
+ * junking. Blocks nothing on its own path to the inbox; it only writes the
+ * per-sender override so the NEXT message files to Junk.
+ */
+export async function blockSenderForTicket(
+  ticketId: string
+): Promise<ActionResult & { blocked?: string }> {
+  const { userId } = await requireAgent();
+  const { error, blocked } = await blockSenderFromTicket(ticketId, userId);
+  if (error) return { error };
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  revalidatePath("/settings");
+  return { ok: true, blocked };
+}
+
+/**
+ * Bulk "Mark as spam" — clear a backlog in one action. Returns a correction id
+ * per ticket so the one toast can undo the whole batch, and reports partial
+ * failure honestly rather than claiming a clean sweep.
+ */
+export async function markManyAsSpam(
+  ticketIds: string[]
+): Promise<ActionResult & { correctionIds?: string[]; failed?: number }> {
+  const { userId } = await requireAgent();
+  const ids = [...new Set(ticketIds)].filter(Boolean);
+  if (!ids.length) return { error: "Nothing selected." };
+
+  const correctionIds: string[] = [];
+  let failed = 0;
+  for (const id of ids) {
+    const { error, correctionId } = await markTicketAsSpam(id, userId);
+    if (error) {
+      failed++;
+      continue;
+    }
+    if (correctionId) correctionIds.push(correctionId);
+  }
+  revalidatePath("/inbox");
+
+  // A failure is not a skip: say so, so "12 marked" never hides three that
+  // did not move.
+  if (failed && !correctionIds.length) {
+    return { error: `Could not mark ${failed} ticket${failed === 1 ? "" : "s"} as spam.` };
+  }
+  return {
+    ok: true,
+    correctionIds,
+    ...(failed ? { warning: `${failed} could not be marked`, failed } : {}),
+  };
+}
+
+/** Undo a whole batch of corrections — the one Undo behind a bulk junk. */
+export async function undoSpamCorrections(correctionIds: string[]): Promise<ActionResult> {
+  const { userId } = await requireAgent();
+  for (const id of correctionIds) {
+    if (id) await undoCorrection(id, userId);
+  }
+  revalidatePath("/inbox");
+  return { ok: true };
+}
+
+/** Block every selected sender — the deliberate second click behind a bulk junk. */
+export async function blockSendersForTickets(
+  ticketIds: string[]
+): Promise<ActionResult & { blocked?: number }> {
+  const { userId } = await requireAgent();
+  const ids = [...new Set(ticketIds)].filter(Boolean);
+  let blocked = 0;
+  for (const id of ids) {
+    const { error } = await blockSenderFromTicket(id, userId);
+    if (!error) blocked++;
+  }
+  revalidatePath("/inbox");
+  revalidatePath("/settings");
+  return { ok: true, blocked };
 }
 
 export async function assignTicket(ticketId: string, assigneeId: string | null) {
