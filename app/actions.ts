@@ -25,6 +25,7 @@ import {
   blockSenderFromTicket,
   markTicketAsSpam,
   markTicketNotSpam,
+  unblockSenderFromTicket,
   undoCorrection,
 } from "@/lib/inbound/corrections";
 import { storeOutboundAttachments } from "@/lib/uploads/outbound";
@@ -430,6 +431,84 @@ export async function blockSenderForTicket(
   revalidatePath("/inbox");
   revalidatePath("/settings");
   return { ok: true, blocked };
+}
+
+/** Undo a standalone "Block sender" — the Undo on its toast. */
+export async function unblockSenderForTicket(ticketId: string): Promise<ActionResult> {
+  const { userId } = await requireAgent();
+  const { error } = await unblockSenderFromTicket(ticketId, userId);
+  if (error) return { error };
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath("/inbox");
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
+/**
+ * The hover-preview payload for a list row: the opening customer message and
+ * any attachments. Sender, subject and channel are already on the row, so this
+ * fetches only what the list query omits. Read through the agent's client, so
+ * RLS applies — a preview can never show a ticket the agent couldn't open.
+ */
+export interface TicketPreviewData {
+  bodyPreview: string;
+  truncated: boolean;
+  attachments: {
+    id: string;
+    filename: string;
+    mime_type: string | null;
+    size_bytes: number | null;
+  }[];
+}
+
+const PREVIEW_BODY_LIMIT = 600;
+
+export async function getTicketPreview(
+  ticketId: string
+): Promise<ActionResult & { preview?: TicketPreviewData }> {
+  const { supabase } = await requireAgent();
+  const { data, error } = await supabase
+    .from("tickets")
+    .select(
+      "id, messages(id, direction, body_text, created_at, attachments(id, filename, mime_type, size_bytes))"
+    )
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (error) {
+    return { error: humanizePostgresError(error, "Couldn't load that preview.") };
+  }
+  if (!data) return { error: "That ticket could not be found." };
+
+  const messages = [...((data.messages as unknown[]) ?? [])] as {
+    direction: string;
+    body_text: string | null;
+    created_at: string;
+    attachments?: TicketPreviewData["attachments"];
+  }[];
+  messages.sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+  // The opening message is what a spam judgement is actually about — the pitch
+  // is always there, not in a later "thanks". Fall back to the first message of
+  // any direction for the rare inbound-less ticket.
+  const source = messages.find((m) => m.direction === "inbound") ?? messages[0];
+  const cleaned = (source?.body_text ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const truncated = cleaned.length > PREVIEW_BODY_LIMIT;
+
+  const attachments = messages
+    .flatMap((m) => m.attachments ?? [])
+    .slice(0, 12);
+
+  return {
+    ok: true,
+    preview: {
+      bodyPreview: truncated ? cleaned.slice(0, PREVIEW_BODY_LIMIT) : cleaned,
+      truncated,
+      attachments,
+    },
+  };
 }
 
 /**

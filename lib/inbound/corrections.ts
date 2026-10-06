@@ -221,6 +221,47 @@ export async function blockSenderFromTicket(
   return { blocked: targets.domain ?? targets.address ?? undefined };
 }
 
+/**
+ * Undo a standalone "Block sender" — the Undo on its toast.
+ *
+ * Removes the spam override(s) `blockSenderFromTicket` wrote for this ticket's
+ * sender, so their mail reverts to default handling. Scoped to label 'spam'
+ * only, so a separate not_spam rescue on the same sender is left alone. Narrow
+ * to the block's own targets rather than a blanket delete.
+ */
+export async function unblockSenderFromTicket(
+  ticketId: string,
+  agentId: string
+): Promise<{ error?: string; unblocked?: string }> {
+  const admin = createAdminClient();
+  const { data: ticket } = await admin
+    .from("tickets")
+    .select("id, customer:customers(email)")
+    .eq("id", ticketId)
+    .maybeSingle();
+  if (!ticket) return { error: "Ticket not found." };
+
+  const customer = (
+    Array.isArray(ticket.customer) ? ticket.customer[0] : ticket.customer
+  ) as { email: string | null } | null;
+  const targets = overrideTargetsFor(customer?.email ?? null);
+  const values = [targets.address, targets.domain].filter(Boolean) as string[];
+  if (!values.length) return { error: "That ticket has no email address." };
+
+  await admin
+    .from("sender_spam_overrides")
+    .delete()
+    .in("value", values)
+    .eq("label", "spam");
+  await admin.from("ticket_events").insert({
+    ticket_id: ticketId,
+    agent_id: agentId,
+    event_type: "sender_unblocked",
+    detail: { values },
+  });
+  return { unblocked: targets.domain ?? targets.address ?? undefined };
+}
+
 /** "Not spam" — a junked ticket to the inbox, unassigned, with a not_spam label. */
 export async function markTicketNotSpam(
   ticketId: string,

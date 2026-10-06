@@ -3,15 +3,19 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { createPortal } from "react-dom";
 import {
   assignTicket,
   blockSenderForTicket,
   blockSendersForTickets,
+  getTicketPreview,
   markAsSpam,
   markManyAsSpam,
   setStatus,
+  unblockSenderForTicket,
   undoSpamCorrection,
   undoSpamCorrections,
+  type TicketPreviewData,
 } from "@/app/actions";
 import SwipeRow from "@/components/SwipeRow";
 import { useToast } from "@/components/ui/Toast";
@@ -27,7 +31,14 @@ import Badge from "@/components/ui/Badge";
 import ChannelIcon from "@/components/ui/ChannelIcon";
 import EmptyState from "@/components/ui/EmptyState";
 import QueryError from "@/components/QueryError";
-import { AlertTriangleIcon, BanIcon, CheckIcon, InboxIcon, XIcon } from "@/components/ui/icons";
+import {
+  AlertTriangleIcon,
+  BanIcon,
+  CheckIcon,
+  InboxIcon,
+  PaperclipIcon,
+  XIcon,
+} from "@/components/ui/icons";
 
 /**
  * Only Urgent and High appear in the list. Normal and Low are the default
@@ -78,6 +89,12 @@ const EMPTY_COPY: Record<string, { title: string; description: string }> = {
 /** A ticket can be junked unless it is already there. */
 const canJunkTicket = (t: Ticket) => t.status !== "junk";
 
+/** Fetch state for one row's preview, cached per ticket id. */
+type PreviewEntry =
+  | { status: "loading" }
+  | { status: "ready"; data: TicketPreviewData }
+  | { status: "error"; error: string };
+
 export default function TicketList({
   tickets,
   view = "open",
@@ -114,18 +131,129 @@ export default function TicketList({
   // The ticket whose long-press menu is open on mobile (null = closed).
   const [sheetFor, setSheetFor] = useState<Ticket | null>(null);
 
+  // ---- Desktop hover preview (>=1024px only) ----
+  //
+  // The pane follows whichever row is "active" — set by a hovered row (after a
+  // 300ms delay so sweeping the list doesn't strobe) or by the keyboard cursor
+  // (immediately, so arrowing down reads one row after another). Content is
+  // fetched once per row and cached; a row already seen is never re-requested.
+
+  // cursorRef is the synchronous source of truth for keyboard nav, so a burst
+  // of auto-repeat key presses computes the next index correctly instead of off
+  // a cursor state that hasn't re-rendered yet.
+  const cursorRef = useRef(-1);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const previewIdRef = useRef<string | null>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [isDesktop, setIsDesktop] = useState(false);
+  const isDesktopRef = useRef(false);
+
+  const [cache, setCache] = useState<Record<string, PreviewEntry>>({});
+  // Mirror of `cache`, kept in sync so the fetch guard reads the latest without
+  // racing a not-yet-committed render.
+  const cacheRef = useRef<Record<string, PreviewEntry>>({});
+  const writeCache = useCallback((id: string, entry: PreviewEntry) => {
+    cacheRef.current = { ...cacheRef.current, [id]: entry };
+    setCache(cacheRef.current);
+  }, []);
+
+  // Preview only exists on a real desktop pointer; no hover on touch, and the
+  // pane is hidden below 1024px so there is nothing to fetch for.
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const update = () => {
+      isDesktopRef.current = mq.matches;
+      setIsDesktop(mq.matches);
+    };
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    previewIdRef.current = previewId;
+  }, [previewId]);
+
+  const setPreview = useCallback((id: string | null) => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    previewIdRef.current = id;
+    setPreviewId(id);
+  }, []);
+
+  const loadPreview = useCallback(
+    async (id: string) => {
+      if (cacheRef.current[id]) return; // already seen — never re-request
+      writeCache(id, { status: "loading" });
+      const res = await getTicketPreview(id);
+      if (res?.preview) writeCache(id, { status: "ready", data: res.preview });
+      else
+        writeCache(id, {
+          status: "error",
+          error: res?.error ?? "Couldn't load this preview.",
+        });
+    },
+    [writeCache]
+  );
+
+  const retryPreview = useCallback(
+    (id: string) => {
+      const next = { ...cacheRef.current };
+      delete next[id];
+      cacheRef.current = next;
+      setCache(next);
+      void loadPreview(id);
+    },
+    [loadPreview]
+  );
+
+  // Fetch for the active row, debounced, so arrowing or sweeping through rows
+  // only requests the one actually landed on. Cached rows show instantly.
+  useEffect(() => {
+    if (!previewId || !isDesktop) return;
+    if (cacheRef.current[previewId]) return;
+    const id = previewId;
+    const t = setTimeout(() => void loadPreview(id), 180);
+    return () => clearTimeout(t);
+  }, [previewId, isDesktop, loadPreview]);
+
+  useEffect(() => () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+  }, []);
+
+  function onRowHover(index: number) {
+    cursorRef.current = index;
+    setCursor(index);
+    if (!isDesktopRef.current) return;
+    const id = tickets[index]?.id;
+    if (!id) return;
+    if (openTimer.current) clearTimeout(openTimer.current);
+    // Once the pane is open, swapping between rows is immediate — the delay is
+    // only there to stop a sweep from opening it in the first place.
+    if (previewIdRef.current) setPreview(id);
+    else openTimer.current = setTimeout(() => setPreview(id), 300);
+  }
+
+  // Leaving a row cancels a still-pending open; an already-open pane stays, so
+  // the mouse can travel to it to click Mark as spam / Block sender.
+  function onRowLeave() {
+    if (openTimer.current) clearTimeout(openTimer.current);
+  }
+
   const move = useCallback(
     (delta: number) => {
-      setCursor((current) => {
-        const next = Math.min(
-          Math.max(current + delta, 0),
-          Math.max(tickets.length - 1, 0)
-        );
-        rowRefs.current[next]?.scrollIntoView({ block: "nearest" });
-        return next;
-      });
+      const next = Math.min(
+        Math.max(cursorRef.current + delta, 0),
+        Math.max(tickets.length - 1, 0)
+      );
+      cursorRef.current = next;
+      setCursor(next);
+      rowRefs.current[next]?.scrollIntoView({ block: "nearest" });
+      // Keyboard moves the preview too, with no delay — this is the fast path:
+      // arrow down the queue reading each row, ! to junk, no mouse.
+      if (isDesktopRef.current) setPreview(tickets[next]?.id ?? null);
     },
-    [tickets.length]
+    [tickets, setPreview]
   );
 
   const toggleSelect = useCallback((id: string) => {
@@ -251,8 +379,27 @@ export default function TicketList({
     });
   }
 
-  useHotkey("j", useCallback(() => move(1), [move]));
-  useHotkey("k", useCallback(() => move(-1), [move]));
+  /** "Block sender" from the preview — reversible, same as junking. */
+  function blockSender(ticket: Ticket) {
+    startTransition(async () => {
+      const res = await blockSenderForTicket(ticket.id);
+      if (res?.error) {
+        toast(res.error, { tone: "error" });
+        return;
+      }
+      toastWithUndo(
+        res.blocked ? `Blocked ${res.blocked}` : "Sender blocked",
+        () => unblockSenderForTicket(ticket.id)
+      );
+      router.refresh();
+    });
+  }
+
+  // Arrow keys drive the list (and the preview) exactly like j/k — the mouse-
+  // free reading path the preview exists for. preventDefault stops the page
+  // scrolling out from under the cursor.
+  useHotkey(["j", "arrowdown"], useCallback(() => move(1), [move]));
+  useHotkey(["k", "arrowup"], useCallback(() => move(-1), [move]));
   useHotkey(
     "enter",
     useCallback(() => {
@@ -282,20 +429,31 @@ export default function TicketList({
     useCallback(() => {
       setSheetFor(null);
       clearSelection();
-    }, [clearSelection]),
-    { enabled: selectionActive || sheetFor !== null }
+      setPreview(null);
+    }, [clearSelection, setPreview]),
+    { enabled: selectionActive || sheetFor !== null || previewId !== null }
   );
 
   // A shorter list after a filter change must not leave the cursor dangling,
   // or keep selecting rows that are no longer on screen.
   useEffect(() => {
-    setCursor((c) => (c >= tickets.length ? tickets.length - 1 : c));
+    const clamped =
+      cursorRef.current >= tickets.length ? tickets.length - 1 : cursorRef.current;
+    if (clamped !== cursorRef.current) {
+      cursorRef.current = clamped;
+      setCursor(clamped);
+    }
     const present = new Set(tickets.map((t) => t.id));
     setSelected((current) => {
       const next = new Set([...current].filter((id) => present.has(id)));
       return next.size === current.size ? current : next;
     });
-  }, [tickets]);
+    // A junked/moved row that leaves the list takes its preview with it, rather
+    // than leaving a pane pointed at something no longer there.
+    if (previewIdRef.current && !present.has(previewIdRef.current)) {
+      setPreview(null);
+    }
+  }, [tickets, setPreview]);
 
   // An error is NOT an empty inbox. Checked before the empty state, because
   // the two are otherwise indistinguishable on screen and one of them is a
@@ -384,7 +542,8 @@ export default function TicketList({
             ref={(el) => {
               rowRefs.current[index] = el;
             }}
-            onMouseEnter={() => setCursor(index)}
+            onMouseEnter={() => onRowHover(index)}
+            onMouseLeave={onRowLeave}
             className={cn(
               // Taller on a phone: 2.5 units of padding is a comfortable
               // mouse target and a cramped thumb one.
@@ -610,8 +769,177 @@ export default function TicketList({
           }}
         />
       )}
+
+      {/* The hover/keyboard preview. Portalled to the body so an ancestor's
+          transform (the pull-to-refresh wrapper) can't capture position:fixed,
+          and desktop-only via the pane's own lg: gate. */}
+      {isDesktop &&
+        previewId &&
+        (() => {
+          const pt = tickets.find((t) => t.id === previewId);
+          if (!pt) return null;
+          return (
+            <TicketPreviewPane
+              ticket={pt}
+              entry={cache[previewId]}
+              canJunk={canJunkTicket(pt)}
+              onClose={() => setPreview(null)}
+              onJunk={() => junkTicket(pt)}
+              onBlock={() => blockSender(pt)}
+              onRetry={() => retryPreview(pt.id)}
+            />
+          );
+        })()}
     </div>
   );
+}
+
+/**
+ * The preview pane. A quiet reading surface, not a second thread view: sender,
+ * subject, the opening message, attachments, channel — enough to judge spam
+ * without opening the ticket. Portalled to the body and fixed to the right.
+ */
+function TicketPreviewPane({
+  ticket,
+  entry,
+  canJunk,
+  onClose,
+  onJunk,
+  onBlock,
+  onRetry,
+}: {
+  ticket: Ticket;
+  entry: PreviewEntry | undefined;
+  canJunk: boolean;
+  onClose: () => void;
+  onJunk: () => void;
+  onBlock: () => void;
+  onRetry: () => void;
+}) {
+  if (typeof document === "undefined") return null;
+
+  const name = customerDisplayName(ticket.customer);
+  const email = ticket.customer?.email ?? null;
+  const channelLabel = CHANNEL_META[ticket.channel]?.label ?? ticket.channel;
+  // No entry yet (inside the fetch debounce) reads as loading, not as an error
+  // or an empty message.
+  const status = entry?.status ?? "loading";
+
+  const pane = (
+    <aside
+      aria-label={`Preview of ticket #${ticket.number}`}
+      className="fixed right-4 top-20 bottom-4 z-40 hidden w-[360px] flex-col overflow-hidden rounded-lg border border-subtle bg-panel shadow-lg lg:flex"
+    >
+      <div className="flex items-start gap-2 border-b border-subtle px-3.5 py-2.5">
+        <span
+          className="mt-0.5 flex-none text-tertiary"
+          title={channelLabel}
+          aria-label={channelLabel}
+        >
+          <ChannelIcon channel={ticket.channel} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-body font-semibold text-primary">{name}</div>
+          <div className="truncate text-caption text-tertiary">
+            {email ?? `${channelLabel} · no email address`}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close preview"
+          className="-mr-1 flex-none rounded-sm p-1 text-tertiary transition-colors duration-micro ease-out hover:bg-gray-100 hover:text-primary"
+        >
+          <XIcon size={14} />
+        </button>
+      </div>
+
+      <div className="scrollbar-slim min-h-0 flex-1 overflow-y-auto px-3.5 py-3">
+        <div className="text-body font-medium text-primary">{ticket.subject}</div>
+        <div className="mt-0.5 text-[11px] uppercase tracking-wide text-tertiary">
+          {channelLabel} · #{ticket.number}
+        </div>
+
+        <div className="mt-3 border-t border-subtle pt-3">
+          {status === "loading" && (
+            <div className="space-y-2" aria-hidden="true">
+              <div className="h-3 w-full animate-pulse rounded bg-gray-100" />
+              <div className="h-3 w-11/12 animate-pulse rounded bg-gray-100" />
+              <div className="h-3 w-4/5 animate-pulse rounded bg-gray-100" />
+            </div>
+          )}
+
+          {status === "error" && (
+            // A failure says so — never an empty pane that reads as an empty
+            // message.
+            <div className="rounded-md border border-danger-border bg-danger-bg px-3 py-2.5">
+              <div className="flex items-center gap-1.5 text-caption font-medium text-danger-text">
+                <AlertTriangleIcon size={13} />
+                Couldn&rsquo;t load this preview
+              </div>
+              <p className="mt-1 text-caption text-secondary">
+                {entry && entry.status === "error" ? entry.error : ""}
+              </p>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-2 text-caption font-medium text-brand-link underline-offset-2 hover:underline"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          {entry?.status === "ready" &&
+            (entry.data.bodyPreview ? (
+              <p className="whitespace-pre-wrap break-words text-caption leading-relaxed text-secondary">
+                {entry.data.bodyPreview}
+                {entry.data.truncated && "…"}
+              </p>
+            ) : (
+              <p className="text-caption italic text-tertiary">No message text.</p>
+            ))}
+
+          {entry?.status === "ready" && entry.data.attachments.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {entry.data.attachments.map((a) => (
+                <span
+                  key={a.id}
+                  title={a.filename}
+                  className="inline-flex max-w-[150px] items-center gap-1 rounded-sm border border-subtle px-1.5 py-0.5 text-caption text-tertiary"
+                >
+                  <PaperclipIcon size={11} className="flex-none" />
+                  <span className="truncate">{a.filename}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {canJunk && (
+        <div className="flex gap-2 border-t border-subtle px-3.5 py-2.5">
+          <button
+            type="button"
+            onClick={onJunk}
+            className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-caption font-medium text-danger-text transition-colors duration-micro ease-out hover:bg-danger-bg"
+          >
+            <BanIcon size={13} />
+            Mark as spam
+          </button>
+          <button
+            type="button"
+            onClick={onBlock}
+            className="rounded-sm px-2 py-1 text-caption font-medium text-secondary transition-colors duration-micro ease-out hover:bg-gray-100 hover:text-primary"
+          >
+            Block sender
+          </button>
+        </div>
+      )}
+    </aside>
+  );
+
+  return createPortal(pane, document.body);
 }
 
 /**
