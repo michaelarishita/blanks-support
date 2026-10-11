@@ -49,6 +49,36 @@ export default async function SettingsPage({
     .eq("id", user.id)
     .single();
 
+  // The cadence columns arrive with 0028 — read in a SEPARATE query so the whole
+  // Settings page doesn't break in the window between this code deploying and
+  // the migration being applied by hand. Falls back to the legacy boolean.
+  let cadence: "immediate" | "daily" | "off" =
+    me?.notifications_enabled === false ? "off" : "immediate";
+  let digestHour = 8;
+  let digestLastRunAt: string | null = null;
+  let digestLastOutcome: "sent" | "empty" | null = null;
+  {
+    const cadenceRes = await supabase
+      .from("agents")
+      .select("notification_frequency, digest_hour, digest_last_run_at, digest_last_outcome")
+      .eq("id", user.id)
+      .maybeSingle();
+    const row = cadenceRes.data as
+      | {
+          notification_frequency?: "immediate" | "daily" | "off" | null;
+          digest_hour?: number | null;
+          digest_last_run_at?: string | null;
+          digest_last_outcome?: "sent" | "empty" | null;
+        }
+      | null;
+    if (!cadenceRes.error && row) {
+      if (row.notification_frequency) cadence = row.notification_frequency;
+      if (typeof row.digest_hour === "number") digestHour = row.digest_hour;
+      digestLastRunAt = row.digest_last_run_at ?? null;
+      digestLastOutcome = row.digest_last_outcome ?? null;
+    }
+  }
+
   const configured = Boolean(
     process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
   );
@@ -222,11 +252,15 @@ export default async function SettingsPage({
           Notifications
         </h2>
         <p className="mb-4 mt-1 text-sm text-gray-600">
-          Email sent to you when a ticket is assigned, and for the reminders
-          and chasers that follow it.
+          How often we email you: as each thing happens, once a day as a
+          digest, or not at all. Covers assignments, reminders, and escalation
+          chasers.
         </p>
         <NotificationToggle
-          enabled={me?.notifications_enabled !== false}
+          cadence={cadence}
+          digestHour={digestHour}
+          digestLastRunAt={digestLastRunAt}
+          digestLastOutcome={digestLastOutcome}
           watchNewTickets={me?.watch_new_tickets === true}
           watchUnassignedDigest={me?.watch_unassigned_digest === true}
         />

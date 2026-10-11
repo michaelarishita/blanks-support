@@ -26,6 +26,7 @@ import {
   selectNewTicketRecipients,
   type WatcherCandidate,
 } from "./watchers";
+import { loadNotificationMode, shouldEmailNow } from "./preference";
 
 // Sends notifications from the shared mailbox to an agent.
 //
@@ -170,9 +171,6 @@ export async function sendAssignmentNotification(
   if (agentError) return { sent: false, error: agentError.message };
   if (!agent) return { sent: false, skipped: "agent not found" };
   if (!agent.is_active) return { sent: false, skipped: "agent inactive" };
-  if (agent.notifications_enabled === false) {
-    return { sent: false, skipped: "notifications disabled" };
-  }
 
   const { data: ticket, error: ticketError } = await admin
     .from("tickets")
@@ -183,6 +181,20 @@ export async function sendAssignmentNotification(
     .maybeSingle();
   if (ticketError) return { sent: false, error: ticketError.message };
   if (!ticket) return { sent: false, skipped: "ticket not found" };
+
+  // Cadence gate. A `daily` agent's assignments fold into their digest — except
+  // an urgent ticket assigned directly to them, which stays immediate. `off`
+  // sends nothing. See shouldEmailNow for the carve-out.
+  const mode = await loadNotificationMode(agentId);
+  if (
+    !shouldEmailNow(mode, {
+      kind: "assignment",
+      priority: ticket.priority as TicketPriority,
+      directAssignment: true,
+    })
+  ) {
+    return { sent: false, skipped: `cadence: ${mode}` };
+  }
 
   const connection = await getSupportInboxConnection();
   if (!connection) {
@@ -330,8 +342,13 @@ export async function sendReassignmentNotification(
   if (previousError) return { sent: false, error: previousError.message };
   if (!previous) return { sent: false, skipped: "previous assignee not found" };
   if (!previous.is_active) return { sent: false, skipped: "previous assignee inactive" };
-  if (previous.notifications_enabled === false) {
-    return { sent: false, skipped: "notifications disabled" };
+
+  // A "your ticket moved" notice is informational and low-value; on `daily` (or
+  // `off`) it is suppressed rather than folded — it is not in the digest, and
+  // it is the least critical thing this system sends.
+  const previousMode = await loadNotificationMode(previousAssigneeId);
+  if (!shouldEmailNow(previousMode, { kind: "reassignment" })) {
+    return { sent: false, skipped: `cadence: ${previousMode}` };
   }
 
   const { data: newAgent } = await admin
@@ -553,6 +570,15 @@ export async function sendNewTicketNotification(
   });
 
   for (const watcher of selection.recipients) {
+    // Cadence: a `daily` watcher gets new unassigned tickets in their digest's
+    // own section rather than one email each; `off` gets nothing. Only
+    // `immediate` watchers are emailed here.
+    const watcherMode = await loadNotificationMode(watcher.id);
+    if (!shouldEmailNow(watcherMode, { kind: "new_ticket" })) {
+      result.skipped.push({ agentId: watcher.id, reason: `cadence: ${watcherMode}` });
+      continue;
+    }
+
     // Same policy as escalations: everything defers out of quiet hours except
     // Urgent, which is the only priority loud enough to justify a 3am phone.
     const decision = decideSendTime(priority, new Date());
@@ -677,9 +703,8 @@ async function sendFollowUp(
     .maybeSingle();
   if (agentError) return { sent: false, error: agentError.message };
   if (!agent?.is_active) return { sent: false, skipped: "agent inactive" };
-  if (agent.notifications_enabled === false) {
-    return { sent: false, skipped: "notifications disabled" };
-  }
+
+  const mode = await loadNotificationMode(agentId);
 
   const { data: ticket, error: ticketError } = await admin
     .from("tickets")
@@ -711,9 +736,12 @@ async function sendFollowUp(
         "going to you instead of continuing to chase them.",
         "",
         `${siteUrl()}/tickets/${ticket.id}`,
-      ].join("\n")
+      ].join("\n"),
+      // Silenceable without a deploy — the one agent-facing email that had no
+      // off switch before.
+      "escalation_handoff"
     );
-    if (!result.sent) return { sent: false, error: result.error };
+    if (!result.sent && !result.muted) return { sent: false, error: result.error };
 
     await admin.from("notifications").insert({
       agent_id: agentId,
@@ -723,6 +751,25 @@ async function sendFollowUp(
       sent_at: new Date().toISOString(),
     });
     return { sent: true, skipped: `handed to ${alertRecipient()}` };
+  }
+
+  // Cadence gate for the AGENT-facing follow-up. The admin hand-off above runs
+  // regardless of the agent's preference — an ignored ticket must still reach
+  // an admin. Below the cap:
+  //   - a suppressed ESCALATION still records the rung, so the ladder advances
+  //     and eventually hits that hand-off; the digest carries it meanwhile;
+  //   - a suppressed REMINDER simply does not fire.
+  if (!shouldEmailNow(mode, { kind })) {
+    if (kind === "escalation") {
+      await admin.from("notifications").insert({
+        agent_id: agentId,
+        ticket_id: ticketId,
+        kind: "escalation",
+        escalation_count: escalation?.count ?? 0,
+        sent_at: new Date().toISOString(),
+      });
+    }
+    return { sent: false, skipped: `cadence: ${mode}` };
   }
 
   const { data: latest } = await admin

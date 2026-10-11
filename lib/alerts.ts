@@ -555,11 +555,22 @@ export async function readOpenAlerts(): Promise<{
  * Kept for the escalation path, which is a message to a person rather than a
  * condition to be tracked and acknowledged. It is still unthreadable and
  * still carries the system prefix.
+ *
+ * `kind` makes it silenceable without a deploy: pass one, and a matching
+ * `alert_mutes` row suppresses the email (returning `muted`). This closes the
+ * gap the audit named — the escalation hand-off was the one agent-facing email
+ * with no rate limit and no off switch. A missing/failed mute read alerts
+ * anyway (readAlertMutes fails open), the same bias as every other alarm here.
  */
 export async function sendOperationalAlert(
   title: string,
-  body: string
-): Promise<{ sent: boolean; error?: string }> {
+  body: string,
+  kind?: string
+): Promise<{ sent: boolean; muted?: boolean; error?: string }> {
+  if (kind) {
+    const mutes = await readAlertMutes();
+    if (mutes.has(kind)) return { sent: false, muted: true };
+  }
   return deliverAlertEmail(
     `${SYSTEM_ALERT_PREFIX} ${title}`,
     [],

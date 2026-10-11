@@ -761,6 +761,40 @@ The occurrence count still increments on every check even when no email goes
 out — an alert that under-counts itself cannot escalate, and the banner has to
 stay honest whether or not the email fires.
 
+### Every human-facing email must state its max rate and its off switch — at review time
+
+**The rule, now covering NOTIFICATIONS as well as alerts: any code that can send
+an email to a human is not finished until you can say, in the review, its
+maximum rate and which preference silences it.** If you cannot name both, it is
+not ready to ship. This is the alert rule above, generalised — we have now had
+three separate email floods from three different senders (the new-ticket
+broadcast, the Messenger heartbeat, and Michael's per-event notifications), and
+each time the missing half was the same: nobody had written down the ceiling or
+the switch.
+
+- **The whole surface lives in one place.** `docs/EMAIL-SURFACE.md` names every
+  email a human can receive — trigger, max rate, controlling preference, file.
+  A new sender is added there in the same change that introduces it, the way a
+  new migration is added to the schema checker. Discovering the surface only
+  when the next flood arrives is the failure this list exists to prevent.
+- **Per-agent cadence is `notification_frequency` (0028): immediate / daily /
+  off.** It is authoritative; the legacy `notifications_enabled` boolean is a
+  fallback for the pre-migration window only. `loadNotificationMode` reads it
+  resiliently, and `shouldEmailNow` holds the single copy of the urgent
+  carve-out (an urgent ticket assigned directly to a person stays immediate even
+  on `daily`; `off` means off, and the escalation ladder still ends at an admin).
+- **A daily digest sends NOTHING when there is nothing to report.** A daily
+  "all clear" becomes noise within a week and then the real one is ignored too —
+  the same reason the unassigned digest and the system alert both went quiet-on-
+  empty. `buildDigestModel(...).hasContent` is the gate, tested directly rather
+  than inferred from a send that did not happen.
+- **The off switch must not require a deploy.** A per-agent cadence covers
+  notifications; `alert_mutes` covers system alerts; `sendOperationalAlert` now
+  takes a `kind` so the escalation hand-off — previously the one agent-facing
+  email with no rate limit and no switch — can be muted from the database. If a
+  new email cannot be silenced without shipping code, that is the same gap that
+  made the Messenger flood worse, and it is not shippable.
+
 ### An alarm must not look like the hundred FYIs
 
 The heartbeat was never broken. It fired four times, delivered correctly, and
