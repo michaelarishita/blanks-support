@@ -147,11 +147,15 @@ export async function GET(request: NextRequest) {
   }
 
   // ---- 2. Escalations for assigned, unanswered tickets.
+  // `junk` is excluded alongside resolved/closed/pending: a junked ticket is
+  // out of everyone's queue and must not generate chases or admin hand-offs.
+  // Leaving it in is how spam #1090 reached escalation 40 and #1266 fired 14×
+  // in five days — the tickets were junked but kept escalating.
   const { data: candidates } = await admin
     .from("tickets")
     .select("id, priority, status, assignee_id")
     .not("assignee_id", "is", null)
-    .not("status", "in", "(resolved,closed,pending)")
+    .not("status", "in", "(resolved,closed,pending,junk)")
     .limit(MAX_PER_RUN);
 
   for (const ticket of candidates ?? []) {

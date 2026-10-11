@@ -102,6 +102,20 @@ export function decideEscalation(input: EscalationInput): EscalationDecision {
   // Each repeat needs its own interval, or one overdue ticket would escalate
   // on every cron tick.
   const nextCount = input.escalationCount + 1;
+
+  // Terminal rung. The agent is chased up to MAX_ESCALATIONS times, then the
+  // ticket is handed to an admin ONCE (nextCount === MAX_ESCALATIONS + 1).
+  // After that, stop. Escalating forever on a constant gap is how a single
+  // ignored spam ticket reached escalation 40 and another fired 14× in five
+  // days — a ladder with no top is noise, not a chase. The final hand-off says
+  // so (see sendFollowUp), and nothing escalates past it.
+  if (nextCount > MAX_ESCALATIONS + 1) {
+    return {
+      escalate: false,
+      reason: `ladder exhausted (${MAX_ESCALATIONS} chases + admin hand-off already sent)`,
+    };
+  }
+
   const requiredHours = threshold * nextCount;
   if (overdueHours < requiredHours) {
     return {

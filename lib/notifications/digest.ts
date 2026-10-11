@@ -1,8 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { buildRawEmail, generateMessageId } from "@/lib/email/mime";
-import { getSupportInboxConnection, getAccessToken } from "@/lib/google/tokens";
-import { sendGmailMessage } from "@/lib/google/gmail";
+import { getSupportInboxConnection } from "@/lib/google/tokens";
 import { getCompanySettings } from "@/lib/settings";
+import { sendTeamEmail } from "./delivery";
 import { localHour, QUIET_ZONE } from "./policy";
 import { localDateKey } from "./unassigned-send";
 import { NOTIFICATION_HEADERS } from "./send";
@@ -291,32 +290,89 @@ async function sendDigestForAgent(
   const assigned = await toInputs(admin, (assignedRows ?? []) as TicketRow[]);
   const model = buildDigestModel(assigned, unassigned, now.getTime());
 
-  // Scheduled path on a quiet day: send nothing.
-  if (!model.hasContent && !opts.sendWhenEmpty) return { outcome: "empty" };
+  // Fold in anything the delivery cap held back for this agent, so their ONE
+  // daily email also carries the overflow — the condition that makes cap=1 mean
+  // one. These rows are marked digested after a successful send, so the
+  // standalone overflow digest skips them. A failed read is treated as "no
+  // overflow": it must never block the digest.
+  const overflow = await loadOverflowForDigest(admin, agent.email);
 
-  const raw = buildRawEmail({
-    fromEmail: connection.account_ref,
+  // Scheduled path on a quiet day with nothing held back: send nothing.
+  if (!model.hasContent && overflow.items.length === 0 && !opts.sendWhenEmpty) {
+    return { outcome: "empty" };
+  }
+
+  let bodyText = digestText(model, site);
+  if (overflow.items.length) bodyText += "\n\n" + overflowSection(overflow.items, site);
+
+  // Through the one delivery chokepoint, with an explicit logged bypass: the
+  // cadence digest is the agent's chosen channel, so it must deliver even when
+  // the cap is spent — and it is the thing the cap defers INTO.
+  const res = await sendTeamEmail({
+    kind: "daily_digest",
+    recipientEmail: agent.email,
+    agentId: agent.id,
     fromName: `${companyName} Support`,
-    to: agent.email,
     // Never hello@: replying to a digest must not open a ticket.
     replyTo: agent.email,
     subject: digestSubject(model),
-    bodyText: digestText(model, site),
-    bodyHtml: `<pre style="font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:pre-wrap;margin:0">${escapeHtml(digestText(model, site))}</pre>`,
-    messageId: generateMessageId(connection.account_ref),
+    bodyText,
+    bodyHtml: `<pre style="font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:pre-wrap;margin:0">${escapeHtml(bodyText)}</pre>`,
     // Never threaded, and never the [⚠️ BLANKS SYSTEM] prefix: an FYI, not an alarm.
     extraHeaders: { ...NOTIFICATION_HEADERS },
+    bypassCap: { reason: "daily cadence digest" },
   });
 
-  try {
-    const accessToken = await getAccessToken(connection.id);
-    await sendGmailMessage(accessToken, { raw });
-    return { outcome: model.hasContent ? "sent" : "empty" };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.error(`[digest] send failed for ${agent.email}:`, message);
-    return { outcome: "failed", error: message };
+  if (res.outcome === "error") {
+    console.error(`[digest] send failed for ${agent.email}:`, res.error);
+    return { outcome: "failed", error: res.error };
   }
+
+  // Mark the folded overflow as digested so the standalone overflow pass does
+  // not repeat it. Only after a successful send, so a failure re-folds it next
+  // time rather than losing it.
+  if (overflow.ids.length) {
+    await admin
+      .from("email_ledger")
+      .update({ digested_at: now.toISOString() })
+      .in("id", overflow.ids);
+  }
+
+  return { outcome: model.hasContent || overflow.items.length ? "sent" : "empty" };
+}
+
+interface OverflowItem {
+  kind: string;
+  subject: string | null;
+  ticket_id: string | null;
+}
+
+/** This agent's capped-and-deferred, not-yet-digested emails, for folding in. */
+async function loadOverflowForDigest(
+  admin: ReturnType<typeof createAdminClient>,
+  email: string
+): Promise<{ items: OverflowItem[]; ids: string[] }> {
+  const { data, error } = await admin
+    .from("email_ledger")
+    .select("id, kind, subject, ticket_id")
+    .eq("recipient_email", email)
+    .eq("outcome", "deferred")
+    .is("digested_at", null)
+    .order("created_at", { ascending: true })
+    .limit(500);
+  // A failed read (e.g. 0029 not applied) must not block the digest.
+  if (error) return { items: [], ids: [] };
+  const rows = (data ?? []) as ({ id: string } & OverflowItem)[];
+  return { items: rows, ids: rows.map((r) => r.id) };
+}
+
+function overflowSection(items: OverflowItem[], site: string): string {
+  const lines = [`— Also held back by your daily email cap (${items.length}) —`];
+  for (const it of items) {
+    const link = it.ticket_id ? `  ${site}/tickets/${it.ticket_id}` : "";
+    lines.push(`• [${it.kind.replace(/_/g, " ")}] ${it.subject ?? "(no subject)"}${link}`);
+  }
+  return lines.join("\n");
 }
 
 /**

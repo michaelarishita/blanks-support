@@ -730,6 +730,9 @@ async function sendFollowUp(
         `${MAX_ESCALATION_COUNT} escalations have been sent with no reply, so this is`,
         "going to you instead of continuing to chase them.",
         "",
+        "This is the FINAL escalation for this ticket — it will not escalate",
+        "again. Resolve it, reassign it, or junk it to clear it.",
+        "",
         `${siteUrl()}/tickets/${ticket.id}`,
       ].join("\n"),
       // Silenceable without a deploy — the one agent-facing email that had no

@@ -127,9 +127,11 @@ describe("nothing chases a resolved ticket", () => {
     );
   });
 
-  it("leaves resolved tickets out of the escalation candidates", () => {
+  it("leaves resolved (and junk) tickets out of the escalation candidates", () => {
+    // junk joins resolved/closed/pending: a junked ticket is out of everyone's
+    // queue and must never chase an agent or hand off to an admin.
     const cron = read("../app/api/cron/notifications/route.ts");
-    expect(cron).toContain('.not("status", "in", "(resolved,closed,pending)")');
+    expect(cron).toContain('.not("status", "in", "(resolved,closed,pending,junk)")');
   });
 });
 

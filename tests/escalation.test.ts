@@ -125,6 +125,19 @@ describe("repeats and the cap", () => {
     });
     expect(decision).toMatchObject({ escalate: true, toAdmin: false });
   });
+
+  it("hands to an admin exactly once, then STOPS — the terminal rung", () => {
+    // After MAX_ESCALATIONS chases + one admin hand-off the ladder is spent.
+    // Escalating forever on a constant gap is how spam #1090 reached count 40.
+    // No matter how overdue, an already-handed-off ticket never escalates again.
+    const decision = decideEscalation({
+      ...base,
+      escalationCount: MAX_ESCALATIONS + 1, // the hand-off already went out
+      lastCustomerMessageAt: hoursAgo(48 * 100), // absurdly overdue
+    });
+    expect(decision.escalate).toBe(false);
+    if (!decision.escalate) expect(decision.reason).toMatch(/exhausted/i);
+  });
 });
 
 describe("escalationSubject", () => {

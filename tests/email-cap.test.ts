@@ -22,6 +22,9 @@ describe("the chokepoint: no team sender reaches Gmail directly", () => {
     "../lib/notifications/send.ts",
     "../lib/notifications/unassigned-send.ts",
     "../lib/alerts.ts",
+    // The daily cadence digest (Prompt 34) — folded in at the same chokepoint
+    // when the two branches landed, so it can't become a new uncapped sender.
+    "../lib/notifications/digest.ts",
   ];
 
   for (const path of senders) {
@@ -42,6 +45,20 @@ describe("the chokepoint: no team sender reaches Gmail directly", () => {
     const src = read("../lib/google/outbound.ts");
     expect(src).toContain("sendGmailMessage(");
     expect(src).not.toContain("sendTeamEmail(");
+  });
+});
+
+describe("one email a day: the two digests never both reach the same person", () => {
+  it("the cadence digest folds overflow in and bypasses the cap", () => {
+    const digest = read("../lib/notifications/digest.ts");
+    expect(digest).toContain("loadOverflowForDigest");
+    expect(digest).toContain("overflowSection");
+    expect(digest).toContain('reason: "daily cadence digest"');
+  });
+
+  it("the overflow digest skips anyone who already got a cadence digest today", () => {
+    const delivery = read("../lib/notifications/delivery.ts");
+    expect(delivery).toContain('["overflow_digest", "daily_digest"]');
   });
 });
 

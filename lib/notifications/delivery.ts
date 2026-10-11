@@ -315,16 +315,18 @@ export async function sendOverflowDigests(
   }
 
   for (const [recipient, items] of byRecipient) {
-    // One overflow digest per recipient per day.
+    // One roundup per recipient per day, and NEVER on a day they already got a
+    // cadence daily digest — that digest folds the overflow in itself, so a
+    // standalone one here would be the second email cap=1 is meant to prevent.
     try {
       const { count } = await admin
         .from("email_ledger")
         .select("id", { count: "exact", head: true })
         .eq("recipient_email", recipient)
         .eq("day", day)
-        .eq("kind", "overflow_digest");
+        .in("kind", ["overflow_digest", "daily_digest"]);
       if ((count ?? 0) > 0) {
-        result.skipped.push(`${recipient}: already summarised today`);
+        result.skipped.push(`${recipient}: already got a digest today`);
         continue;
       }
     } catch {
