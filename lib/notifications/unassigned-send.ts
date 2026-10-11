@@ -1,10 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { buildRawEmail, generateMessageId } from "@/lib/email/mime";
-import { getSupportInboxConnection, getAccessToken } from "@/lib/google/tokens";
-import { sendGmailMessage } from "@/lib/google/gmail";
+import { getSupportInboxConnection } from "@/lib/google/tokens";
 import { getCompanySettings, getSettingsBlob, patchSettingsBlob } from "@/lib/settings";
 import { localHour, QUIET_ZONE } from "./policy";
 import { NOTIFICATION_HEADERS } from "./send";
+import { sendTeamEmail } from "./delivery";
 import {
   buildUnassignedDigest,
   digestSubject,
@@ -156,30 +155,29 @@ export async function sendUnassignedDigest(
   const bodyText = digestText(digest, site);
 
   for (const watcher of watchers) {
-    const raw = buildRawEmail({
-      fromEmail: connection.account_ref,
+    const res = await sendTeamEmail({
+      kind: "unassigned_digest",
+      recipientEmail: watcher.email as string,
+      agentId: watcher.id as string,
       fromName: `${company.company_name} Support`,
-      to: watcher.email as string,
       // Never hello@: replying to a digest must not open a ticket.
       replyTo: watcher.email as string,
       subject,
       bodyText,
       bodyHtml: `<pre style="font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;white-space:pre-wrap;margin:0">${escapeHtml(bodyText)}</pre>`,
-      messageId: generateMessageId(connection.account_ref),
       // Never threaded, and never carrying the [⚠️ BLANKS SYSTEM] prefix: this
       // is an FYI, not an alarm, and the prefix only keeps working as a filter
-      // while nothing routine uses it.
+      // while nothing routine uses it. A fresh unthreaded id is generated.
       extraHeaders: { ...NOTIFICATION_HEADERS },
     });
 
-    try {
-      const accessToken = await getAccessToken(connection.id);
-      await sendGmailMessage(accessToken, { raw });
+    // Deferred counts as sent for the stamp: the digest's content is in the
+    // ledger and will ride the overflow digest, so we must not re-run today.
+    if (res.outcome === "error") {
+      console.error(`[digest] send failed for ${watcher.email}:`, res.error);
+      result.skipped.push(`${watcher.email}: ${res.error}`);
+    } else {
       result.sent++;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.error(`[digest] send failed for ${watcher.email}:`, message);
-      result.skipped.push(`${watcher.email}: ${message}`);
     }
   }
 

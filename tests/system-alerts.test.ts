@@ -85,7 +85,11 @@ describe("an alert is never threaded", () => {
   });
 
   it("mints a fresh Message-ID for every send", () => {
-    expect(code).toContain("messageId: generateMessageId(");
+    // The fresh id now lives in the one delivery chokepoint: alerts pass no
+    // messageId, and sendTeamEmail generates one, so an alert is never threaded
+    // onto a prior conversation. The guarantee moved; it did not weaken.
+    const delivery = source("../lib/notifications/delivery.ts");
+    expect(delivery).toContain("input.messageId ?? generateMessageId(");
   });
 
   it("carries headers a filter can key on", () => {

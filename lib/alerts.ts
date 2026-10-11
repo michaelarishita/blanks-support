@@ -1,8 +1,6 @@
-import { buildRawEmail, generateMessageId } from "@/lib/email/mime";
-import { sendGmailMessage } from "@/lib/google/gmail";
-import { getAccessToken, getSupportInboxConnection } from "@/lib/google/tokens";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { escapeHtml } from "@/lib/html";
+import { sendTeamEmail } from "@/lib/notifications/delivery";
 
 /**
  * OPERATIONAL ALERTS — the alarm, as distinct from the hundred FYIs.
@@ -161,55 +159,49 @@ function alertHtml(
 }
 
 async function deliverAlertEmail(
+  kind: string,
   subject: string,
   reasons: string[],
   detail: string,
   alert: { occurrence_count: number; first_seen_at: string; severity: AlertSeverity }
 ): Promise<{ sent: boolean; error?: string }> {
-  const connection = await getSupportInboxConnection();
-  if (!connection) return { sent: false, error: "No support mailbox connected" };
+  const bodyText = [
+    subject,
+    "",
+    ...reasons.map((r) => `  • ${r}`),
+    reasons.length ? "" : null,
+    detail,
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
 
-  try {
-    const accessToken = await getAccessToken(connection.id);
-    const bodyText = [
-      subject,
-      "",
-      ...reasons.map((r) => `  • ${r}`),
-      reasons.length ? "" : null,
-      detail,
-    ]
-      .filter((line) => line !== null)
-      .join("\n");
-
-    const raw = buildRawEmail({
-      fromEmail: connection.account_ref,
-      fromName: "Blanks Support SYSTEM ALERT",
-      to: alertRecipient(),
-      subject,
-      bodyText,
-      bodyHtml: alertHtml(subject, reasons, detail, alert),
-      // Fresh id, and NO In-Reply-To or References, ever.
-      //
-      // Threading is the failure mode this whole module exists to avoid: an
-      // alert threaded onto a notification inherits that conversation's read
-      // state, so opening an unrelated FYI silently marks the alarm read.
-      messageId: generateMessageId(connection.account_ref),
-      extraHeaders: {
-        // Lets the owner filter alerts into their own label, and lets our own
-        // inbound guard recognise them without parsing the subject.
-        "X-Blanks-Alert": "system",
-        "X-Blanks-Notification": "system-alert",
-        "Auto-Submitted": "auto-generated",
-        Importance: "high",
-        "X-Priority": "1",
-      },
-    });
-
-    await sendGmailMessage(accessToken, { raw });
-    return { sent: true };
-  } catch (e) {
-    return { sent: false, error: e instanceof Error ? e.message : String(e) };
-  }
+  // Through the one delivery chokepoint, so a storm of alerts is capped and
+  // digested like everything else. Fresh id and NO In-Reply-To/References
+  // (sendTeamEmail generates the id): an alert threaded onto a notification
+  // would inherit that conversation's read state — the failure this module
+  // exists to avoid.
+  const res = await sendTeamEmail({
+    kind,
+    recipientEmail: alertRecipient(),
+    subject,
+    bodyText,
+    bodyHtml: alertHtml(subject, reasons, detail, alert),
+    fromName: "Blanks Support SYSTEM ALERT",
+    extraHeaders: {
+      // Lets the owner filter alerts into their own label, and lets our own
+      // inbound guard recognise them without parsing the subject.
+      "X-Blanks-Alert": "system",
+      "X-Blanks-Notification": "system-alert",
+      "Auto-Submitted": "auto-generated",
+      Importance: "high",
+      "X-Priority": "1",
+    },
+  });
+  // Delivered or deferred-into-the-digest both mean "handled", but
+  // last_notified_at must only advance on a real send — so a deferred alert
+  // reports sent=false and is retried (and deferred again) on the next tick,
+  // which the per-kind daily throttle already bounds.
+  return { sent: res.outcome === "sent" || res.outcome === "bypassed", error: res.error };
 }
 
 /**
@@ -445,7 +437,7 @@ export async function raiseSystemAlert(input: {
 
   const subject = alertSubject(input.title, occurrence, severity);
   const [mail, hook] = await Promise.all([
-    deliverAlertEmail(subject, reasons, detail, alert),
+    deliverAlertEmail(input.kind, subject, reasons, detail, alert),
     postAlertWebhook([subject, ...reasons.map((r) => `• ${r}`)].join("\n")),
   ]);
 
@@ -558,9 +550,14 @@ export async function readOpenAlerts(): Promise<{
  */
 export async function sendOperationalAlert(
   title: string,
-  body: string
+  body: string,
+  /** The kind this counts as at the delivery cap. Defaults to the escalation
+   * hand-off, which is the only caller — but named so a future caller is capped
+   * under its own kind rather than silently inheriting this one. */
+  kind = "escalation_handoff"
 ): Promise<{ sent: boolean; error?: string }> {
   return deliverAlertEmail(
+    kind,
     `${SYSTEM_ALERT_PREFIX} ${title}`,
     [],
     body,

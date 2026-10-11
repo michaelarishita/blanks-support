@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { cronUnauthorized, isCronAuthorized } from "@/lib/cron-auth";
 import { sendUnassignedDigest } from "@/lib/notifications/unassigned-send";
+import { sendOverflowDigests } from "@/lib/notifications/delivery";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { escalationsSinceCustomerMessage, decideEscalation } from "@/lib/notifications/escalation";
 import { decideSendTime } from "@/lib/notifications/policy";
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
     deferredAgain: 0,
     failures: [] as string[],
     unassignedDigest: null as Awaited<ReturnType<typeof sendUnassignedDigest>> | null,
+    overflowDigests: null as Awaited<ReturnType<typeof sendOverflowDigests>> | null,
   };
 
   // The daily unassigned digest rides this ten-minute job rather than taking a
@@ -52,6 +54,16 @@ export async function GET(request: NextRequest) {
   } catch (e) {
     // Never the thing that stops reminders and escalations going out.
     console.error("[cron] unassigned digest threw:", e);
+  }
+
+  // The overflow digest: everything the per-agent daily cap held back, rolled
+  // into one summary per recipient so nothing capped is ever dropped. Same
+  // reasoning as the unassigned digest — it rides this job, is gated on the
+  // local date, and is wrapped so it can never block the sends below.
+  try {
+    result.overflowDigests = await sendOverflowDigests(now);
+  } catch (e) {
+    console.error("[cron] overflow digest threw:", e);
   }
 
   // ---- 1. Anything due: reminders the agent set, and assignments that were

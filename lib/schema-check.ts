@@ -340,6 +340,18 @@ const MIGRATIONS: Migration[] = [
       indexes: ["personal_messages_owner_date_idx"],
     },
   },
+  {
+    file: "0029_email_delivery_cap.sql",
+    title: "Email delivery cap — the one chokepoint every human-facing email passes",
+    requires: {
+      // Without the column the cap can't be read, and without the table nothing
+      // over the cap can be recorded or rolled into the digest. The chokepoint
+      // fails OPEN when these are missing, so an unrun migration reverts to the
+      // old (uncapped) behaviour rather than blocking all mail.
+      columns: ["agents.daily_email_cap"],
+      tables: ["email_ledger"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */
