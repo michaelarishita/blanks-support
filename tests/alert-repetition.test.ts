@@ -37,6 +37,14 @@ class Q {
   insert(r: Record<string, unknown>) { this.op = "insert"; this.payload = r; return this; }
   update(r: Record<string, unknown>) { this.op = "update"; this.payload = r; return this; }
   private res() {
+    // The delivery chokepoint (sendTeamEmail) reads `agents` and writes
+    // `email_ledger` on its way to Gmail. This test is about the system_alerts
+    // transition logic, so those tables are modelled as absent: the agents
+    // lookup returns nothing (cap unknown → fail open → still sends), and a
+    // ledger insert is a no-op that must not pollute `inserted`/`rows`.
+    if (this.table !== "system_alerts") {
+      return { data: null, error: null, count: null };
+    }
     if (this.op === "insert") {
       const row = { id: `a${inserted.length + 1}`, occurrence_count: 1, acknowledged_at: null, last_notified_at: null, ...this.payload };
       inserted.push(row);

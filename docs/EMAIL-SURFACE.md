@@ -1,47 +1,74 @@
-# Email surface — every email a human can receive
+# Email surface — every email a human on the team can receive
 
-The one place the whole outbound-email surface is named. We have had three
-separate email floods from three different senders; the point of this file is
-that the next one is found here rather than in someone's inbox.
-
-**Rule (see CLAUDE.md):** any code that can email a human is not finished until
-its **maximum rate** and its **off switch** are written down. Add the sender to
+Three separate senders have flooded this inbox (the new-ticket broadcast, the
+Messenger heartbeat, the escalation hand-off). This file is the single list of
+everything that can reach a team member, so the surface is known **before** the
+next flood rather than discovered by it. A new human-facing sender is added to
 this table in the same change that introduces it.
 
-Last audited: 2026-09-27 (Prompt 34).
+There are two independent throttles, and every sender is subject to both:
 
-## Agent / admin-facing
+1. **Cadence** (`agents.notification_frequency`, 0028) — `immediate` / `daily` /
+   `off`. Governs the per-agent *ticket* notifications (assignment, reminder,
+   escalation, new-ticket). `daily` folds them into one personal digest;
+   `off` sends none; an **urgent ticket assigned directly to you stays
+   immediate even on `daily`** (`shouldEmailNow`, `lib/notifications/preference.ts`).
+2. **Delivery cap** (`agents.daily_email_cap`, 0029) — the hard ceiling,
+   enforced at the one chokepoint **`sendTeamEmail` (`lib/notifications/delivery.ts`)**
+   that every human-facing email passes through. Over the cap → deferred into
+   `email_ledger` and rolled into the overflow digest. Nothing is dropped.
 
-| Email | Trigger | Max rate | Silenced by |
-|---|---|---|---|
-| **Assignment** | ticket assigned to the agent (rule or manual) | 1 per assignment; unbounded across reassignments | cadence: sent only on `immediate`, or on `daily` when the ticket is **urgent and assigned directly** (carve-out); folded into the daily digest otherwise; `off` = never |
-| **Reassignment ("your ticket moved")** | the agent's ticket reassigned on someone's reply | 1 per reassignment | cadence: `immediate` only; suppressed on `daily`/`off` |
-| **Reminder** | agent clicks a reminder link | 1 per click (agent-driven) | cadence: fires on `immediate` and `daily` (it was explicitly requested); `off` = never |
-| **Escalation** | assigned ticket unanswered past its chase window | widening intervals, up to 3 to the agent, then → admin | cadence: agent email on `immediate` only; on `daily`/`off` the rung is still recorded (ladder advances, hand-off still fires) but no per-escalation email |
-| **Escalation hand-off** | escalation count > 3 | 1 per hand-off | `alert_mutes` kind `escalation_handoff` (mute without a deploy) |
-| **New-ticket** | new ticket, after routing rules | 1 per watcher per ticket | `watch_new_tickets`; unowned High/Urgent falls back to `notifications_enabled`; cadence: `immediate` watchers only (`daily` gets it in the digest's unassigned section) |
-| **Unassigned digest** | daily at 8am AZ, if the queue is non-empty | 1/day | `watch_unassigned_digest`; skipped for `daily`/`off` agents (folded into their personal digest) |
-| **Daily digest** (Prompt 34) | daily at the agent's `digest_hour`, only if there is something to report | 1/day, and **nothing when empty** | `notification_frequency = 'daily'`; `off`/`immediate` do not receive it |
-| **System alert** (inbound-down, meta-down, deploy-behind, reconciliation, quarantine) | hourly heartbeat / cron detects a condition | 1st occurrence + ≤1/day/kind, escalates at 3 | `alert_mutes` (per kind) |
+Customer-facing replies (`lib/google/outbound.ts` → the customer) are **not**
+team email and are deliberately out of scope of both.
 
-## Customer-facing (not governed by agent preferences)
+| Kind (`email_ledger.kind`) | Trigger | Recipient | Source | Cadence-gated | Capped |
+|---|---|---|---|---|---|
+| `assignment` | Ticket assigned to an agent | that agent | `sendAssignmentNotification` (send.ts) | yes | yes |
+| `assignment` (reassign) | Agent's reply auto-claims a ticket | previous owner | `sendReassignmentNotification` (send.ts) | yes | yes |
+| `new_ticket` | New ticket (after routing) | `watch_new_tickets` watchers; unassigned High/Urgent → enabled agents | `sendNewTicketNotification` (send.ts) | yes | yes |
+| `reminder` | Agent's "remind me in Xh" fires | that agent | `sendFollowUp` (send.ts) | yes | yes |
+| `escalation` | Assigned ticket past threshold, chases 1–N | the assignee | `sendFollowUp` (send.ts) | yes | yes |
+| `escalation_handoff` | Past the chase cap → raised with an admin | `ALERT_EMAIL` (Michael) | `sendOperationalAlert` → `deliverAlertEmail` (alerts.ts) | no | yes (mutable via `alert_mutes`) |
+| `unassigned_digest` | Daily, if queue non-empty, **only for `immediate` agents** (daily agents get it folded into their personal digest) | `watch_unassigned_digest` agents | `sendUnassignedDigest` (unassigned-send.ts) | yes | yes |
+| `daily_digest` | Daily at the agent's hour, for `daily`-cadence agents | that agent | `runDailyDigests` (digest.ts) | — (it IS the daily channel) | **bypass** (logged) |
+| `system_alert` *(kind is the alert's own, e.g. `inbound_email_down`, `meta_messenger_down`, `deploy_behind`, `inbound_quarantine`)* | A degraded system-health check | `ALERT_EMAIL` (Michael) | `raiseSystemAlert` → `deliverAlertEmail` (alerts.ts) | no | yes |
+| `overflow_digest` | Daily, if the cap held anything back **and no cadence digest fired for that person today** | the capped recipient | `sendOverflowDigests` (delivery.ts) | — | **bypass** (logged) |
 
-| Email | Trigger | Max rate | Notes |
-|---|---|---|---|
-| **Reply** | agent sends a public reply | per send + hourly retry on failure | the actual support conversation |
+## The cap, precisely
 
-## The cadence model (0028)
+- **`agents.daily_email_cap`** — Michael = 1; default 50 (a flood backstop, not
+  a day-to-day limit) for everyone else; configurable per agent. Set it to 0
+  to force everything into a single daily roundup.
+- **Counting** — `sendTeamEmail` counts `email_ledger` rows with `outcome='sent'`
+  for the recipient on the local day. At/over the cap → `outcome='deferred'`,
+  the email is NOT sent, and its full body is kept for the digest.
+- **Fails open** — if `daily_email_cap` or `email_ledger` can't be read,
+  `sendTeamEmail` sends rather than blocks. A missing cap is the old behaviour;
+  a chokepoint that blocked every alert because a table was absent is worse.
 
-One per-agent setting, `notification_frequency`, three values:
+## One email a day, honoured — how the two digests coordinate
 
-- **immediate** — every event emails as it happens (what everyone had before).
-- **daily** — events fold into one digest at `digest_hour`; nothing else emails
-  **except** an urgent ticket assigned directly to the agent.
-- **off** — no notification email; the escalation ladder still ends at an admin.
+`cap=1` must mean *one*, not "one plus a digest plus an overflow digest". So the
+two roundups never both reach the same person on the same day:
 
-`notification_frequency` is authoritative. The legacy `notifications_enabled`
-boolean is kept in sync (off ⇔ false) and used only as a fallback in the window
-between this code deploying and 0028 being applied by hand.
+- The **daily cadence digest** (`runDailyDigests`) runs first on the cron. When
+  it sends to an agent, it **folds that agent's capped-overflow items in as a
+  section** and stamps the day. It delivers through `sendTeamEmail` with an
+  explicit logged bypass (`bypassCap: { reason: "daily cadence digest" }`), so
+  it is never itself blocked by the cap.
+- The **overflow digest** (`sendOverflowDigests`) runs second and **skips anyone
+  who already received a cadence digest today** — it only sends standalone to
+  agents who are not on `daily` cadence but whose cap deferred something.
 
-Read it with `loadNotificationMode` (resilient to the column being absent); the
-urgent carve-out lives once in `shouldEmailNow`.
+So a `daily` agent gets exactly one digest (with overflow inside it); an
+`immediate` agent with cap overflow gets one overflow digest; nobody gets both.
+
+## Adding a new human-facing sender
+
+1. Call `sendTeamEmail(...)` with a distinct `kind`. Do not call
+   `sendGmailMessage` directly — `tests/email-cap.test.ts` enforces this across
+   the sender modules (`send.ts`, `alerts.ts`, `unassigned-send.ts`, `digest.ts`).
+2. Add a row to the table above.
+3. If — and only if — it genuinely must ignore the cap, pass `bypassCap` with a
+   written reason. It is logged as `outcome='bypassed'`. A bypass is never a
+   default a new sender inherits.

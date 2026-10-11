@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { cronUnauthorized, isCronAuthorized } from "@/lib/cron-auth";
 import { sendUnassignedDigest } from "@/lib/notifications/unassigned-send";
 import { runDailyDigests } from "@/lib/notifications/digest";
+import { sendOverflowDigests } from "@/lib/notifications/delivery";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { escalationsSinceCustomerMessage, decideEscalation } from "@/lib/notifications/escalation";
 import { decideSendTime } from "@/lib/notifications/policy";
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest) {
     failures: [] as string[],
     unassignedDigest: null as Awaited<ReturnType<typeof sendUnassignedDigest>> | null,
     dailyDigests: null as Awaited<ReturnType<typeof runDailyDigests>> | null,
+    overflowDigests: null as Awaited<ReturnType<typeof sendOverflowDigests>> | null,
   };
 
   // The daily unassigned digest rides this ten-minute job rather than taking a
@@ -56,10 +58,16 @@ export async function GET(request: NextRequest) {
     console.error("[cron] unassigned digest threw:", e);
   }
 
-  // The per-agent daily digest (Prompt 34). Rides this same job for the same
-  // reasons: no new cron to go silently absent, and gated on the LOCAL DATE per
-  // agent so a missed tick catches up rather than skipping the day. An error
-  // here (almost always 0028 not yet applied) is logged, never fatal.
+  // The per-agent daily cadence digest (Prompt 34). Rides this same job for the
+  // same reasons: no new cron to go silently absent, and gated on the LOCAL
+  // DATE per agent so a missed tick catches up rather than skipping the day. An
+  // error here is logged, never fatal.
+  //
+  // MUST run before the overflow digest below: a cadence digest folds that
+  // agent's capped-overflow content into itself and stamps the day, and the
+  // overflow pass then skips anyone who already got a cadence digest today — so
+  // cap=1 really means one email, never a cadence digest AND an overflow digest
+  // to the same person on the same day.
   try {
     result.dailyDigests = await runDailyDigests({ now });
     if (result.dailyDigests.error) {
@@ -67,6 +75,16 @@ export async function GET(request: NextRequest) {
     }
   } catch (e) {
     console.error("[cron] daily digests threw:", e);
+  }
+
+  // The overflow digest: everything the per-agent daily cap held back, for
+  // anyone who did NOT get a cadence digest today, rolled into one summary so
+  // nothing capped is ever dropped. Gated on the local date; wrapped so it can
+  // never block the sends below.
+  try {
+    result.overflowDigests = await sendOverflowDigests(now);
+  } catch (e) {
+    console.error("[cron] overflow digest threw:", e);
   }
 
   // ---- 1. Anything due: reminders the agent set, and assignments that were

@@ -821,6 +821,50 @@ is the one thing email cannot do.
   Slack, Discord, ntfy, Pushover all accept it). Best-effort with a timeout:
   it can never delay or block the email.
 
+### The delivery cap is THE enforcement point — one chokepoint, every email
+
+Three separate senders have now flooded this inbox — the new-ticket broadcast,
+the Messenger heartbeat, and the escalation hand-off — and each time we fixed
+that one sender a new one found the same gap. The hand-off was the clearest
+proof the per-sender approach cannot hold: `sendOperationalAlert` emailed
+Michael unconditionally, through a path that `raiseSystemAlert`'s transition-only
+fix never touched (it writes no `system_alerts` row at all), the only preference
+it checked was the chased agent's, and its recipient — the admin — had no switch.
+Dozens of tickets escalating independently became dozens of emails in a day.
+
+So the cap lives where every feature already has to be: **`sendTeamEmail` in
+`lib/notifications/delivery.ts`, the one function that hands a team-facing email
+to Gmail.** Every human-facing sender routes through it — assignments, reminders,
+escalations, the hand-off, new-ticket notices, system alerts, reconciliation,
+quarantine, both digests. A test (`tests/email-cap.test.ts`) asserts none of
+`send.ts` / `alerts.ts` / `unassigned-send.ts` calls `sendGmailMessage`
+directly, because "everything passes through one place" is the whole property.
+
+- **`agents.daily_email_cap` (0029).** Michael = 1; default 50 as a flood
+  backstop for everyone else, configurable per agent. Customer replies
+  (`lib/google/outbound.ts`) are NOT team email and are not capped.
+- **Over the cap is DEFERRED, never dropped.** `email_ledger` keeps the full
+  body; the overflow digest (on the notifications cron, once per recipient per
+  day, quiet-on-empty) rolls them into one summary. Nothing capped is lost.
+- **Every kind counts. No allowlist.** A new sender is capped the moment it
+  calls `sendTeamEmail`, which it must — there is no other way to reach Gmail
+  for a team address. Do not add a second path.
+- **The only bypass is explicit, named and logged.** `bypassCap: { reason }`
+  records outcome `bypassed`. The overflow digest is the one sanctioned user —
+  it is the mechanism that makes the cap lossless, so it must deliver even when
+  the cap is spent. A new sender does NOT inherit a bypass; it must ask for one,
+  in code, with a reason.
+- **Fails OPEN.** If the column or `email_ledger` can't be read (migration not
+  yet applied), it SENDS rather than blocks — a missing cap is the old
+  behaviour; a chokepoint that swallowed every alert because a table was absent
+  would be the worse outage. So 0029 must be applied for the cap to engage; the
+  schema banner tracks it.
+- **The surface lives in `docs/EMAIL-SURFACE.md`** — every email a human can
+  receive, its kind, its recipient, and the file. A new sender is added there in
+  the same change that introduces it, the way a migration is added to the schema
+  checker. Discovering the surface only when the next flood arrives is the
+  failure that list exists to prevent.
+
 ### Vendor noise: two mechanisms, and the classifier that was fiction
 
 `ignored_senders` (table) is unioned with `IGNORED_SENDER_EMAILS` (env), so

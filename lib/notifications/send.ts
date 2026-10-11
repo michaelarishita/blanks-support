@@ -1,7 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { buildRawEmail, generateMessageId } from "@/lib/email/mime";
-import { sendGmailMessage } from "@/lib/google/gmail";
-import { getAccessToken, getSupportInboxConnection } from "@/lib/google/tokens";
+import { generateMessageId } from "@/lib/email/mime";
+import { getSupportInboxConnection } from "@/lib/google/tokens";
+import { sendTeamEmail } from "@/lib/notifications/delivery";
 import { getCompanySettings } from "@/lib/settings";
 import { agentDisplayName, customerDisplayName } from "@/lib/display";
 import type { TicketChannel, TicketPriority } from "@/lib/types";
@@ -269,10 +269,12 @@ export async function sendAssignmentNotification(
   const subject =
     root?.subject ?? notificationSubject(ASSIGNMENT_SUBJECT, priority);
 
-  const raw = buildRawEmail({
-    fromEmail: connection.account_ref,
+  const res = await sendTeamEmail({
+    kind: "assignment",
+    recipientEmail: agent.email,
+    agentId,
+    ticketId,
     fromName: `${company.company_name} Support`,
-    to: agent.email,
     // Never hello@: replying to a notification must not open a ticket.
     replyTo: agent.email,
     // Byte-identical across the thread — Gmail needs a stable subject as well
@@ -285,14 +287,12 @@ export async function sendAssignmentNotification(
     references: root ? [root.messageId] : undefined,
     extraHeaders: { ...NOTIFICATION_HEADERS },
   });
-
-  try {
-    const accessToken = await getAccessToken(connection.id);
-    await sendGmailMessage(accessToken, { raw });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.error(`[notifications] assignment send failed for ${agentId}:`, message);
-    return { sent: false, error: message };
+  // Only a real send error fails the caller. 'deferred' means the cap batched
+  // it into the digest — the notification still happened, so the row below is
+  // still recorded (threading + no-resend).
+  if (res.outcome === "error") {
+    console.error(`[notifications] assignment send failed for ${agentId}:`, res.error);
+    return { sent: false, error: res.error };
   }
 
   const { error: insertError } = await admin.from("notifications").insert({
@@ -421,10 +421,12 @@ export async function sendReassignmentNotification(
   const root = await threadRoot(previousAssigneeId, ticketId);
   const subject = root?.subject ?? notificationSubject(ASSIGNMENT_SUBJECT, priority);
 
-  const raw = buildRawEmail({
-    fromEmail: connection.account_ref,
+  const res = await sendTeamEmail({
+    kind: "assignment",
+    recipientEmail: previous.email,
+    agentId: previousAssigneeId,
+    ticketId,
     fromName: `${company.company_name} Support`,
-    to: previous.email,
     // Never hello@: replying to a notification must not open a ticket.
     replyTo: previous.email,
     subject,
@@ -435,14 +437,9 @@ export async function sendReassignmentNotification(
     references: root ? [root.messageId] : undefined,
     extraHeaders: { ...NOTIFICATION_HEADERS },
   });
-
-  try {
-    const accessToken = await getAccessToken(connection.id);
-    await sendGmailMessage(accessToken, { raw });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.error(`[notifications] reassignment send failed for ${previousAssigneeId}:`, message);
-    return { sent: false, error: message };
+  if (res.outcome === "error") {
+    console.error(`[notifications] reassignment send failed for ${previousAssigneeId}:`, res.error);
+    return { sent: false, error: res.error };
   }
 
   // Recorded as an assignment-kind row (the enum has no separate value and one
@@ -619,10 +616,12 @@ export async function sendNewTicketNotification(
       siteUrl: siteUrl(),
     };
 
-    const raw = buildRawEmail({
-      fromEmail: connection.account_ref,
+    const res = await sendTeamEmail({
+      kind: "new_ticket",
+      recipientEmail: watcher.email,
+      agentId: watcher.id,
+      ticketId,
       fromName: `${company.company_name} Support`,
-      to: watcher.email,
       // Never hello@: replying to a notification must not open a ticket.
       replyTo: watcher.email,
       subject,
@@ -637,13 +636,9 @@ export async function sendNewTicketNotification(
       extraHeaders: { ...NOTIFICATION_HEADERS },
     });
 
-    try {
-      const accessToken = await getAccessToken(connection.id);
-      await sendGmailMessage(accessToken, { raw });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.error(`[notifications] new-ticket send failed for ${watcher.id}:`, message);
-      result.skipped.push({ agentId: watcher.id, reason: message });
+    if (res.outcome === "error") {
+      console.error(`[notifications] new-ticket send failed for ${watcher.id}:`, res.error);
+      result.skipped.push({ agentId: watcher.id, reason: res.error ?? "send failed" });
       continue;
     }
 
@@ -814,10 +809,12 @@ async function sendFollowUp(
     ? escalationSubject(priority, escalation.overdueHours, ticket.number, ticket.subject)
     : (root?.subject ?? notificationSubject(ASSIGNMENT_SUBJECT, priority));
 
-  const raw = buildRawEmail({
-    fromEmail: connection.account_ref,
+  const res = await sendTeamEmail({
+    kind,
+    recipientEmail: agent.email,
+    agentId,
+    ticketId,
     fromName: `${(await getCompanySettings()).company_name} Support`,
-    to: agent.email,
     replyTo: agent.email,
     subject,
     bodyText: renderAssignmentText(context),
@@ -829,14 +826,9 @@ async function sendFollowUp(
     references: root ? [root.messageId] : undefined,
     extraHeaders: { ...NOTIFICATION_HEADERS },
   });
-
-  try {
-    const accessToken = await getAccessToken(connection.id);
-    await sendGmailMessage(accessToken, { raw });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.error(`[notifications] ${kind} send failed for ${agentId}:`, message);
-    return { sent: false, error: message };
+  if (res.outcome === "error") {
+    console.error(`[notifications] ${kind} send failed for ${agentId}:`, res.error);
+    return { sent: false, error: res.error };
   }
 
   await admin.from("notifications").insert({
