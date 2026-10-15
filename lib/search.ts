@@ -32,6 +32,19 @@ export const HL_END = "\u0002";
  */
 export const MAX_SEARCH_RESULTS = 50;
 
+/**
+ * How many matches the page SCANS to build the facet counts, before narrowing
+ * to the displayed list. Higher than the display cap because the counts
+ * ("2 open, 14 resolved, 1 junk") must reflect the whole match set, not the
+ * first page — the count is the thing the search is usually really asking.
+ *
+ * For a realistic query (a customer name, a phrase, a number) this covers the
+ * entire set and the counts are exact. When a broad query exceeds it, the page
+ * says the counts are over the first N best matches rather than quietly
+ * presenting a partial total as complete.
+ */
+export const SEARCH_SCAN_LIMIT = 300;
+
 /** Shape of one row from the `search_tickets` RPC. */
 export interface SearchRow {
   id: string;

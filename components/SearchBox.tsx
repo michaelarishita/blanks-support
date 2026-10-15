@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { useHotkey } from "@/lib/shortcuts";
 import { SearchIcon, XIcon } from "@/components/ui/icons";
@@ -20,13 +20,22 @@ export default function SearchBox({
   autoFocus = false,
   placeholder = "Search tickets…",
   className,
+  preserveFilters = false,
 }: {
   initialQuery?: string;
   autoFocus?: boolean;
   placeholder?: string;
   className?: string;
+  /**
+   * On the search page, carry the active status/channel/assignee facets
+   * through when the query is refined — so filters persist while you narrow
+   * the words rather than resetting on every edit. Off everywhere else (the
+   * global box in the sidebar), where there are no filters to keep.
+   */
+  preserveFilters?: boolean;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [value, setValue] = useState(initialQuery);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -50,7 +59,17 @@ export default function SearchBox({
     const q = value.trim();
     // An empty submit clears back to the resting search page rather than
     // querying for nothing.
-    router.push(q ? `/search?q=${encodeURIComponent(q)}` : "/search");
+    if (!q) {
+      router.push("/search");
+      return;
+    }
+    // Keep the active facets (status/channel/assignee) when refining the query,
+    // so narrowing the words doesn't throw the filters away each keystroke.
+    const params = new URLSearchParams(
+      preserveFilters ? searchParams.toString() : ""
+    );
+    params.set("q", q);
+    router.push(`/search?${params.toString()}`);
   }
 
   return (

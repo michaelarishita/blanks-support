@@ -181,15 +181,17 @@ describe("the search page never renders a failure as 'no results'", () => {
 
   it("checks the error before the empty state", () => {
     const errorBranch = page.indexOf("if (error)");
-    const emptyBranch = page.indexOf("rows.length === 0");
+    const emptyBranch = page.indexOf("scan.length === 0");
     expect(errorBranch).toBeGreaterThan(-1);
     expect(emptyBranch).toBeGreaterThan(-1);
     expect(errorBranch).toBeLessThan(emptyBranch);
   });
 
-  it("says on screen when the answer is capped", () => {
-    expect(page).toContain("isTruncated");
-    expect(page).toMatch(/best matches of/i);
+  it("says on screen when the facet scan is capped", () => {
+    // The whole match set no longer fit the scan, so the counts are over the
+    // best N — said plainly rather than presented as the exact total.
+    expect(page).toContain("scanCapped");
+    expect(page).toMatch(/best matches/i);
   });
 
   it("caps at the shared constant rather than a magic number", () => {
