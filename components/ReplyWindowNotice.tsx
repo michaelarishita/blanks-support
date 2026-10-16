@@ -64,6 +64,21 @@ export default function ReplyWindowNotice({
     );
   }
 
+  // We could not read the clock. This must NOT fall through to "the window has
+  // closed" below — a failed lookup is not a closed window, and telling an
+  // agent their reply is impossible when it may be fine is the confident-from-
+  // absent answer this codebase keeps rooting out. Warn, but don't block: the
+  // send path re-reads and Meta refuses with a real reason if it truly closed.
+  if (window_.state === "unknown") {
+    return (
+      <Line
+        tone="warning"
+        icon={<AlertTriangleIcon size={12} />}
+        text="Couldn't check Meta's reply window — your reply may fail if it has closed."
+      />
+    );
+  }
+
   return (
     <Line
       tone="danger"
