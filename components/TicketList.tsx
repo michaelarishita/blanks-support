@@ -100,6 +100,7 @@ export default function TicketList({
   view = "open",
   currentAgentId = null,
   error = null,
+  channelLabel = null,
 }: {
   tickets: Ticket[];
   view?: string;
@@ -112,6 +113,12 @@ export default function TicketList({
    * second one.
    */
   error?: string | null;
+  /**
+   * The channel being filtered to, if any. The empty state names it — a
+   * Messenger view saying "write in through the widget or email" is telling
+   * the reader about the wrong channels.
+   */
+  channelLabel?: string | null;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -469,7 +476,13 @@ export default function TicketList({
   }
 
   if (tickets.length === 0) {
-    const copy = EMPTY_COPY[view] ?? EMPTY_COPY.all;
+    // A channel filter names the channel rather than listing the wrong ones.
+    const copy = channelLabel
+      ? {
+          title: `No ${channelLabel} tickets here`,
+          description: `${channelLabel} conversations will appear here once they arrive.`,
+        }
+      : (EMPTY_COPY[view] ?? EMPTY_COPY.all);
     return (
       <div className="rounded-lg border border-subtle bg-panel">
         <EmptyState

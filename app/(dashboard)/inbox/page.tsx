@@ -150,6 +150,7 @@ export default async function InboxPage({
         tickets={rows}
         view={view}
         currentAgentId={user?.id ?? null}
+        channelLabel={channelLabel}
         error={
           ticketsError
             ? `${ticketsError.message}${ticketsError.hint ? ` — ${ticketsError.hint}` : ""}`
