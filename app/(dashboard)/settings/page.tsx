@@ -9,6 +9,8 @@ import QuarantinedMessages from "@/components/QuarantinedMessages";
 import { readQuarantined } from "@/lib/inbound/quarantine";
 import ReconcileStatus, { type ReconcileSummary } from "@/components/ReconcileStatus";
 import MessengerStatus from "@/components/MessengerStatus";
+import InstagramStatus from "@/components/InstagramStatus";
+import { readMetaHealth } from "@/lib/meta/health";
 import AlertMutes, { type MuteRow } from "@/components/AlertMutes";
 import { getSettingsBlob } from "@/lib/settings";
 import CheckMailNow from "@/components/CheckMailNow";
@@ -129,6 +131,10 @@ export default async function SettingsPage({
       ? (((await getSettingsBlob()).inbound_last_reconcile as ReconcileSummary | undefined) ??
         null)
       : null;
+  // Read once (admin-only, since the panels live in the admin section) and hand
+  // the same snapshot to both the Messenger and Instagram panels — one Settings
+  // load is not two rounds of Graph calls.
+  const metaHealth = me?.role === "admin" ? await readMetaHealth() : null;
   const ignored = await readIgnoredSenders();
   // The classifier's current precision/recall against the corrections corpus —
   // the number that must be checked before any future rule change ships.
@@ -414,7 +420,14 @@ export default async function SettingsPage({
             <h3 className="mb-2 text-sm font-semibold text-gray-700">
               Facebook Messenger
             </h3>
-            <MessengerStatus />
+            {metaHealth && <MessengerStatus health={metaHealth} />}
+          </div>
+
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <h3 className="mb-2 text-sm font-semibold text-gray-700">
+              Instagram
+            </h3>
+            {metaHealth && <InstagramStatus health={metaHealth} />}
           </div>
 
           <div className="mt-4 border-t border-gray-200 pt-4">

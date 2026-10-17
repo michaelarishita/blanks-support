@@ -1,4 +1,4 @@
-import { readMetaHealth, SIGNATURE_FAILURE_THRESHOLD } from "@/lib/meta/health";
+import { SIGNATURE_FAILURE_THRESHOLD, type MetaHealth } from "@/lib/meta/health";
 import type { GraphDiagnosis } from "@/lib/meta/graph-errors";
 
 /**
@@ -7,10 +7,12 @@ import type { GraphDiagnosis } from "@/lib/meta/graph-errors";
  * Four facts, because four things fail separately here — and because the one
  * that matters most (Meta silently unsubscribing the app after an hour of
  * failed deliveries) has no other signal anywhere in the product.
+ *
+ * Takes `health` as a prop rather than fetching it: the Settings page reads it
+ * once and hands the same snapshot to this panel AND the Instagram one, so a
+ * single Settings load is not two rounds of Graph calls.
  */
-export default async function MessengerStatus() {
-  const health = await readMetaHealth();
-
+export default function MessengerStatus({ health }: { health: MetaHealth }) {
   return (
     <div className="text-sm text-gray-600">
       <Row
@@ -47,7 +49,11 @@ export default async function MessengerStatus() {
             detail={
               health.events.lastReceivedAt
                 ? new Date(health.events.lastReceivedAt).toLocaleString()
-                : "nothing yet — normal until the Page is subscribed"
+                : // Once the Page IS subscribed, "normal until subscribed" is
+                  // simply wrong — the thing it was waiting for has happened.
+                  health.subscription.state === "ok"
+                  ? "waiting for the first message"
+                  : "nothing yet — normal until the Page is subscribed"
             }
           />
           <Row
@@ -86,7 +92,7 @@ export default async function MessengerStatus() {
  * an app-level block from an expired token. Every one of those needs a
  * different person to do a different thing.
  */
-function Diagnosis({ d }: { d: GraphDiagnosis }) {
+export function Diagnosis({ d }: { d: GraphDiagnosis }) {
   const tone =
     d.kind === "rate_limited" || d.kind === "unreachable"
       ? "border-warning-border bg-warning-bg text-warning-text"
@@ -102,7 +108,7 @@ function Diagnosis({ d }: { d: GraphDiagnosis }) {
   );
 }
 
-function Row({
+export function Row({
   label,
   state,
   detail,

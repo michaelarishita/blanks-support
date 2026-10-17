@@ -292,6 +292,77 @@ export async function readEventHealth(
   }
 }
 
+/**
+ * The last webhook event we logged for ONE object type ("page" | "instagram").
+ *
+ * Messenger and Instagram arrive at the same endpoint and land in the same
+ * table; the only thing that tells them apart is the stored `object`. So the
+ * per-channel "last message received" is a filter on that, not a second table.
+ */
+export async function lastEventFor(
+  object: "page" | "instagram"
+): Promise<{ at: string | null; error: string | null }> {
+  const admin = createAdminClient();
+  try {
+    const { data, error } = await admin
+      .from("meta_webhook_events")
+      .select("received_at")
+      .eq("object", object)
+      .order("received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return { at: null, error: error.message };
+    return { at: (data?.received_at as string | undefined) ?? null, error: null };
+  } catch (e) {
+    return { at: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Is an Instagram professional account connected to this Page?
+ *
+ * The Instagram-specific half of "is this actually wired". Messenger needs the
+ * Page token to work; Instagram needs that AND a professional IG account linked
+ * to the Page — without it, DMs have nowhere to arrive from, and that is
+ * invisible until someone goes looking. Reports "could not tell" separately
+ * from "not connected", the same discipline as every other check here: a Graph
+ * timeout is not proof the account is gone.
+ */
+export async function checkInstagramAccount(): Promise<{
+  state: Verdict;
+  detail: string;
+  diagnosis?: GraphDiagnosis;
+}> {
+  const pageId = process.env.META_PAGE_ID;
+  if (!pageId) return { state: "unknown", detail: "META_PAGE_ID is not set" };
+
+  const result = await graph(
+    `${encodeURIComponent(pageId)}?fields=instagram_business_account{username,name}`
+  );
+  if (!result.ok) {
+    const d = classifyGraphFailure(result.failure);
+    return {
+      state:
+        d.kind === "app_restricted" || d.kind === "token_invalid" ? "broken" : "unknown",
+      detail: `${d.summary} (${d.evidence})`,
+      diagnosis: d,
+    };
+  }
+  const iba = (result.body as {
+    instagram_business_account?: { username?: string; name?: string };
+  })?.instagram_business_account;
+  if (!iba) {
+    return {
+      state: "broken",
+      detail: "no Instagram professional account is connected to this Page",
+    };
+  }
+  return {
+    state: "ok",
+    detail: iba.username ? `@${iba.username}` : (iba.name ?? "connected"),
+  };
+}
+
 /** The whole picture, and the sentences the heartbeat should say. */
 export async function readMetaHealth(now = Date.now()): Promise<MetaHealth> {
   const [subscription, token, events] = await Promise.all([
