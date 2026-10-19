@@ -43,11 +43,18 @@ interface GraphConversation {
  * the same line reconcile draws. Messages with no id can't be deduped, so they
  * are dropped rather than risk a double-import.
  */
+export type BackfillPlatform = "messenger" | "instagram";
+
 export function conversationsToEvents(
   conversations: GraphConversation[],
   pageId: string,
-  now = Date.now()
+  now = Date.now(),
+  platform: BackfillPlatform = "messenger"
 ): MetaMessageEvent[] {
+  // The listing's `from.id` is a PSID on Messenger and an IGSID on Instagram;
+  // ingestMessage resolves the customer by the matching column (fb_psid /
+  // ig_user_id) off the channel, so this is the only switch the import needs.
+  const channel: BackfillPlatform = platform;
   const events: MetaMessageEvent[] = [];
   for (const conversation of conversations) {
     for (const m of conversation.messages?.data ?? []) {
@@ -56,7 +63,7 @@ export function conversationsToEvents(
       if (!fromId || fromId === pageId) continue; // our own outbound
       events.push({
         kind: "message",
-        channel: "messenger",
+        channel,
         mid: m.id,
         customerId: fromId,
         pageId,
@@ -71,6 +78,7 @@ export function conversationsToEvents(
 }
 
 export interface BackfillReport {
+  platform: BackfillPlatform;
   conversations: number;
   inboundFound: number;
   alreadyStored: number;
@@ -91,12 +99,14 @@ export interface BackfillReport {
  * list before it lands.
  */
 export async function backfillMetaInbox(
-  options: { max?: number; dryRun?: boolean; now?: number } = {}
+  options: { max?: number; dryRun?: boolean; now?: number; platform?: BackfillPlatform } = {}
 ): Promise<BackfillReport> {
   const max = options.max ?? 200;
   const now = options.now ?? Date.now();
   const dryRun = options.dryRun ?? true;
+  const platform: BackfillPlatform = options.platform ?? "messenger";
   const empty: BackfillReport = {
+    platform,
     conversations: 0,
     inboundFound: 0,
     alreadyStored: 0,
@@ -115,7 +125,7 @@ export async function backfillMetaInbox(
   try {
     const res = await fetch(
       `${GRAPH}/${encodeURIComponent(pageId)}/conversations` +
-        `?platform=messenger&limit=${max}` +
+        `?platform=${platform}&limit=${max}` +
         `&fields=id,messages.limit(50){id,created_time,from,message}` +
         `&access_token=${encodeURIComponent(token)}`,
       { cache: "no-store" }
@@ -131,7 +141,7 @@ export async function backfillMetaInbox(
   }
 
   const conversations = ((body as { data?: GraphConversation[] })?.data ?? []) as GraphConversation[];
-  const events = conversationsToEvents(conversations, pageId, now);
+  const events = conversationsToEvents(conversations, pageId, now, platform);
 
   // Preview metadata (name/time) kept alongside, for the report only.
   const meta = new Map<string, { from: string; preview: string; at: string | null }>();
@@ -163,6 +173,7 @@ export async function backfillMetaInbox(
 
   const newEvents = events.filter((e) => !stored.has(e.mid));
   const report: BackfillReport = {
+    platform,
     conversations: conversations.length,
     inboundFound: events.length,
     alreadyStored: events.length - newEvents.length,
