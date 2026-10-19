@@ -34,6 +34,7 @@ import QueryError from "@/components/QueryError";
 import {
   AlertTriangleIcon,
   BanIcon,
+  CheckDoubleIcon,
   CheckIcon,
   InboxIcon,
   PaperclipIcon,
@@ -101,6 +102,7 @@ export default function TicketList({
   currentAgentId = null,
   error = null,
   channelLabel = null,
+  previewEnabled = false,
 }: {
   tickets: Ticket[];
   view?: string;
@@ -119,6 +121,11 @@ export default function TicketList({
    * the reader about the wrong channels.
    */
   channelLabel?: string | null;
+  /**
+   * Whether this agent has the desktop hover preview on. Off by default; a
+   * reading aid some people want and others find noisy, so it is per-agent.
+   */
+  previewEnabled?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -152,9 +159,20 @@ export default function TicketList({
   const [previewId, setPreviewId] = useState<string | null>(null);
   const previewIdRef = useRef<string | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Closes the pane after a short grace once the cursor is over NEITHER a row
+  // NOR the pane — long enough to travel from the row into the pane to click
+  // its buttons, short enough that leaving the list closes it promptly.
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const PREVIEW_CLOSE_GRACE_MS = 150;
 
   const [isDesktop, setIsDesktop] = useState(false);
   const isDesktopRef = useRef(false);
+  // Preview is per-agent (prop); the ref lets the plain-function handlers read
+  // the latest without being memoised.
+  const previewEnabledRef = useRef(previewEnabled);
+  useEffect(() => {
+    previewEnabledRef.current = previewEnabled;
+  }, [previewEnabled]);
 
   const [cache, setCache] = useState<Record<string, PreviewEntry>>({});
   // Mirror of `cache`, kept in sync so the fetch guard reads the latest without
@@ -184,9 +202,20 @@ export default function TicketList({
 
   const setPreview = useCallback((id: string | null) => {
     if (openTimer.current) clearTimeout(openTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
     previewIdRef.current = id;
     setPreviewId(id);
   }, []);
+
+  // Part 3: the pane closes when the cursor is over neither a row nor the pane.
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+  const scheduleClose = useCallback(() => {
+    if (!previewIdRef.current) return;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setPreview(null), PREVIEW_CLOSE_GRACE_MS);
+  }, [setPreview]);
 
   const loadPreview = useCallback(
     async (id: string) => {
@@ -217,23 +246,27 @@ export default function TicketList({
   // Fetch for the active row, debounced, so arrowing or sweeping through rows
   // only requests the one actually landed on. Cached rows show instantly.
   useEffect(() => {
-    if (!previewId || !isDesktop) return;
+    if (!previewId || !isDesktop || !previewEnabled) return;
     if (cacheRef.current[previewId]) return;
     const id = previewId;
     const t = setTimeout(() => void loadPreview(id), 180);
     return () => clearTimeout(t);
-  }, [previewId, isDesktop, loadPreview]);
+  }, [previewId, isDesktop, previewEnabled, loadPreview]);
 
   useEffect(() => () => {
     if (openTimer.current) clearTimeout(openTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
 
   function onRowHover(index: number) {
     cursorRef.current = index;
     setCursor(index);
-    if (!isDesktopRef.current) return;
+    if (!isDesktopRef.current || !previewEnabledRef.current) return;
     const id = tickets[index]?.id;
     if (!id) return;
+    // Moving onto a row cancels a pending close (e.g. row → row, or back from
+    // the gap), so travelling across the list never flickers the pane shut.
+    cancelClose();
     if (openTimer.current) clearTimeout(openTimer.current);
     // Once the pane is open, swapping between rows is immediate — the delay is
     // only there to stop a sweep from opening it in the first place.
@@ -241,10 +274,12 @@ export default function TicketList({
     else openTimer.current = setTimeout(() => setPreview(id), 300);
   }
 
-  // Leaving a row cancels a still-pending open; an already-open pane stays, so
-  // the mouse can travel to it to click Mark as spam / Block sender.
+  // Leaving a row cancels a still-pending open and, if the pane is open, starts
+  // the close grace — which the pane's own onMouseEnter cancels if the cursor
+  // was travelling into it to click a button.
   function onRowLeave() {
     if (openTimer.current) clearTimeout(openTimer.current);
+    scheduleClose();
   }
 
   const move = useCallback(
@@ -258,7 +293,9 @@ export default function TicketList({
       rowRefs.current[next]?.scrollIntoView({ block: "nearest" });
       // Keyboard moves the preview too, with no delay — this is the fast path:
       // arrow down the queue reading each row, ! to junk, no mouse.
-      if (isDesktopRef.current) setPreview(tickets[next]?.id ?? null);
+      if (isDesktopRef.current && previewEnabledRef.current) {
+        setPreview(tickets[next]?.id ?? null);
+      }
     },
     [tickets, setPreview]
   );
@@ -431,6 +468,15 @@ export default function TicketList({
       if (t && canJunkTicket(t)) junkTicket(t);
     }, [tickets, cursor]) // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // `e` resolves the row under the cursor — the left-hand quick action, from the
+  // keyboard. Only when it is not already resolved/closed.
+  useHotkey(
+    "e",
+    useCallback(() => {
+      const t = tickets[cursor];
+      if (t && t.status !== "resolved" && t.status !== "closed") resolveTicket(t);
+    }, [tickets, cursor]) // eslint-disable-line react-hooks/exhaustive-deps
+  );
   useHotkey(
     "escape",
     useCallback(() => {
@@ -533,6 +579,7 @@ export default function TicketList({
         const customerName = customerDisplayName(t.customer);
         const focused = index === cursor;
         const canJunk = canJunkTicket(t);
+        const canResolve = t.status !== "resolved" && t.status !== "closed";
         const isSelected = selected.has(t.id);
 
         return (
@@ -621,6 +668,50 @@ export default function TicketList({
               </button>
             )}
 
+            {/* Quick actions on the LEFT, on hover (or keyboard focus). They
+                sit above the overlay link (z-20) and stop propagation, so they
+                act without opening the ticket. Hidden during bulk-select, where
+                the checkbox owns the row. `!` and `e` reach them from the
+                keyboard; the undo is the usual 12s via junk/resolve. */}
+            {!selectionActive && (canResolve || canJunk) && (
+              <div
+                className={cn(
+                  "relative z-20 hidden flex-none items-center gap-0.5",
+                  "sm:group-hover:flex sm:group-focus-within:flex",
+                  focused && "sm:flex"
+                )}
+              >
+                {canResolve && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      resolveTicket(t);
+                    }}
+                    aria-label={`Mark ticket #${t.number} resolved`}
+                    title="Mark resolved (e)"
+                    className="rounded-sm p-1 text-tertiary transition-colors duration-micro ease-out hover:bg-success-bg hover:text-success-text"
+                  >
+                    <CheckDoubleIcon size={15} />
+                  </button>
+                )}
+                {canJunk && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      junkTicket(t);
+                    }}
+                    aria-label={`Mark ticket #${t.number} as spam`}
+                    title="Mark as spam (!)"
+                    className="rounded-sm p-1 text-tertiary transition-colors duration-micro ease-out hover:bg-danger-bg hover:text-danger-text"
+                  >
+                    <BanIcon size={15} />
+                  </button>
+                )}
+              </div>
+            )}
+
             <span className="flex w-2 flex-none justify-center">
               {isNew && (
                 <span
@@ -688,29 +779,6 @@ export default function TicketList({
             </div>
 
             <div className="flex flex-none items-center gap-2.5">
-              {/* Mark-as-spam, reachable without opening the ticket. Desktop
-                  hover/keyboard-focus only: on a phone the held-press menu is
-                  the deliberate path, and an always-visible button here would
-                  be a misfire waiting to happen beside the thumb. */}
-              {canJunk && !selectionActive && (
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    junkTicket(t);
-                  }}
-                  aria-label={`Mark ticket #${t.number} as spam`}
-                  title="Mark as spam (!)"
-                  className={cn(
-                    "relative z-20 hidden flex-none rounded-sm p-1 text-tertiary transition-colors duration-micro ease-out",
-                    "hover:bg-danger-bg hover:text-danger-text",
-                    "sm:group-hover:block sm:group-focus-within:block",
-                    focused && "sm:block"
-                  )}
-                >
-                  <BanIcon size={15} />
-                </button>
-              )}
               {chip && (
                 <span
                   className={cn(
@@ -787,6 +855,7 @@ export default function TicketList({
           transform (the pull-to-refresh wrapper) can't capture position:fixed,
           and desktop-only via the pane's own lg: gate. */}
       {isDesktop &&
+        previewEnabled &&
         previewId &&
         (() => {
           const pt = tickets.find((t) => t.id === previewId);
@@ -800,6 +869,11 @@ export default function TicketList({
               onJunk={() => junkTicket(pt)}
               onBlock={() => blockSender(pt)}
               onRetry={() => retryPreview(pt.id)}
+              // Moving the cursor into the pane cancels the close grace; leaving
+              // it starts it — so the pane shuts when the cursor is over neither
+              // it nor a row.
+              onPointerEnter={cancelClose}
+              onPointerLeave={scheduleClose}
             />
           );
         })()}
@@ -820,6 +894,8 @@ function TicketPreviewPane({
   onJunk,
   onBlock,
   onRetry,
+  onPointerEnter,
+  onPointerLeave,
 }: {
   ticket: Ticket;
   entry: PreviewEntry | undefined;
@@ -828,6 +904,8 @@ function TicketPreviewPane({
   onJunk: () => void;
   onBlock: () => void;
   onRetry: () => void;
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
 }) {
   if (typeof document === "undefined") return null;
 
@@ -841,6 +919,8 @@ function TicketPreviewPane({
   const pane = (
     <aside
       aria-label={`Preview of ticket #${ticket.number}`}
+      onMouseEnter={onPointerEnter}
+      onMouseLeave={onPointerLeave}
       className="fixed right-4 top-20 bottom-4 z-40 hidden w-[360px] flex-col overflow-hidden rounded-lg border border-subtle bg-panel shadow-lg lg:flex"
     >
       <div className="flex items-start gap-2 border-b border-subtle px-3.5 py-2.5">

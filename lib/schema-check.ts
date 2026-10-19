@@ -366,6 +366,16 @@ const MIGRATIONS: Migration[] = [
       tables: ["email_ledger"],
     },
   },
+  {
+    file: "0030_agent_queue_prefs.sql",
+    title: "Per-agent queue prefs — Open-view channel filter and hover preview",
+    requires: {
+      // Both read defensively (a missing column reads as the safe default, so
+      // the inbox still renders before this is applied), but registered so the
+      // banner tracks it like every other migration.
+      columns: ["agents.open_channels", "agents.hover_preview"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */

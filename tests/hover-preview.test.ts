@@ -70,7 +70,10 @@ describe("arrow keys move the preview, consistent with quick-junk hotkeys", () =
   });
 
   it("moving the cursor by keyboard updates the preview with no delay", () => {
-    expect(list).toContain("if (isDesktopRef.current) setPreview(tickets[next]?.id");
+    // Now also gated on the per-agent preview toggle; still no delay on the
+    // keyboard path.
+    expect(list).toContain("isDesktopRef.current && previewEnabledRef.current");
+    expect(list).toContain("setPreview(tickets[next]?.id");
   });
 });
 

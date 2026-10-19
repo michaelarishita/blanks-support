@@ -415,6 +415,56 @@ export async function setWatchNewTickets(enabled: boolean): Promise<ActionResult
   return { ok: true };
 }
 
+/** Valid channels the Open-view filter may name. */
+const CHANNELS = ["web_form", "email", "instagram", "messenger"] as const;
+
+/**
+ * The per-agent Open-view channel filter. NULL means "all channels" — so a
+ * selection of all four (or, defensively, none) is stored as NULL to keep the
+ * meaning and the default identical. Writes for the caller only; nobody else's
+ * queue changes.
+ */
+export async function setOpenChannels(channels: string[]): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const valid = [...new Set(channels)].filter((c) =>
+    (CHANNELS as readonly string[]).includes(c)
+  );
+  // All channels selected == the default == "no filter". Store NULL for both so
+  // the Open view behaves identically whether you've never touched it or
+  // re-ticked everything.
+  const value = valid.length === 0 || valid.length === CHANNELS.length ? null : valid;
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({ open_channels: value })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save that filter.") };
+  }
+  revalidatePath("/inbox");
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
+/** Turns the desktop hover preview on or off for the caller. */
+export async function setHoverPreview(enabled: boolean): Promise<ActionResult> {
+  const me = await requireAgent();
+  if (!me) return { error: "Not authenticated" };
+
+  const { error } = await me.supabase
+    .from("agents")
+    .update({ hover_preview: Boolean(enabled) })
+    .eq("id", me.id);
+  if (error) {
+    return { error: humanizePostgresError(error, "Could not save that preference.") };
+  }
+  revalidatePath("/inbox");
+  revalidatePath("/settings");
+  return { ok: true };
+}
+
 
 /**
  * The INTERNAL label — what teammates see in the dashboard. Deliberately a

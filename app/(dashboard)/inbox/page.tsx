@@ -5,6 +5,7 @@ import TicketList from "@/components/TicketList";
 import InboxHeader from "@/components/InboxHeader";
 import MineStatusFilter from "@/components/MineStatusFilter";
 import SenderFilter from "@/components/SenderFilter";
+import ChannelFilter from "@/components/ChannelFilter";
 import {
   applyTicketFilters,
   resolveMineStatus,
@@ -43,6 +44,19 @@ export default async function InboxPage({
   const view = params.view ?? "open";
   const sort = resolveSort(params.sort);
 
+  // Per-agent queue prefs. select("*") so a not-yet-applied 0030 can't error
+  // the whole inbox — a missing column simply reads as undefined, which falls
+  // back to the safe default (all channels, preview off).
+  const { data: me } = user
+    ? await supabase.from("agents").select("*").eq("id", user.id).maybeSingle()
+    : { data: null };
+  // NULL / undefined means "all channels" — nobody's queue is filtered until
+  // they choose. Only applied on the plain Open view, never overriding an
+  // explicit ?channel from the sidebar.
+  const openChannels =
+    (me?.open_channels as string[] | null | undefined) ?? null;
+  const hoverPreview = Boolean(me?.hover_preview);
+
   // My-tickets remembers its status scope for the session. When the URL does
   // not carry one — e.g. the sidebar's static "My tickets" link — fall back to
   // the cookie the toggle wrote, and NORMALISE the URL so the ordered list, the
@@ -72,16 +86,23 @@ export default async function InboxPage({
   // empty array, which rendered "Inbox zero" over eight live tickets. That is
   // indistinguishable from a quiet morning and it is the worst lie this
   // product can tell.
+  let base = supabase
+    // agents!tickets_assignee_id_fkey, not agents: 0015 added
+    // tickets.risk_dismissed_by -> agents, so a bare `agents` embed is
+    // ambiguous and PostgREST answers PGRST201 for the whole query.
+    .from("tickets")
+    .select(
+      "*, customer:customers(*), assignee:agents!tickets_assignee_id_fkey(*), ticket_tags(tag:tags(*))"
+    )
+    .limit(200);
+  // The per-agent Open-view channel filter. Only on the plain Open view, and
+  // never when the sidebar has set an explicit ?channel — that is a deliberate
+  // single-channel view that must win over the saved filter.
+  if (view === "open" && !params.channel && openChannels && openChannels.length) {
+    base = base.in("channel", openChannels);
+  }
   const { data: tickets, error: ticketsError } = await applyTicketFilters(
-    supabase
-      // agents!tickets_assignee_id_fkey, not agents: 0015 added
-      // tickets.risk_dismissed_by -> agents, so a bare `agents` embed is
-      // ambiguous and PostgREST answers PGRST201 for the whole query.
-      .from("tickets")
-      .select(
-        "*, customer:customers(*), assignee:agents!tickets_assignee_id_fkey(*), ticket_tags(tag:tags(*))"
-      )
-      .limit(200),
+    base,
     params,
     user?.id ?? null,
     senderCustomerIds
@@ -146,11 +167,21 @@ export default async function InboxPage({
         </div>
       )}
 
+      {/* Per-agent channel filter on Open. The sidebar still shows every
+          channel's count, so a deselected channel reads as deselected, never
+          silently gone. Hidden when the sidebar has set an explicit ?channel. */}
+      {view === "open" && !params.channel && (
+        <div className="px-3 pb-3 sm:px-0">
+          <ChannelFilter selected={openChannels} />
+        </div>
+      )}
+
       <TicketList
         tickets={rows}
         view={view}
         currentAgentId={user?.id ?? null}
         channelLabel={channelLabel}
+        previewEnabled={hoverPreview}
         error={
           ticketsError
             ? `${ticketsError.message}${ticketsError.hint ? ` — ${ticketsError.hint}` : ""}`

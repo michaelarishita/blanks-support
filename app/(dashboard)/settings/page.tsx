@@ -16,6 +16,7 @@ import { getSettingsBlob } from "@/lib/settings";
 import CheckMailNow from "@/components/CheckMailNow";
 import IgnoredSenderList from "@/components/IgnoredSenderList";
 import NotificationToggle from "@/components/NotificationToggle";
+import HoverPreviewToggle from "@/components/HoverPreviewToggle";
 import ProfileEditor from "@/components/ProfileEditor";
 import { getCompanySettings } from "@/lib/settings";
 import { readIgnoredSenders } from "@/lib/senders/ignored";
@@ -46,7 +47,7 @@ export default async function SettingsPage({
   const { data: me } = await supabase
     .from("agents")
     .select(
-      "id, name, display_name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled, watch_new_tickets, watch_unassigned_digest"
+      "id, name, display_name, email, role, gmail_connected, title, phone, signature_enabled, notifications_enabled, watch_new_tickets, watch_unassigned_digest, hover_preview"
     )
     .eq("id", user.id)
     .single();
@@ -270,6 +271,9 @@ export default async function SettingsPage({
           watchNewTickets={me?.watch_new_tickets === true}
           watchUnassignedDigest={me?.watch_unassigned_digest === true}
         />
+        <div className="mt-4 border-t border-gray-200 pt-4">
+          <HoverPreviewToggle enabled={me?.hover_preview === true} />
+        </div>
       </section>
 
       {me?.role === "admin" && (
