@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { corsHeaders, isOriginAllowed } from "@/lib/cors";
 import { runRulesSafely } from "@/lib/rules/engine";
+import { applyJunkRulesSafely } from "@/lib/junk-rules/engine";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { assessTicketRisk } from "@/lib/risk/assess";
 import { createRateLimiter } from "@/lib/rate-limit";
@@ -262,23 +263,31 @@ export async function POST(request: Request) {
     },
   });
 
-  // Routing runs inline, after the ticket is safely stored. It is deliberately
-  // not fire-and-forget: on serverless, work started after the response is
-  // killed with the invocation, so "assign Harvey and email him immediately"
-  // would become "sometimes". runRulesSafely never throws, so a broken rule
-  // cannot turn a received message into a 500 for the customer.
-  await runRulesSafely(ticket.id, "ticket_created");
+  // Subject-match junk rules run FIRST. A junked ticket routes to nobody,
+  // notifies nobody and is not risk-assessed — the same reasoning as a
+  // guard-junked inbound email. Fail-safe: if nothing is enabled (or 0031 is
+  // unapplied) this is a no-op and the ticket flows on normally.
+  const junked = await applyJunkRulesSafely(ticket.id);
 
-  // AFTER the rules, always. If a rule assigned this ticket, that agent is
-  // already recorded in `notifications` and gets excluded — otherwise they
-  // receive two emails about one ticket in the same minute, which is how
-  // people learn to ignore both.
-  await notifyNewTicketSafely(ticket.id);
+  if (!junked.junked) {
+    // Routing runs inline, after the ticket is safely stored. It is deliberately
+    // not fire-and-forget: on serverless, work started after the response is
+    // killed with the invocation, so "assign Harvey and email him immediately"
+    // would become "sometimes". runRulesSafely never throws, so a broken rule
+    // cannot turn a received message into a 500 for the customer.
+    await runRulesSafely(ticket.id, "ticket_created");
 
-  // Advisory only, and last: it reads the attachments and the customer
-  // history, so it has to run after both exist. Nothing downstream acts on
-  // the result — it puts a sentence in front of a human.
-  await assessTicketRisk(ticket.id);
+    // AFTER the rules, always. If a rule assigned this ticket, that agent is
+    // already recorded in `notifications` and gets excluded — otherwise they
+    // receive two emails about one ticket in the same minute, which is how
+    // people learn to ignore both.
+    await notifyNewTicketSafely(ticket.id);
+
+    // Advisory only, and last: it reads the attachments and the customer
+    // history, so it has to run after both exist. Nothing downstream acts on
+    // the result — it puts a sentence in front of a human.
+    await assessTicketRisk(ticket.id);
+  }
 
   return NextResponse.json(
     { ok: true, ticket_number: ticket.number, attachments: storedAttachments.stored },

@@ -157,6 +157,13 @@ export default async function SettingsPage({
     .eq("enabled", true);
   const liveRuleCount = rulesError ? null : (ruleCount ?? 0);
 
+  // null = migration not applied; 0 = none enabled. Same distinction as rules.
+  const { count: junkRuleCount, error: junkRulesError } = await supabase
+    .from("junk_rules")
+    .select("id", { count: "exact", head: true })
+    .eq("enabled", true);
+  const liveJunkRuleCount = junkRulesError ? null : (junkRuleCount ?? 0);
+
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
       <h1 className="text-2xl font-bold">Settings</h1>
@@ -310,6 +317,33 @@ export default async function SettingsPage({
               className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
             >
               Manage rules
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {me?.role === "admin" && (
+        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-gray-500">
+            Junk rules
+          </h2>
+          <p className="mb-4 mt-1 text-sm text-gray-600">
+            File matching new tickets straight to Junk by a subject phrase — for
+            senders who rotate domains faster than a block can keep up. Dry-run
+            before enabling; enabling is refused if it would re-junk anyone a
+            human marked &ldquo;not spam&rdquo;.
+          </p>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-gray-500">
+              {liveJunkRuleCount === null
+                ? "Run 0031_junk_rules.sql to enable junk rules."
+                : `${liveJunkRuleCount} rule${liveJunkRuleCount === 1 ? "" : "s"} live`}
+            </span>
+            <Link
+              href="/settings/junk-rules"
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+            >
+              Manage junk rules
             </Link>
           </div>
         </section>

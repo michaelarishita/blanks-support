@@ -18,6 +18,7 @@ import { runRulesSafely } from "@/lib/rules/engine";
 import { loadIgnoreList } from "@/lib/senders/ignored";
 import { loadSenderOverrides, matchOverride } from "@/lib/senders/overrides";
 import { decideDisposition } from "@/lib/inbound/junk";
+import { loadEnabledJunkRules, firstJunkRuleMatch } from "@/lib/junk-rules/engine";
 import { assessVendorOutreach } from "@/lib/vendor/outreach";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { assessTicketRisk } from "@/lib/risk/assess";
@@ -1024,6 +1025,11 @@ export async function syncSupportMailbox(
     console.error("[inbound] sender overrides unavailable:", overrideError);
   }
 
+  // Subject-match junk rules, loaded once for the batch. A failed read returns
+  // [] (inert) — the same fail-open as the overrides above: a junk filter is
+  // never worth holding the cursor for.
+  const junkRules = await loadEnabledJunkRules(admin);
+
   // Drop ids we've already stored before spending a fetch on each one.
   const uniqueIds = [...new Set(collected.ids)];
   let pending = uniqueIds;
@@ -1107,11 +1113,26 @@ export async function syncSupportMailbox(
         shopifyCustomerFound: null,
         priorTicketCount: 0,
       });
+      // A subject-match junk rule firing on this message. Only meaningful for a
+      // NEW ticket — ingestMessage ignores junkReason on an append — which
+      // matches the "ticket_created" semantics the dry-run models.
+      const junkHit = firstJunkRuleMatch(junkRules, {
+        subject: parsed.subject,
+        body: parsed.bodyText,
+      });
       const disposition = decideDisposition({
         drop,
         override: matchOverride(sender, overrides),
         vendorScore: vendor.score,
         vendorReasons: vendor.reasons,
+        junkRule: junkHit
+          ? {
+              id: junkHit.rule.id,
+              name: junkHit.rule.name,
+              pattern: junkHit.pattern,
+              reason: junkHit.rule.reason,
+            }
+          : null,
       });
 
       if (disposition.kind === "drop") {

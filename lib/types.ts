@@ -54,7 +54,7 @@ export interface Tag {
  */
 export interface JunkReason {
   /** Which mechanism filed it. `manual` is an agent's "Mark as spam". */
-  source: "guard" | "override" | "classifier" | "manual";
+  source: "guard" | "override" | "classifier" | "manual" | "rule";
   /** The guard rule that fired (source === "guard"). */
   rule?: string;
   /** The guard's own detail string (source === "guard"). */
@@ -62,6 +62,11 @@ export interface JunkReason {
   /** The override scope/value that filed it (source === "override"). */
   overrideScope?: "address" | "domain";
   overrideValue?: string;
+  /** The subject-match junk rule that fired (source === "rule"). */
+  ruleId?: string;
+  ruleName?: string;
+  rulePattern?: string;
+  ruleReason?: string;
   /** The vendor-outreach classifier's score at filing time, always recorded. */
   classifierScore?: number;
   /** The junk threshold the classifier was measured against. */

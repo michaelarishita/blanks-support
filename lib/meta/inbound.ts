@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runRulesSafely } from "@/lib/rules/engine";
+import { applyJunkRulesSafely } from "@/lib/junk-rules/engine";
 import { notifyNewTicketSafely } from "@/lib/notifications/new-ticket";
 import { assessTicketRisk } from "@/lib/risk/assess";
 import { sniffFileType, safeStoredName } from "@/lib/uploads/sniff";
@@ -306,19 +307,29 @@ async function ingestMessage(
   // Only a real inbound message routes. An echo is our own reply, and running
   // rules on it could reassign a ticket because of something we said.
   if (!isEcho) {
-    const rules = await runRulesSafely(
-      ticket.id,
-      ticket.created ? "ticket_created" : "message_received"
-    );
-    for (const rule of rules.fired) {
-      result.ruleHits[rule.name] = (result.ruleHits[rule.name] ?? 0) + 1;
-    }
+    // A new DM can be junked by a subject-match rule too (the rule reads the
+    // subject, which for a DM is the conversation's opening line). Only for a
+    // genuinely new ticket; a reply on an existing thread is never junked by a
+    // subject rule. Junked → no routing, no notify, no risk.
+    const junked = ticket.created
+      ? await applyJunkRulesSafely(ticket.id)
+      : { junked: false };
 
-    // New conversations only — an echo is ours, and a reply on an existing
-    // DM thread is not news.
-    if (ticket.created) {
-      await notifyNewTicketSafely(ticket.id);
-      await assessTicketRisk(ticket.id);
+    if (!junked.junked) {
+      const rules = await runRulesSafely(
+        ticket.id,
+        ticket.created ? "ticket_created" : "message_received"
+      );
+      for (const rule of rules.fired) {
+        result.ruleHits[rule.name] = (result.ruleHits[rule.name] ?? 0) + 1;
+      }
+
+      // New conversations only — an echo is ours, and a reply on an existing
+      // DM thread is not news.
+      if (ticket.created) {
+        await notifyNewTicketSafely(ticket.id);
+        await assessTicketRisk(ticket.id);
+      }
     }
   }
 }

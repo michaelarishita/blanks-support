@@ -34,6 +34,14 @@ export interface DispositionInput {
   /** The vendor-outreach classifier's text-only score for this message. */
   vendorScore: number;
   vendorReasons: VendorReason[];
+  /**
+   * A subject-match junk rule that fired on this message, if any. Pre-computed
+   * by the caller (lib/junk-rules) so this stays pure. It ranks below a human
+   * not_spam rescue and below the sender-level signals, but above the
+   * classifier — an admin-authored rule is a stronger statement than a
+   * borderline score.
+   */
+  junkRule?: { id: string; name: string; pattern: string; reason: string } | null;
 }
 
 /**
@@ -118,6 +126,24 @@ export function decideDisposition(input: DispositionInput): Disposition {
     };
   }
 
+  // An admin's subject-match junk rule — for the senders who rotate domains
+  // faster than an override can keep up (The Running Event). Above the
+  // classifier because an authored rule is deliberate where a borderline score
+  // is a guess; below the not_spam rescue above, which no rule may override.
+  if (input.junkRule) {
+    return {
+      kind: "junk",
+      junkReason: {
+        source: "rule",
+        ruleId: input.junkRule.id,
+        ruleName: input.junkRule.name,
+        rulePattern: input.junkRule.pattern,
+        ruleReason: input.junkRule.reason,
+        ...classifier,
+      },
+    };
+  }
+
   // Nothing dropped it and nobody overrode it: the classifier gets to file it
   // only when it is CONFIDENT (see VENDOR_JUNK_THRESHOLD's asymmetry note).
   // Below the bar it stays in the visible inbox — uncertainty goes to a human.
@@ -143,6 +169,11 @@ export function describeJunkReason(reason: JunkReason | null | undefined): strin
           ? "sender is on the ignore list"
           : (reason.rule ?? "a guard");
     return `Caught by a guard: ${rule}${reason.detail ? ` (${reason.detail})` : ""}.`;
+  }
+  if (reason.source === "rule") {
+    const name = reason.ruleName ?? "a junk rule";
+    const why = reason.ruleReason ? ` ${reason.ruleReason}` : "";
+    return `Matched the junk rule “${name}”${reason.rulePattern ? ` on “${reason.rulePattern}”` : ""}.${why}`;
   }
   return `Classifier scored this ${reason.classifierScore ?? "?"} (junk at ${reason.classifierThreshold ?? "?"}+).`;
 }

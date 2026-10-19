@@ -376,6 +376,16 @@ const MIGRATIONS: Migration[] = [
       columns: ["agents.open_channels", "agents.hover_preview"],
     },
   },
+  {
+    file: "0031_junk_rules.sql",
+    title: "Subject-match junk rules — pattern + scope + reason, dry-run gated",
+    requires: {
+      // loadEnabledJunkRules reads defensively (a missing table reads as "no
+      // rules", so ingest is unaffected before this is applied), but registered
+      // so the banner tracks it.
+      tables: ["junk_rules"],
+    },
+  },
 ];
 
 /** Exposed so the coverage test can compare against the migrations directory. */
